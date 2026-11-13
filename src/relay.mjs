@@ -17,6 +17,27 @@ import { watchLoop } from './watch.mjs';
 const exec = promisify(execFile);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const worker = fileURLToPath(new URL('./relay-worker.mjs', import.meta.url));
+const renderer = fileURLToPath(new URL('./watch-renderer.mjs', import.meta.url));
+
+export async function renderWatch(file, spec, _deps, state, signal) {
+  if (!spec) return state;
+  if (spec.kind !== 'diff') {
+    const hash = createHash('sha256').update(await readFile(spec.source)).digest('hex');
+    if (hash === state.hash) return state;
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [renderer], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], signal });
+    let result;
+    child.on('message', message => { result = message; });
+    child.once('error', reject);
+    child.once('exit', (code, reason) => {
+      if (code !== 0 || !result) reject(new Error(`watch renderer exited (${reason || code})`));
+      else if (result.error) reject(new Error(result.error));
+      else resolve(result.result);
+    });
+    child.send({ file, spec, state });
+  });
+}
 export const relayPaths = file => ({ target: `${file}.relay.json`, watch: `${file}.watch.json`, outbox: `${file}.outbox.json`, lock: `${file}.relay.lock`, stateLock: `${file}.relay-state.lock` });
 export function relayLog(file) {
   const id = createHash('sha256').update(file).digest('hex').slice(0, 16);
@@ -426,6 +447,7 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
     await watchLoop(file, { readSpec, deps, run, decode, log, sleep, signal: controller.signal,
       disappeared: async () => (!await exists(file) && !await exists(relayPaths(file).watch) && !await exists(relayPaths(file).target)) || (hadState && !await exists(stateFile)),
       startDelivery, delivery: () => healthyPoll, publish: fn => withPublication(file, fn),
+      tick: (page, spec, dependencies, state) => renderWatch(page, spec, dependencies, state, controller.signal),
     });
     stop();
     if (deliveryTask) await deliveryTask;

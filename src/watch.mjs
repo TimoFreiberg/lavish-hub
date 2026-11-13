@@ -1,9 +1,5 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { publishDocument } from './document-page.mjs';
-import { writeMarkdown } from './markdown.mjs';
-import { diffFingerprint, readDiff } from './diff/source.mjs';
-import { writeDiffPage } from './diff/page.mjs';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -20,6 +16,8 @@ export async function sessionOpen(file, run, decode) {
 export async function watchTick(file, spec, deps, state = {}) {
   if (!spec) return state;
   if (spec.kind === 'diff') {
+    const { diffFingerprint, readDiff } = await import('./diff/source.mjs');
+    const { writeDiffPage } = await import('./diff/page.mjs');
     const fingerprint = spec.source.kind === 'jj' ? await diffFingerprint(spec.source) : null;
     if (fingerprint !== null && fingerprint === state.fingerprint) return state;
     const data = await readDiff(spec.source);
@@ -29,14 +27,14 @@ export async function watchTick(file, spec, deps, state = {}) {
   }
   const nextHash = hash(await readFile(spec.source));
   if (nextHash !== state.hash) {
-    if (spec.kind === 'document') await publishDocument(file, spec.source);
-    else if (spec.kind === 'markdown') await writeMarkdown(spec.source, deps, { out: file });
+    if (spec.kind === 'document') await (await import('./document-page.mjs')).publishDocument(file, spec.source);
+    else if (spec.kind === 'markdown') await (await import('./markdown.mjs')).writeMarkdown(spec.source, deps, { out: file });
     else throw new Error(`unknown watch kind: ${spec.kind}`);
   }
   return { hash: nextHash };
 }
 
-export async function watchLoop(file, { readSpec, deps, run, decode, log = () => {}, sleep, signal, delivery = () => false, startDelivery = () => {}, interval = 1000, publish = fn => fn(), disappeared = async () => false } = {}) {
+export async function watchLoop(file, { readSpec, deps, run, decode, log = () => {}, sleep, signal, delivery = () => false, startDelivery = () => {}, interval = 1000, publish = fn => fn(), disappeared = async () => false, tick = watchTick } = {}) {
   let previous, state = {};
   while (!signal?.aborted) {
     if (await disappeared()) { log('page or Lavish state disappeared; stopping worker'); return; }
@@ -57,7 +55,7 @@ export async function watchLoop(file, { readSpec, deps, run, decode, log = () =>
           state = { hash: current.watch?.hash };
           previous = signature;
         }
-        state = await watchTick(file, current.watch, deps, state);
+        state = await tick(file, current.watch, deps, state);
       });
     } catch (error) {
       if (!signal?.aborted) log(`watch failed: ${error.message} (still watching; last version remains on the page)`);

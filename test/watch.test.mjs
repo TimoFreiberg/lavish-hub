@@ -7,7 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encode, decode } from '@toon-format/toon';
-import { recordWatch, relayPaths, relayLog, withPublication, claimLock } from '../src/relay.mjs';
+import { recordWatch, relayPaths, relayLog, withPublication, claimLock, renderWatch } from '../src/relay.mjs';
+import { createHash } from 'node:crypto';
 import { atomicWrite } from '../src/files.mjs';
 import { writeDiffPage } from '../src/diff/page.mjs';
 import { ensureDeps } from '../src/deps.mjs';
@@ -49,6 +50,16 @@ for (const missing of ['page and sidecars', 'Lavish state']) test(`watch-only wo
   if (missing === 'Lavish state') await rm(state);
   else { await rm(x.file); await rm(relayPaths(x.file).watch); await rm(relayPaths(x.file).target); }
   await until(async () => !await exists(relayPaths(x.file).lock));
+});
+
+test('renderer skips unchanged documents and reports rendering errors', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-render-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  await writeFile(source, 'unchanged');
+  const state = { hash: createHash('sha256').update('unchanged').digest('hex') };
+  assert.deepEqual(await renderWatch(path.join(dir, 'page'), { kind: 'document', source }, null, state), state);
+  await assert.rejects(renderWatch(path.join(dir, 'page'), { kind: 'unknown', source }, null, {}), /unknown watch kind/);
 });
 
 test('session listing is non-consuming, validates output, and propagates failures', async () => {
