@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import { randomUUID } from 'node:crypto';
 
 const mode = process.argv[2];
 if (!['test', 'shots'].includes(mode)) throw new Error('Expected test or shots');
@@ -11,7 +12,8 @@ const port = await new Promise((resolve, reject) => {
   const server = net.createServer().once('error', reject);
   server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(error => error ? reject(error) : resolve(port)); });
 });
-const env = { ...process.env, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
+const marker = randomUUID();
+const env = { ...process.env, LAVISH_KIT_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
 delete env.HC_TERMINAL_ID;
 const args = mode === 'test' ? ['--test', '--test-concurrency=1', 'test/'] : ['scripts/shots.mjs'];
 let status = await new Promise((resolve, reject) => {
@@ -25,9 +27,25 @@ try {
   if (!Array.isArray(sessions) || sessions.length) { console.error('Test audit: private Lavish sessions remain or listing is invalid:', listing); status = 1; }
   else console.error('Test audit: no private Lavish sessions remain');
 } catch (error) { console.error(`Test audit: cannot list private Lavish sessions: ${error.message}`); status = 1; }
-const processes = execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8' }).split('\n').filter(line => line.includes(root));
-if (processes.length) { console.error('Test audit: processes still reference the test directory:\n' + processes.join('\n')); status = 1; }
-else console.error('Test audit: no processes reference the test directory');
+try {
+  // Do not print process environments: they can contain credentials. The unique
+  // marker is inherited by detached children as well as ordinary descendants.
+  const pids = execFileSync('ps', ['-A', '-o', 'pid='], { encoding: 'utf8' }).trim().split(/\s+/);
+  const leaked = [];
+  for (const pid of pids) {
+    if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
+    try {
+      const details = execFileSync('ps', ['eww', '-p', pid, '-o', 'command='], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+      if (details.split(/\s+/).includes(`LAVISH_KIT_TEST_RUN=${marker}`)) leaked.push(pid);
+    } catch (error) {
+      // A process can disappear between the two snapshots. Other errors mean
+      // the audit could not establish whether that process was ours.
+      if (error.status !== 1) throw error;
+    }
+  }
+  if (leaked.length) { console.error(`Test audit: processes with the run marker remain (PIDs): ${leaked.join(', ')}`); status = 1; }
+  else console.error('Test audit: no processes with the run marker remain');
+} catch (error) { console.error(`Test audit: cannot inspect processes: ${error.message}`); status = 1; }
 if (status === 0) await rm(root, { recursive: true, force: true });
 else console.error(`Test audit: retained ${root} for inspection`);
 process.exitCode = status;

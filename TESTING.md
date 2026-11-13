@@ -10,8 +10,11 @@ Besides the runtime requirements in the [README](README.md), the tests need
 Never run two of these at once in one checkout. `just test` runs `npm ci`,
 which replaces `node_modules` while the other run reads it, and the browser
 tests use Chromium. Each full run uses private Lavish and XDG directories and
-checks for remaining sessions and processes referring to its temporary directory.
-On failure, the directory is retained for inspection.
+checks the private Lavish session list and looks for processes inheriting a unique
+run marker, including detached children. The screenshot helper checks its own
+separate private sessions before removing its state. Processes that discard the
+marker cannot be identified by this audit. On failure, the run directory is
+retained for inspection.
 
 ## `just test`
 
