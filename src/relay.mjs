@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -234,9 +234,34 @@ export async function deliverFeedback(file, feedback, { run = command, log = () 
   consumedBatches.delete(feedback);
   return result;
 }
+const recoveryDir = () => path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-kit', 'recovery');
+async function importRecovery(file, write, log) {
+  const dir = recoveryDir();
+  let names;
+  try { names = await readdir(dir); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  const outbox = await json(relayPaths(file).outbox, []);
+  for (const name of names.filter(name => name.endsWith('.json')).sort()) {
+    const recordPath = path.join(dir, name);
+    let record;
+    try { record = await json(recordPath); } catch (error) { log(`recovery record ${recordPath} cannot be read: ${error.message}`); continue; }
+    if (record.page !== file) continue;
+    const item = record.item;
+    if (!item?.id || !item.feedback || (item.pending && !item.target)) {
+      log(`recovery record ${recordPath} needs manual inspection`);
+      throw new Error(`invalid recovery record: ${recordPath}`);
+    }
+    if (!outbox.some(existing => existing.id === item.id)) {
+      outbox.push(item);
+      await write(relayPaths(file).outbox, JSON.stringify(outbox, null, 2) + '\n');
+    }
+    await rm(recordPath);
+    log(`recovered feedback from ${recordPath}`);
+  }
+}
 export async function recoverFeedback(file, { run = command, log = () => {}, handlers = {}, write = atomicWrite } = {}) {
   return withState(file, async () => {
     const target = await json(relayPaths(file).target);
+    await importRecovery(file, write, log);
     await processPending(file, target, await json(relayPaths(file).outbox, []), handlers, write, run, true);
     return flushLocked(file, target, run, log);
   });
@@ -375,7 +400,7 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
           healthy: value => { healthyPoll = value; },
           emergency: async (page, feedback, cause) => {
             const item = consumedBatches.get(feedback) || { id: randomUUID(), receivedAt: new Date().toISOString(), feedback, pending: true, results: [], states: [] };
-            const dir = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-kit', 'recovery');
+            const dir = recoveryDir();
             const destination = path.join(dir, `${item.id}.json`);
             try {
               await atomicWrite(destination, JSON.stringify({ page, item }, null, 2) + '\n');

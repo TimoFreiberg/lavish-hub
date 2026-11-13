@@ -70,6 +70,38 @@ test('a second termination signal saves emergency feedback when the outbox is un
   await assert.rejects(access(relayPaths(x.file).lock));
 });
 
+test('unwritable outbox and recovery directory warn and release the worker lock', { timeout: 15000 }, async t => {
+  const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
+  await recordWatch(x.file, null, true);
+  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log(${JSON.stringify(encode(feedback))});\n`);
+  await chmod(path.join(bin, 'lavish-axi'), 0o755);
+  const data = path.join(x.dir, 'data'); await mkdir(path.join(data, 'lavish-kit'), { recursive: true });
+  const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
+  const script = `import {relayMain} from ${JSON.stringify(module)};import {writeFile} from 'node:fs/promises';await relayMain(${JSON.stringify(x.file)},{write:async()=>{await writeFile(${JSON.stringify(path.join(data, 'lavish-kit/recovery'))},'blocked');throw Error('disk full')}});`;
+  await assert.rejects(exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_DATA_HOME: data }, timeout: 12000 }), error => {
+    assert.equal(error.code, 1); assert.match(error.stderr, /feedback could not be saved.*feedback may be lost/); return true;
+  });
+  await assert.rejects(access(relayPaths(x.file).lock));
+});
+
+test('recovery imports once, retains records on failure, and keeps the receipt target', async t => {
+  const x = await setup(t), dir = path.join(x.dir, 'data/lavish-kit/recovery');
+  await mkdir(dir, { recursive: true });
+  const item = { id: 'batch', pending: true, feedback, target: x.target, results: [], states: [] };
+  const record = path.join(dir, 'batch.json');
+  await writeFile(record, JSON.stringify({ page: x.file, item }));
+  const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
+  const script = `import {recoverFeedback} from ${JSON.stringify(module)};const file=${JSON.stringify(x.file)};const run=async(name,args)=>({stdout:name==='hc'&&args[0]==='ls'?'[]':''});try{await recoverFeedback(file,{run,write:async()=>{throw Error('disk full')}})}catch(e){if(e.message!=='disk full')throw e}await recoverFeedback(file,{run});`;
+  await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, XDG_DATA_HOME: path.join(x.dir, 'data') } });
+  await assert.rejects(access(record));
+  const [stored] = JSON.parse(await readFile(relayPaths(x.file).outbox));
+  assert.equal(stored.id, 'batch'); assert.deepEqual(stored.feedback, feedback);
+  await writeFile(record, JSON.stringify({ page: x.file, item }));
+  await exec(process.execPath, ['--input-type=module', '-e', `import {recoverFeedback} from ${JSON.stringify(module)};await recoverFeedback(${JSON.stringify(x.file)},{run:async()=>({stdout:'[]'})});`], { env: { ...process.env, XDG_DATA_HOME: path.join(x.dir, 'data') } });
+  assert.equal(JSON.parse(await readFile(relayPaths(x.file).outbox)).length, 1);
+  await assert.rejects(access(record));
+});
+
 test('delivery waits for the target matching the new watch', async t => {
   const x = await setup(t);
   await recordWatch(x.file, null, true, 'new-generation');

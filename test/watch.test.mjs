@@ -32,7 +32,7 @@ async function setup(t) {
   await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconst fs=require('node:fs'),args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');if(!args.length)console.log(fs.readFileSync(${JSON.stringify(listing)},'utf8'));else if(args[0]==='poll'){const timer=setInterval(()=>{if(fs.readFileSync(${JSON.stringify(listing)},'utf8').trim()===${JSON.stringify(encode({ sessions: [] }))}){clearInterval(timer);console.log('session:\\n  status: ended');}},20);}else if(args[0]==='reply'){}else throw Error('unexpected Lavish command');\n`);
   await chmod(path.join(bin, 'lavish-axi'), 0o755);
   await writeFile(relayPaths(file).target, JSON.stringify({ version: 1, page: file, title: 'Watch', terminal: 'scratch' }));
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(dir, 'state') };
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(dir, 'lavish') };
   const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)};console.log(JSON.stringify(await ensureRelay(${JSON.stringify(file)})));`], { env, timeout: 15000 });
   t.after(async () => {
     try { process.kill(Number(await readFile(path.join(relayPaths(file).lock, 'pid'))), 'SIGTERM'); } catch {}
@@ -41,6 +41,15 @@ async function setup(t) {
   });
   return { dir, file, listing, calls, launch, log: path.join(dir, 'state/lavish-kit', path.basename(relayLog(file))), end: () => writeFile(listing, encode({ sessions: [] })) };
 }
+
+for (const missing of ['page and sidecars', 'Lavish state']) test(`watch-only worker exits when ${missing} disappears`, async t => {
+  const x = await setup(t), state = path.join(x.dir, 'lavish/state.json');
+  await mkdir(path.dirname(state)); await writeFile(state, '{}');
+  await recordWatch(x.file, null); await x.launch();
+  if (missing === 'Lavish state') await rm(state);
+  else { await rm(x.file); await rm(relayPaths(x.file).watch); await rm(relayPaths(x.file).target); }
+  await until(async () => !await exists(relayPaths(x.file).lock));
+});
 
 test('session listing is non-consuming, validates output, and propagates failures', async () => {
   const calls = [], file = '/tmp/review.html';

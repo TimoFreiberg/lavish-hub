@@ -79,14 +79,13 @@ If the first outbox write repeatedly fails, the worker stops after saving an
 emergency record under `$XDG_DATA_HOME/lavish-kit/recovery/` (default
 `$HOME/.local/share/lavish-kit/recovery/`). Its log gives the exact path. The
 record contains the page path and the original batch, including its receipt
-target when available. To recover it, first stop the worker and fix storage;
-then inspect the record and existing `<page>.outbox.json`. Add the record's
-`item` to the outbox JSON array only if its `id` is not already present. Keep
-the original target and progress fields intact. Reopen the page inside herdr
-to process it; do not replay the action manually as well. If the record has no
-`target`, inspect and handle its feedback manually instead. Keep the recovery
-file until recovery is confirmed. If neither location can be written, the log
-warns that feedback may be lost and the worker exits with an error.
+target when available. Fix storage and reopen the page inside herdr: the worker
+finds matching records, copies them into the outbox without duplicating batch
+IDs, and processes them before polling again. It removes a recovery record only
+after the outbox contains that batch. Do not replay an action manually as well.
+If a record has no receipt target, the worker leaves it for manual inspection
+and does not resume polling. If neither location can be written, the log warns
+that feedback may be lost and the worker exits with an error.
 
 ## Retarget
 
