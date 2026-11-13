@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
-import { claimLock, deliverFeedback, deliveryReady, dispatchPrompts, formatMessage, liveTerminals, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
+import { claimLock, deliverFeedback, deliveryReady, dispatchPrompts, formatMessage, liveTerminals, pageLifetime, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
 import { parseArgs } from '../src/cli.mjs';
 const exec = promisify(execFile);
 const terminal = (address, session = 'session-a', space = 'space-a', created_ms = 1) => ({ address, state: 'live', created_ms, labels: { 'polytoken.session': session, 'herdr.space': space } });
@@ -32,6 +32,28 @@ async function setup(t) {
   return { dir, file, target, calls, run, cleanups, setTerminals: value => terminals = value, failSend: value => sendFails = value, failReply: value => replyFails = value };
 }
 const feedback = { session: { status: 'feedback' }, prompts: [{ prompt: 'Change this line\nKeep the context.', tag: 'code-comment', text: 'old line\nnext line', target: { path: 'x.mjs', side: 'new' } }] };
+
+test('page lifetimes stop independently and preserve consumed feedback', () => {
+  const messages = [];
+  const first = pageLifetime(message => messages.push(message));
+  const second = pageLifetime();
+  first.consumed(true);
+  first.terminate();
+  second.stop();
+  assert.equal(first.signal.aborted, false);
+  assert.equal(second.signal.aborted, true);
+  assert.equal(first.forced(), false);
+  first.consumed(false);
+  assert.equal(first.signal.aborted, true);
+
+  const pending = pageLifetime(message => messages.push(message));
+  pending.consumed(true);
+  pending.terminate();
+  pending.terminate();
+  assert.equal(pending.signal.aborted, true);
+  assert.equal(pending.forced(), true);
+  assert.match(messages[0], /FORCED SHUTDOWN/);
+});
 
 for (const stop of ['listing', 'SIGTERM']) test(`initial persistence survives ${stop} shutdown before releasing the worker lock`, { timeout: 15000 }, async t => {
   const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);

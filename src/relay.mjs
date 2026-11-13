@@ -404,26 +404,36 @@ export async function deliveryReady(file) {
   const target = await json(relayPaths(file).target, null);
   return target?.generation === spec.generation;
 }
-export async function relayMain(file, { write = atomicWrite } = {}) {
-  const log = message => console.error(`${new Date().toISOString()} ${message}`);
-  let release;
+// A page must finish persisting consumed feedback before its work is aborted.
+// Keep this state separate for each page so another page can stop independently.
+export function pageLifetime(log = () => {}) {
   const controller = new AbortController();
   let undurableBatch = false, stopping = false, forceStop = false;
   const stop = () => { stopping = true; if (!undurableBatch) controller.abort(); };
-  const onSignal = () => {
-    if (stopping && undurableBatch) {
-      forceStop = true;
-      log('FORCED SHUTDOWN: attempting emergency feedback storage');
-      controller.abort();
-    } else stop();
+  return {
+    signal: controller.signal,
+    stop,
+    terminate() {
+      if (stopping && undurableBatch) {
+        forceStop = true;
+        log('FORCED SHUTDOWN: attempting emergency feedback storage');
+        controller.abort();
+      } else stop();
+    },
+    consumed(value) { undurableBatch = value; if (!value && stopping) stop(); },
+    forced: () => forceStop,
   };
-  process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
+}
+export async function relayPage(file, { write = atomicWrite, log = () => {}, lifetime = pageLifetime(log), ready = () => {} } = {}) {
+  let release;
+  const controller = { signal: lifetime.signal };
+  const stop = lifetime.stop;
   try {
     release = await claimLock(relayPaths(file).lock);
     if (!release) {
       const delivery = await json(path.join(relayPaths(file).lock, 'delivery'), false);
       const requested = (await json(relayPaths(file).watch)).delivery;
-      if (process.connected) process.send({ running: true, delivery: delivery || Boolean(requested) });
+      ready({ running: true, delivery: delivery || Boolean(requested) });
       return;
     }
     const deps = await ensureDeps();
@@ -460,15 +470,15 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
               process.exitCode = 1;
             }
           },
-          consumed: value => { undurableBatch = value; if (!value && stopping) stop(); },
-          forced: () => forceStop,
+          consumed: lifetime.consumed,
+          forced: lifetime.forced,
           deliver: (page, feedback, options) => deliverFeedback(page, feedback, { ...options, handlers, write }),
         });
       })().catch(error => log(`delivery stopped: ${error.message}`)).finally(stop);
     };
     const readSpec = () => json(relayPaths(file).watch);
     if ((await readSpec()).delivery) await startDelivery();
-    if (process.connected) process.send({ running: true, delivery: Boolean(deliveryTask) });
+    ready({ running: true, delivery: Boolean(deliveryTask) });
     const exists = async name => { try { await stat(name); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
     const stateDir = process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.local', 'state', 'lavish-axi');
     const stateFile = path.join(stateDir, 'state.json');
@@ -481,6 +491,17 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
     stop();
     if (deliveryTask) await deliveryTask;
     log('relay stopped');
-  } catch (error) { if (process.connected) process.send({ error: error.message }); log(error.stack || error.message); process.exitCode = 1; }
-  finally { if (release) await release(); process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal); }
+  } finally { if (release) await release(); }
+}
+export async function relayMain(file, { write = atomicWrite } = {}) {
+  const log = message => console.error(`${new Date().toISOString()} ${message}`);
+  const lifetime = pageLifetime(log);
+  const onSignal = lifetime.terminate;
+  process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
+  try {
+    await relayPage(file, { write, log, lifetime, ready: result => { if (process.connected) process.send(result); } });
+  } catch (error) {
+    if (process.connected) process.send({ error: error.message });
+    log(error.stack || error.message); process.exitCode = 1;
+  } finally { process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal); }
 }
