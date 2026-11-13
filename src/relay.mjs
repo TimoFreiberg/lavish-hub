@@ -493,15 +493,48 @@ export async function relayPage(file, { write = atomicWrite, log = () => {}, lif
     log('relay stopped');
   } finally { if (release) await release(); }
 }
+// Keep a page registered until all of its work, including durable shutdown,
+// has finished. Concurrent requests for the same page share its startup.
+export function relayPages({ start = relayPage, write = atomicWrite, log = () => {}, onError = (file, error) => log(file, error.stack || error.message) } = {}) {
+  const pages = new Map();
+  let stopping = false;
+  function register(file) {
+    if (stopping) return Promise.reject(new Error('relay is stopping'));
+    if (pages.has(file)) return pages.get(file).ready;
+    const lifetime = pageLifetime(message => log(file, message));
+    let resolveReady, rejectReady, announced = false;
+    const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+    const entry = { lifetime, ready };
+    pages.set(file, entry);
+    entry.done = (async () => {
+      try {
+        await start(file, { write, lifetime, log: message => log(file, message), ready: result => { announced = true; resolveReady(result); } });
+        if (!announced) rejectReady(new Error('relay stopped before startup'));
+      } catch (error) {
+        if (!announced) rejectReady(error);
+        else onError(file, error);
+      } finally { pages.delete(file); }
+    })();
+    return ready;
+  }
+  return {
+    register,
+    terminate() { stopping = true; for (const { lifetime } of pages.values()) lifetime.terminate(); },
+    async wait() { while (pages.size) await Promise.all([...pages.values()].map(entry => entry.done)); },
+  };
+}
+
 export async function relayMain(file, { write = atomicWrite } = {}) {
-  const log = message => console.error(`${new Date().toISOString()} ${message}`);
-  const lifetime = pageLifetime(log);
-  const onSignal = lifetime.terminate;
+  const log = (_file, message) => console.error(`${new Date().toISOString()} ${message}`);
+  const pages = relayPages({ write, log, onError: (page, error) => { log(page, error.stack || error.message); process.exitCode = 1; } });
+  const onSignal = () => pages.terminate();
   process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
   try {
-    await relayPage(file, { write, log, lifetime, ready: result => { if (process.connected) process.send(result); } });
+    const result = await pages.register(file);
+    if (process.connected) process.send(result);
+    await pages.wait();
   } catch (error) {
     if (process.connected) process.send({ error: error.message });
-    log(error.stack || error.message); process.exitCode = 1;
+    log(file, error.stack || error.message); process.exitCode = 1;
   } finally { process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal); }
 }

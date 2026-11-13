@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
-import { claimLock, deliverFeedback, deliveryReady, dispatchPrompts, formatMessage, liveTerminals, pageLifetime, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
+import { claimLock, deliverFeedback, deliveryReady, dispatchPrompts, formatMessage, liveTerminals, pageLifetime, relayPages, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
 import { parseArgs } from '../src/cli.mjs';
 const exec = promisify(execFile);
 const terminal = (address, session = 'session-a', space = 'space-a', created_ms = 1) => ({ address, state: 'live', created_ms, labels: { 'polytoken.session': session, 'herdr.space': space } });
@@ -53,6 +53,37 @@ test('page lifetimes stop independently and preserve consumed feedback', () => {
   assert.equal(pending.signal.aborted, true);
   assert.equal(pending.forced(), true);
   assert.match(messages[0], /FORCED SHUTDOWN/);
+});
+
+test('page supervisor shares concurrent starts and waits for independent shutdown', async () => {
+  const starts = [], controls = new Map();
+  const pages = relayPages({ start: async (file, { lifetime, ready }) => {
+    starts.push(file);
+    await new Promise(resolve => controls.set(file, { lifetime, ready, finish: resolve }));
+  } });
+  const first = pages.register('first'), duplicate = pages.register('first'), second = pages.register('second');
+  assert.deepEqual(starts, ['first', 'second']);
+  controls.get('first').ready({ running: true }); controls.get('second').ready({ running: true });
+  assert.deepEqual(await Promise.all([first, duplicate, second]), [{ running: true }, { running: true }, { running: true }]);
+  controls.get('first').lifetime.consumed(true);
+  pages.terminate();
+  assert.equal(controls.get('first').lifetime.signal.aborted, false);
+  assert.equal(controls.get('second').lifetime.signal.aborted, true);
+  await assert.rejects(pages.register('third'), /stopping/);
+  controls.get('second').finish(); controls.get('first').lifetime.consumed(false); controls.get('first').finish();
+  await pages.wait();
+  assert.equal(controls.get('first').lifetime.signal.aborted, true);
+});
+
+test('page supervisor reports startup failures and permits a retry', async () => {
+  let attempts = 0;
+  const pages = relayPages({ start: async (_file, { ready }) => {
+    if (++attempts === 1) throw new Error('startup failed');
+    ready({ running: true });
+  } });
+  await assert.rejects(pages.register('page'), /startup failed/);
+  assert.deepEqual(await pages.register('page'), { running: true });
+  await pages.wait();
 });
 
 for (const stop of ['listing', 'SIGTERM']) test(`initial persistence survives ${stop} shutdown before releasing the worker lock`, { timeout: 15000 }, async t => {
