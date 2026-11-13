@@ -99,12 +99,12 @@ export async function liveTerminals(run = command) {
 function recorded(t, previous) {
   return { ...previous, terminal: t.address, session: t.labels?.['polytoken.session'] || null, space: t.labels?.['herdr.space'] || null };
 }
-export async function recordTarget(file, { title, sourceFile, pr } = {}, run = command) {
+export async function recordTarget(file, { title, sourceFile, pr, generation } = {}, run = command) {
   file = await realpath(file);
   const { stdout } = await run('hc', ['get', process.env.HC_TERMINAL_ID, '--json']);
   const terminal = JSON.parse(stdout);
   if (terminal.state !== 'live' || !terminal.address) throw new Error('the opening herdr terminal is not live');
-  const target = recorded(terminal, { version: 1, page: file, title, ...(sourceFile ? { sourceFile: path.resolve(sourceFile) } : {}), ...(pr ? { pr } : {}) });
+  const target = recorded(terminal, { version: 1, page: file, title, ...(generation ? { generation } : {}), ...(sourceFile ? { sourceFile: path.resolve(sourceFile) } : {}), ...(pr ? { pr } : {}) });
   await withState(file, () => atomicWrite(relayPaths(file).target, JSON.stringify(target, null, 2) + '\n'));
   return target;
 }
@@ -250,9 +250,9 @@ export async function retarget(file, terminal, { run = command, log = () => {} }
     return { target: next, ...await flushLocked(file, next, run, log) };
   });
 }
-export async function recordWatch(file, watch, delivery = false) {
+export async function recordWatch(file, watch, delivery = false, generation) {
   file = await realpath(file);
-  await atomicWrite(relayPaths(file).watch, JSON.stringify({ version: 1, delivery, watch: watch || null }, null, 2) + '\n');
+  await atomicWrite(relayPaths(file).watch, JSON.stringify({ version: 1, delivery, watch: watch || null, ...(generation ? { generation } : {}) }, null, 2) + '\n');
   return file;
 }
 // Keep opener writes and watch ticks ordered without waiting for terminal sends.
@@ -276,7 +276,7 @@ export async function ensureRelay(file) {
     });
   } finally { await output.close(); }
 }
-export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {}, consumed = () => {} } = {}) {
+export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {}, consumed = () => {}, forced = () => false } = {}) {
   let failures = 0;
   while (!signal?.aborted) {
     let feedback;
@@ -302,7 +302,7 @@ export async function pollLoop(file, { run = command, decode, deliver = deliverF
       let persisted = false;
       consumed(true);
       const durable = () => { persisted = true; consumed(false); };
-      while (!signal?.aborted || !persisted) {
+      while ((!signal?.aborted || !persisted) && !forced()) {
         try { await deliver(file, feedback, { run, log, durable, signal }); durable(); break; }
         catch (error) { healthy(false); log(`feedback persistence failed: ${error.message}`); await sleep(1000); }
       }
@@ -313,13 +313,27 @@ export async function pollLoop(file, { run = command, decode, deliver = deliverF
     else failures = 0;
   }
 }
+export async function deliveryReady(file) {
+  const spec = await json(relayPaths(file).watch);
+  if (!spec.delivery) return false;
+  if (!spec.generation) return true;
+  const target = await json(relayPaths(file).target, null);
+  return target?.generation === spec.generation;
+}
 export async function relayMain(file, { write = atomicWrite } = {}) {
   const log = message => console.error(`${new Date().toISOString()} ${message}`);
   let release;
   const controller = new AbortController();
-  let undurableBatch = false, stopping = false;
+  let undurableBatch = false, stopping = false, forceStop = false;
   const stop = () => { stopping = true; if (!undurableBatch) controller.abort(); };
-  process.on('SIGTERM', stop); process.on('SIGINT', stop);
+  const onSignal = () => {
+    if (stopping && undurableBatch) {
+      forceStop = true;
+      log('FORCED SHUTDOWN: consumed feedback could not be saved to the outbox and may be lost');
+      controller.abort();
+    } else stop();
+  };
+  process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
   try {
     release = await claimLock(relayPaths(file).lock);
     if (!release) {
@@ -340,6 +354,7 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
     let deliveryTask, healthyPoll = false;
     const startDelivery = async () => {
       if (deliveryTask) return;
+      if (!await deliveryReady(file)) return;
       await atomicWrite(path.join(relayPaths(file).lock, 'delivery'), 'true\n');
       deliveryTask = (async () => {
         // Finish consumed input and durable deliveries before polling again.
@@ -350,6 +365,7 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
         await pollLoop(file, { run, decode, log, sleep, signal: controller.signal,
           healthy: value => { healthyPoll = value; },
           consumed: value => { undurableBatch = value; if (!value && stopping) stop(); },
+          forced: () => forceStop,
           deliver: (page, feedback, options) => deliverFeedback(page, feedback, { ...options, handlers, write }),
         });
       })().catch(error => log(`delivery stopped: ${error.message}`)).finally(stop);
@@ -364,5 +380,5 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
     if (deliveryTask) await deliveryTask;
     log('relay stopped');
   } catch (error) { if (process.connected) process.send({ error: error.message }); log(error.stack || error.message); process.exitCode = 1; }
-  finally { if (release) await release(); process.off('SIGTERM', stop); process.off('SIGINT', stop); }
+  finally { if (release) await release(); process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal); }
 }

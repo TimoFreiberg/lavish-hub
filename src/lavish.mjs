@@ -30,7 +30,7 @@ async function registerArtifact(payload) {
   return false;
 }
 
-export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr } = {}) {
+export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr, generation } = {}) {
   file = path.resolve(file);
   let result;
   try { result = await exec('lavish-axi', [file, '--no-open', ...(reopen ? ['--reopen'] : [])]); }
@@ -47,7 +47,7 @@ export async function openReview(file, { title, open = false, reopen = false, so
   }
   let registered = false;
   if (process.env.HC_TERMINAL_ID) {
-    await recordTarget(file, { title, sourceFile, pr });
+    await recordTarget(file, { title, sourceFile, pr, generation });
   }
   const worker = await ensureRelay(await realpath(file));
   if (process.env.HC_TERMINAL_ID) {

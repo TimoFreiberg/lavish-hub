@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
-import { claimLock, deliverFeedback, dispatchPrompts, formatMessage, liveTerminals, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
+import { claimLock, deliverFeedback, deliveryReady, dispatchPrompts, formatMessage, liveTerminals, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
 import { parseArgs } from '../src/cli.mjs';
 const exec = promisify(execFile);
 const terminal = (address, session = 'session-a', space = 'space-a', created_ms = 1) => ({ address, state: 'live', created_ms, labels: { 'polytoken.session': session, 'herdr.space': space } });
@@ -52,6 +52,32 @@ for (const stop of ['listing', 'SIGTERM']) test(`initial persistence survives ${
   const commands = (await readFile(calls, 'utf8')).trim().split('\n');
   assert.equal(commands.filter(line => line.startsWith('["poll"')).length, 1);
   assert.ok(commands.every(line => line === '[]' || line.startsWith('["poll"')), 'shutdown must not run handlers, send, or reply after persistence');
+});
+
+test('a second termination signal stops retries when the outbox is unwritable', { timeout: 15000 }, async t => {
+  const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
+  await recordWatch(x.file, null, true);
+  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log(${JSON.stringify(encode(feedback))});\n`);
+  await chmod(path.join(bin, 'lavish-axi'), 0o755);
+  const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
+  const script = `import {relayMain} from ${JSON.stringify(module)};let n=0;await relayMain(${JSON.stringify(x.file)},{write:async()=>{if(++n===1){process.kill(process.pid,'SIGTERM');setTimeout(()=>process.kill(process.pid,'SIGTERM'),100);}throw Error('disk full');}});`;
+  const result = await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state') }, timeout: 12000 });
+  assert.match(result.stderr, /FORCED SHUTDOWN: consumed feedback.*may be lost/);
+  await assert.rejects(access(relayPaths(x.file).lock));
+});
+
+test('delivery waits for the target matching the new watch', async t => {
+  const x = await setup(t);
+  await recordWatch(x.file, null, true, 'new-generation');
+  let finish;
+  const pending = recordTarget(x.file, { title: 'New', generation: 'new-generation' }, async () => {
+    await new Promise(resolve => { finish = resolve; });
+    return { stdout: JSON.stringify(terminal('t1')) };
+  });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await deliveryReady(x.file), false);
+  finish(); await pending;
+  assert.equal(await deliveryReady(x.file), true);
 });
 
 test('records target labels, canonical page, title, and optional editable source', async t => {

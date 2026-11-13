@@ -1,5 +1,6 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { assertOutsideRepo, atomicWrite, repoRoot } from './files.mjs';
 import { openReview } from './lavish.mjs';
 import { recordWatch, retarget, withPublication } from './relay.mjs';
@@ -170,8 +171,9 @@ export async function main(args = process.argv.slice(2)) {
       } else if (path.extname(options.target).toLowerCase() === '.html') {
         if (options.out) await atomicWrite(output, await readFile(options.target));
       } else throw new Error(`no renderer for ${options.target}`);
-      await recordWatch(output, watch, Boolean(process.env.HC_TERMINAL_ID));
-      return { file: output, settings };
+      const generation = randomUUID();
+      await recordWatch(output, watch, Boolean(process.env.HC_TERMINAL_ID), generation);
+      return { file: output, settings: { ...settings, generation } };
     });
     await openReview(review.file, review.settings);
     return 0;
