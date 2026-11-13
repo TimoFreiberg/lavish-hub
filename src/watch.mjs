@@ -13,14 +13,14 @@ export async function sessionOpen(file, run, decode) {
   return result.sessions.some(session => session.file === file && session.status !== 'ended');
 }
 
-export async function watchTick(file, spec, deps, state = {}) {
+export async function watchTick(file, spec, deps, state = {}, prepared = {}) {
   if (!spec) return state;
   if (spec.kind === 'diff') {
     const { diffFingerprint, readDiff } = await import('./diff/source.mjs');
     const { writeDiffPage } = await import('./diff/page.mjs');
-    const fingerprint = spec.source.kind === 'jj' ? await diffFingerprint(spec.source) : null;
+    const fingerprint = prepared.data ? prepared.fingerprint : await diffFingerprint(spec.source);
     if (fingerprint !== null && fingerprint === state.fingerprint) return state;
-    const data = await readDiff(spec.source);
+    const data = prepared.data || await readDiff(spec.source);
     const nextHash = hash(data.patch);
     if (nextHash !== state.hash) await writeDiffPage(data, deps.dist, file);
     return { hash: nextHash, fingerprint };

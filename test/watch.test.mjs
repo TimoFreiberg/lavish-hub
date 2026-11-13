@@ -218,6 +218,11 @@ test('watch-only worker picks up changed diff ranges without rewriting the shell
   await recordWatch(x.file, { kind: 'diff', source }); await x.launch();
   await until(() => exists(path.join(x.dir, 'latest.js')));
   const initial = await readFile(path.join(x.dir, 'latest.js'), 'utf8'), mtime = (await stat(x.file)).mtimeMs;
+  const { readDiff } = await import('../src/diff/source.mjs');
+  const patch = (await readDiff(source)).patch;
+  const state = { hash: createHash('sha256').update(patch).digest('hex') };
+  const unchanged = await renderWatch(x.file, { kind: 'diff', source }, null, state, undefined, () => { throw Error('unexpected renderer'); });
+  assert.equal(unchanged.hash, state.hash);
   const pid = await readFile(path.join(relayPaths(x.file).lock, 'pid'), 'utf8');
   await recordWatch(x.file, { kind: 'diff', source: { ...source, diffArgs: ['missing-revision'] } });
   await until(async () => (await readFile(x.log, 'utf8')).includes('watch failed: git:'));
