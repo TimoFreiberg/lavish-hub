@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cp, readFile, mkdtemp, readdir, rm, access, writeFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
@@ -50,13 +50,25 @@ test('incomplete server cleanup is reported without signaling a discovered PID',
   const server = net.createServer(socket => socket.destroy());
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
-  const lavish = await isolatedLavish({ portAllocator: async () => server.address().port, shutdownTimeoutMs: 10, exec: () => '' });
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  t.after(async () => { child.kill(); await exited; });
+  let discovered = false;
+  const lavish = await isolatedLavish({ portAllocator: async () => server.address().port, shutdownTimeoutMs: 10, exec: (_name, args, options) => {
+    const command = `lavish-axi server --port ${server.address().port}`;
+    if (args.includes('-A')) return `${child.pid} ${command}\n`;
+    discovered = true;
+    return `${command} LAVISH_AXI_STATE_DIR=${options.env?.LAVISH_AXI_STATE_DIR || path.join(lavish.dir, 'lavish')}`;
+  } });
   await assert.rejects(lavish.close(), error => {
     assert.match(error.message, /cleanup incomplete/);
     assert.equal(error.cleanup.serverStopped, false);
     return true;
   });
+  assert.equal(discovered, true);
   assert.equal(server.listening, true);
+  assert.equal(child.exitCode, null);
+  process.kill(child.pid, 0);
 });
 
 test('browser-close failure still runs Lavish teardown and aggregates errors', async () => {
