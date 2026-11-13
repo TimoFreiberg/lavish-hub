@@ -118,6 +118,22 @@ for (const stop of ['listing', 'SIGTERM']) test(`initial persistence survives ${
   assert.ok(commands.every(line => line === '[]' || line.startsWith('["poll"')), 'shutdown must not run handlers, send, or reply after persistence');
 });
 
+test('watch failure joins consumed delivery before releasing the lock and supervisor entry', { timeout: 15000 }, async t => {
+  const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
+  const entered = path.join(x.dir, 'entered'), release = path.join(x.dir, 'release');
+  await recordWatch(x.file, null, true);
+  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log(${JSON.stringify(encode(feedback))});\n`);
+  await chmod(path.join(bin, 'lavish-axi'), 0o755);
+  const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
+  const watch = fileURLToPath(new URL('../src/watch.mjs', import.meta.url));
+  const files = fileURLToPath(new URL('../src/files.mjs', import.meta.url));
+  const script = `import {relayPage,relayPages,relayPaths} from ${JSON.stringify(module)};import {watchLoop} from ${JSON.stringify(watch)};import {atomicWrite} from ${JSON.stringify(files)};import {access,writeFile} from 'node:fs/promises';const exists=async f=>access(f).then(()=>true,()=>false);const pause=()=>new Promise(r=>setTimeout(r,20));let failure;const pages=relayPages({onError:(_f,e)=>failure=e,start:(file,options)=>relayPage(file,{...options,write:async(f,text)=>{await writeFile(${JSON.stringify(entered)},'');while(!await exists(${JSON.stringify(release)}))await pause();await access(relayPaths(file).lock);await atomicWrite(f,text);},watch:(file,opts)=>watchLoop(file,{...opts,disappeared:async()=>{while(!await exists(${JSON.stringify(entered)}))await pause();await writeFile(${JSON.stringify(path.join(x.dir, 'failed'))},'');throw Error('disappeared failed');}})})});await pages.register(${JSON.stringify(x.file)});while(!await exists(${JSON.stringify(path.join(x.dir, 'failed'))}))await pause();if(pages.size!==1||!await exists(relayPaths(${JSON.stringify(x.file)}).lock))throw Error('released early');await writeFile(${JSON.stringify(release)},'');await pages.wait();if(failure?.message!=='disappeared failed')throw Error('missing failure');`;
+  await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state') }, timeout: 12000 });
+  const [item] = JSON.parse(await readFile(relayPaths(x.file).outbox));
+  assert.deepEqual(item.feedback.prompts, feedback.prompts);
+  await assert.rejects(access(relayPaths(x.file).lock));
+});
+
 test('a second termination signal saves emergency feedback when the outbox is unwritable', { timeout: 15000 }, async t => {
   const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
   await recordWatch(x.file, null, true);

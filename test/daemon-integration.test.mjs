@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
@@ -86,6 +86,19 @@ test('concurrent CLI invocations register pages in one daemon', { timeout: 60000
   for (const result of results) assert.match(result.stdout, /Lavish review/);
   const owner = await readFile(path.join(x.daemonDir, 'daemon.lock', 'pid'), 'utf8');
   for (const file of [first, second]) assert.equal(await readFile(path.join(relayPaths(file).lock, 'pid'), 'utf8'), owner);
+});
+
+test('state directory aliases share an owner before and after creation', { timeout: 45000 }, async t => {
+  const x = await setup(t), first = await x.page('first'), second = await x.page('second');
+  const alias = path.join(x.dir, 'alias'); await symlink(x.dir, alias);
+  await x.list([first, second]);
+  const aliasEnv = { ...x.env, LAVISH_AXI_STATE_DIR: path.join(alias, 'lavish') };
+  await success(run(['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(relay)}; await ensureRelay(${JSON.stringify(first)});`], aliasEnv));
+  const owner = await readFile(path.join(x.daemonDir, 'daemon.lock', 'pid'), 'utf8');
+  await mkdir(x.env.LAVISH_AXI_STATE_DIR);
+  await success(x.launch(second));
+  assert.equal(await readFile(path.join(relayPaths(first).lock, 'pid'), 'utf8'), owner);
+  assert.equal(await readFile(path.join(relayPaths(second).lock, 'pid'), 'utf8'), owner);
 });
 
 test('registration contends safely with idle shutdown', { timeout: 45000 }, async t => {

@@ -333,7 +333,17 @@ export async function withPublication(file, fn) {
 }
 // Keep the socket path short enough for macOS, even when XDG paths are long.
 async function daemonPaths() {
-  const state = path.resolve(process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.local/state/lavish-axi'));
+  let state = path.resolve(process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.local/state/lavish-axi'));
+  // Resolve the existing ancestor, retaining missing components for first use.
+  const missing = [];
+  while (true) {
+    try { state = path.join(await realpath(state), ...missing); break; }
+    catch (error) {
+      if (error.code !== 'ENOENT' || path.dirname(state) === state) throw error;
+      missing.unshift(path.basename(state));
+      state = path.dirname(state);
+    }
+  }
   const key = createHash('sha256').update(state).digest('hex').slice(0, 24);
   const dir = path.join('/tmp', `lavish-kit-${process.getuid()}-${key}`);
   await mkdir(dir, { mode: 0o700 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
@@ -468,8 +478,8 @@ export function pageLifetime(log = () => {}) {
     forced: () => forceStop,
   };
 }
-export async function relayPage(file, { write = atomicWrite, log = () => {}, lifetime = pageLifetime(log), ready = () => {} } = {}) {
-  let release;
+export async function relayPage(file, { write = atomicWrite, log = () => {}, lifetime = pageLifetime(log), ready = () => {}, watch = watchLoop } = {}) {
+  let release, deliveryTask;
   const controller = { signal: lifetime.signal };
   const stop = lifetime.stop;
   try {
@@ -489,7 +499,7 @@ export async function relayPage(file, { write = atomicWrite, log = () => {}, lif
       [saveTag]: handleSave,
       [actionTag]: (prompt, target, context) => handleAction(prompt, target, { ...context, run }),
     };
-    let deliveryTask, healthyPoll = false;
+    let healthyPoll = false;
     const startDelivery = async () => {
       if (deliveryTask) return;
       if (!await deliveryReady(file)) return;
@@ -527,15 +537,17 @@ export async function relayPage(file, { write = atomicWrite, log = () => {}, lif
     const stateDir = process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.local', 'state', 'lavish-axi');
     const stateFile = path.join(stateDir, 'state.json');
     const hadState = await exists(stateFile);
-    await watchLoop(file, { readSpec, deps, run, decode, log, sleep, signal: controller.signal,
+    await watch(file, { readSpec, deps, run, decode, log, sleep, signal: controller.signal,
       disappeared: async () => (!await exists(file) && !await exists(relayPaths(file).watch) && !await exists(relayPaths(file).target)) || (hadState && !await exists(stateFile)),
       startDelivery, delivery: () => healthyPoll, publish: fn => withPublication(file, fn),
       tick: (page, spec, dependencies, state) => renderWatch(page, spec, dependencies, state, controller.signal),
     });
+  } finally {
     stop();
-    if (deliveryTask) await deliveryTask;
-    log('relay stopped');
-  } finally { if (release) await release(); }
+    try { if (deliveryTask) await deliveryTask; }
+    finally { if (release) await release(); }
+    if (release) log('relay stopped');
+  }
 }
 // Keep a page registered until all of its work, including durable shutdown,
 // has finished. Concurrent requests for the same page share its startup.
