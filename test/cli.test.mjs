@@ -121,7 +121,7 @@ test('fallbacks are silent on stderr', async t => {
   const x = await setup(t);
   for (const [terminal, script] of [['', null], ['t', null], ['t', 'echo need the mod loaded >&2; exit 1']]) {
     if (script) await x.fake('herdr-app', script);
-    const r = x.run([x.file], { HC_TERMINAL_ID: terminal }); assert.equal(r.status, 0); assert.match(r.stdout, /^Lavish review of .+page\.html ready: http:\/\/localhost:123\/review\S* — ask the user to open it\.\nFeedback (is delivered automatically|requires agent polling):?/);
+    const r = x.run([x.file], { HC_TERMINAL_ID: terminal }); assert.equal(r.status, 0); assert.match(r.stdout, /^Lavish review of .+page\.html ready: http:\/\/localhost:123\/review\S* \(ask the user to open it\)\nFeedback (is delivered automatically|requires agent polling):?/);
     assert.match(r.stdout, terminal ? /Feedback is delivered automatically; do not poll/ : /Feedback requires agent polling: lavish-axi poll/); assert.equal(r.stderr, '');
     if (terminal) assert.equal(JSON.parse(await readFile(`${x.file}.relay.json`)).terminal, terminal, 'target is recorded even without registration');
     else await assert.rejects(access(`${x.file}.relay.json`), 'outside herdr there is no relay sidecar');

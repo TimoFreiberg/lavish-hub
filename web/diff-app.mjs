@@ -200,7 +200,7 @@ function openDraft(index, range) {
 }
 function updateNotice() {
   notice.replaceChildren(); if (!state.pending || state.pending === state.hash) return;
-  notice.append('Diff changed — '); const refresh = button('Refresh', () => loadData(state.pending)); refresh.disabled = Boolean(state.draft?.textarea.value); notice.append(refresh); if (refresh.disabled) notice.append(' Finish or cancel your comment first.');
+  notice.append('Diff changed. '); const refresh = button('Refresh', () => loadData(state.pending)); refresh.disabled = Boolean(state.draft?.textarea.value); notice.append(refresh); if (refresh.disabled) notice.append(' Finish or cancel your comment first.');
 }
 function render(data) {
   closeDraft();

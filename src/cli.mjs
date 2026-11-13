@@ -17,64 +17,72 @@ const usage = `usage: lavish-kit <file.html|file.md|file.markdown> [--title T] [
        lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit retarget <page.html> [--terminal T]
 Run lavish-kit --help for details.`;
-const help = `Open an HTML file, a markdown file, or a jj/git diff as a Lavish review page.
-In a herdr terminal the page is listed under the task's Artifacts; otherwise
-the URL is printed. Prints one line naming the page file. Inside herdr,
-feedback is delivered automatically to the opening Polytoken session (or terminal
-if it has no session label), even if artifact registration fails. Do not poll
-that page yourself. Answer with lavish-axi reply <page> --agent-reply '...'.
-Outside herdr, a watch-only worker never polls; the agent uses lavish-axi poll,
-reply, and end. Every command returns after opening. Workers watch markdown,
-task/PR sources and jj/git diffs until the Lavish session ends. Reopening replaces
-the watch source/range between ticks and reuses the worker. A running delivering
-worker stays the listener when reopened outside herdr; a restarted outside worker
-is watch-only. Follow the printed feedback line to decide whether to poll.
+const help = `Open an HTML file, a Markdown file, or a jj/git diff as a Lavish review page.
 
 usage: lavish-kit <file.html|file.md|file.markdown> [options]
        lavish-kit diff [range] [--git] [options]
        lavish-kit diff - [--repo-root DIR] [options]
-       lavish-kit task <file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
-       lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
+       lavish-kit task <file.md|file.markdown> [options]
+       lavish-kit pr <pr.md|pr.markdown> [-r REV] [options]
        lavish-kit retarget <page.html> [--terminal T]
 
-Retarget changes the live delivery target and flushes retained feedback.
---terminal T accepts a live terminal address or unique name; without it,
-retarget selects the newest Polytoken terminal in the recorded herdr space.
-It does not reopen an ended page or restart its worker.
-End a review with lavish-axi end <page> or Send & End.
-See README.md for save/action protocols, worker files, logs, and recovery.
+Each command returns once the page is open and its background worker has
+started. The worker keeps Markdown, task, and PR pages and jj/git diffs up to
+date until the Lavish session ends. Opening the same page again reuses the
+worker and switches it to the new source or range.
+
+The command prints where the page is (listed under the herdr task's Artifacts,
+or a URL for the user), then one of these lines:
+  Feedback is delivered automatically; do not poll <page>.
+      The worker sends feedback to the opening Polytoken session (or terminal,
+      if it has no session label). Answer with
+      lavish-axi reply <page> --agent-reply '...'.
+  Feedback requires agent polling: lavish-axi poll <page>.
+      Opened outside herdr. Use lavish-axi poll, reply, and end yourself.
+Reopening a page outside herdr keeps a worker that is already delivering.
+End a review with lavish-axi end <page> or Send & End in the browser.
+
+Retarget sends retained feedback to a new live target. --terminal T takes a
+terminal address or unique name. Without it, retarget picks the newest
+Polytoken terminal in the page's recorded herdr space. It does not reopen an
+ended page or restart a stopped worker.
 
 Task documents:
-  task FILE         edit existing UTF-8 markdown with Edit/Rendered views
-  Save / Cmd+S      (Ctrl+S on Linux) sends a conditional save. Check the page reply.
+  task FILE         edit an existing UTF-8 Markdown file in Edit/Rendered views
+  Save / Cmd+S      (Ctrl+S on Linux) saves only if the file is unchanged on disk;
+                    check the page reply
 
 PR drafts:
-  pr FILE [-r REV]  run from the jj repository the PR command should use. Default head: @-.
-                    FILE starts with # <title>, then the body.
-  Create PR         configure createPr (an argv array) in
+  pr FILE [-r REV]  run from the jj repository the PR command should use (default
+                    head: @-). FILE starts with "# <title>", then the body.
+  Create PR         set createPr to an argv array in
                     ${'${XDG_CONFIG_HOME:-$HOME/.config}'}/lavish-kit/config.json.
-                    Unset/invalid config disables Create PR. The worker saves first,
-                    then appends -r REV --body-file FILE to createPr in the recorded repo.
+                    Without valid config the button is disabled. The worker saves
+                    the draft, then runs createPr with -r REV --body-file FILE
+                    appended, in a new herdr tab in the recorded repository.
   Config example    {"createPr":["fish","-c","jprc $argv","--"]} for an existing
                     fish jprc function that accepts -r REV --body-file FILE.
-                    lavish-kit does not provide jprc, fish, or a PR command.
+                    lavish-kit does not provide jprc or any PR command.
 
-Diff range (default: jj fork_point(trunk() | @) to @; git: the working tree
-against its merge base with origin/HEAD, origin/main, origin/master, main, or master):
+Diff range (jj default: fork_point(trunk() | @) to @; git default: the working
+tree against its merge base with origin/HEAD, origin/main, origin/master, main,
+or master):
   -r REV            jj revset, or A..B in git
   --from A --to B   diff between two revisions
   --git             use git even inside a jj repository
-  -                 read a patch from stdin; --repo-root DIR sets the root for its paths
-  Watching          jj/git diffs update automatically until the Lavish session ends.
-                    A patch on stdin is a snapshot.
+  -                 read a patch from stdin (not watched); --repo-root DIR sets
+                    the root for its paths
 
 Options:
-  --title T         title under Artifacts (default: the page's <title>, then the file name)
-  --out FILE        write the page to FILE; must be outside the reviewed repository
-                    (default: under ${'${XDG_DATA_HOME:-$HOME/.local/share}'}/lavish-kit/pages/; an HTML
-                    file is opened where it is)
-  --open            open in the browser if registration under Artifacts fails or is unavailable
-  --reopen          reopen a review the user ended in the browser`;
+  --title T         title under Artifacts and in delivered feedback (default: the
+                    page's <title>, then the file name)
+  --out FILE        write the page to FILE, outside the reviewed repository
+                    (default: under ${'${XDG_DATA_HOME:-$HOME/.local/share}'}/lavish-kit/pages/;
+                    an HTML file is opened where it is)
+  --open            open a browser if the page isn't listed under Artifacts
+  --reopen          reopen a review the user ended in the browser
+
+See README.md for the save and action formats, worker files, logs, and recovery.`;
 class UsageError extends Error {}
 
 export function parseArgs(args) {

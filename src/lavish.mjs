@@ -59,7 +59,7 @@ export async function openReview(file, { title, open = false, reopen = false, so
   }
   console.log(registered
     ? `Lavish review of ${file} is listed under the task's Artifacts.`
-    : `Lavish review of ${file} ready: ${url}${open ? '' : ' — ask the user to open it.'}`);
+    : `Lavish review of ${file} ready: ${url}${open ? '' : ' (ask the user to open it)'}`);
   console.log(worker.delivery
     ? `Feedback is delivered automatically; do not poll ${file}.`
     : `Feedback requires agent polling: lavish-axi poll ${quote(file)}.`);
