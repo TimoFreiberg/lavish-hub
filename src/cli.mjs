@@ -2,7 +2,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { assertOutsideRepo, atomicWrite, repoRoot } from './files.mjs';
 import { openReview } from './lavish.mjs';
-import { retarget, withPublication } from './relay.mjs';
+import { recordWatch, retarget, withPublication } from './relay.mjs';
 import { documentOutputPath, writeTaskPage } from './document-page.mjs';
 import { preparePR, writePRPage } from './pr-page.mjs';
 import { ensureDeps } from './deps.mjs';
@@ -145,36 +145,28 @@ export async function main(args = process.argv.slice(2)) {
       : options.task || pr ? documentOutputPath(await realpath(options.target), options.out, pr ? 'pr' : 'task')
       : path.extname(options.target).toLowerCase() === '.html' ? path.resolve(options.out || options.target)
       : markdownOutputPath(await realpath(options.target), options.out);
-    return await withPublication(output, async () => {
+    const review = await withPublication(output, async () => {
+      let settings = options, watch = null;
       if (options.task || pr) {
         const page = pr ? await writePRPage(options.target, deps.dist, pr, options) : await writeTaskPage(options.target, deps.dist, options);
-        await openReview(page.file, { ...options, title: page.title, sourceFile: page.source, pr,
-          watch: { kind: 'document', source: page.source, hash: page.hash },
-        });
-        return 0;
-      }
-      if (!options.diff && path.extname(options.target).toLowerCase() !== '.html') {
+        settings = { ...options, title: page.title, sourceFile: page.source, pr };
+        watch = { kind: 'document', source: page.source, hash: page.hash };
+      } else if (!options.diff && path.extname(options.target).toLowerCase() !== '.html') {
         const page = await writeMarkdown(options.target, deps, options);
-        await openReview(page.file, { ...options, title: options.title ?? page.title,
-          watch: { kind: 'markdown', source: page.source, hash: page.hash },
-        });
-        return 0;
-      }
-      if (options.diff) {
+        settings = { ...options, title: options.title ?? page.title };
+        watch = { kind: 'markdown', source: page.source, hash: page.hash };
+      } else if (options.diff) {
         const initial = await readDiff(source);
-        const { file, patchHash } = await writeDiffPage(initial, deps.dist, options.out);
-        await openReview(file, { ...options,
-          watch: source.kind === 'stdin' ? null : { kind: 'diff', source, hash: patchHash },
-        });
-        return 0;
-      }
-      if (path.extname(options.target).toLowerCase() === '.html') {
+        const { patchHash } = await writeDiffPage(initial, deps.dist, options.out);
+        watch = source.kind === 'stdin' ? null : { kind: 'diff', source, hash: patchHash };
+      } else if (path.extname(options.target).toLowerCase() === '.html') {
         if (options.out) await atomicWrite(output, await readFile(options.target));
-        await openReview(output, options);
-        return 0;
-      }
-      throw new Error(`no renderer for ${options.target}`);
+      } else throw new Error(`no renderer for ${options.target}`);
+      await recordWatch(output, watch, Boolean(process.env.HC_TERMINAL_ID));
+      return { file: output, settings };
     });
+    await openReview(review.file, review.settings);
+    return 0;
   } catch (error) {
     if (error instanceof UsageError || error instanceof DiffUsageError) { console.error(error.message ? `lavish-kit: ${error.message}\n${usage}` : usage); return 2; }
     console.error(`lavish-kit: ${error.message}`); return 1;

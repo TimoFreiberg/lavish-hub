@@ -5,6 +5,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claimLock, recordWatch, relayPaths, withPublication } from '../src/relay.mjs';
+import { watchLoop } from '../src/watch.mjs';
+import { ensureDeps } from '../src/deps.mjs';
 
 const cli = fileURLToPath(new URL('../bin/lavish-kit', import.meta.url));
 const shared = await mkdtemp(path.join(os.tmpdir(), 'lavish-cli-cache-'));
@@ -42,6 +45,71 @@ async function assertRegistration(log, expected) {
   await assert.rejects(access(path.dirname(ack)), 'the acknowledgement directory is removed');
   return ack;
 }
+async function until(fn) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 20)); }
+  throw Error('condition timed out');
+}
+const exists = async file => { try { await access(file); return true; } catch { return false; } };
+function launch(x, args, extra = {}, nodeArgs = []) {
+  const child = spawn(process.execPath, [...nodeArgs, cli, ...args], { cwd: x.dir, env: { ...x.env, ...extra } });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+  const done = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', status => resolve({ status, stdout, stderr })); });
+  return { child, done };
+}
+
+test('a custom --out reopen waits for an old tick already rendering and publishes the new source', { timeout: 20000 }, async t => {
+  const x = await setup(t), old = path.join(x.dir, 'old.md'), next = path.join(x.dir, 'new.md');
+  await writeFile(old, '# Old source\n'); await writeFile(next, '# New source\n');
+  await recordWatch(x.file, { kind: 'markdown', source: old });
+  const started = path.join(x.dir, 'render-started'), gate = path.join(x.dir, 'render-release');
+  const wrapper = path.join(x.dir, 'markdown.mjs'), attempt = path.join(x.dir, 'publication-attempt'), preload = path.join(x.dir, 'preload.mjs');
+  const deps = await ensureDeps();
+  await writeFile(wrapper, `import MarkdownIt from ${JSON.stringify(deps.resolve('markdown-it'))};import {access,writeFile} from 'node:fs/promises';await writeFile(${JSON.stringify(started)},'started');while(true){try{await access(${JSON.stringify(gate)});break;}catch{await new Promise(resolve=>setTimeout(resolve,20));}}export default MarkdownIt;`);
+  await writeFile(preload, `import fs from 'node:fs/promises';import {syncBuiltinESMExports} from 'node:module';const mkdir=fs.mkdir;fs.mkdir=async(file,...args)=>{if(String(file).endsWith('.publication.lock'))await fs.writeFile(${JSON.stringify(attempt)},String(file));return mkdir(file,...args);};syncBuiltinESMExports();`);
+  const controller = new AbortController();
+  const loop = watchLoop(x.file, { readSpec: async () => JSON.parse(await readFile(relayPaths(x.file).watch)),
+    deps: { ...deps, resolve: name => name === 'markdown-it' ? wrapper : deps.resolve(name) }, delivery: () => true,
+    signal: controller.signal, publish: fn => withPublication(x.file, fn), sleep: async () => controller.abort(),
+  });
+  let command;
+  try {
+    await until(() => exists(started));
+    command = launch(x, [next, '--out', x.file], {}, ['--import', preload]);
+    await until(() => exists(attempt));
+    const locked = await readFile(attempt, 'utf8');
+    if (locked !== `${x.file}.publication.lock`) await command.done;
+    await writeFile(gate, 'release'); await loop;
+    const result = await command.done; assert.equal(result.status, 0, result.stderr);
+    assert.match(await readFile(x.file, 'utf8'), /<title>New source<\/title>/);
+    assert.equal(locked, `${x.file}.publication.lock`);
+    assert.equal(JSON.parse(await readFile(relayPaths(x.file).watch)).watch.source, await (await import('node:fs/promises')).realpath(next));
+  } finally { await writeFile(gate, 'release'); controller.abort(); await loop; if (command) { command.child.kill(); await command.done; } }
+});
+
+test('publication stays unlocked during target state wait and external opening commands', { timeout: 20000 }, async t => {
+  const x = await setup(t), entered = path.join(x.dir, 'target-entered');
+  const check = `const fs=require('node:fs');if(fs.existsSync(${JSON.stringify(`${x.file}.publication.lock`)}))throw Error('publication lock held');`;
+  await x.fakeJS('lavish-axi', `${check}console.log(process.argv.length===2?'sessions[0]:':process.argv[2]==='poll'?'session:\\n  status: ended':'url: http://localhost:123/review');`);
+  await x.fakeJS('hc', `${check}fs.writeFileSync(${JSON.stringify(entered)},'entered');console.log(JSON.stringify({address:'terminal',state:'live',labels:{}}));`);
+  await x.fakeJS('herdr-app', `${check}${acknowledge.replace("const fs = require('node:fs');", '')}`);
+  await x.fakeJS(process.platform === 'darwin' ? 'open' : 'xdg-open', check);
+  const release = await claimLock(relayPaths(x.file).stateLock);
+  const command = launch(x, [x.file, '--open'], { HC_TERMINAL_ID: 'terminal' });
+  try {
+    await until(() => exists(entered));
+    await withPublication(x.file, async () => { assert.equal(JSON.parse(await readFile(relayPaths(x.file).watch)).watch, null); });
+  } finally { await release(); }
+  const result = await command.done; assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /listed under the task's Artifacts/);
+  const browser = path.join(x.dir, 'browser-opened');
+  await x.fakeJS('herdr-app', `${check}process.exit(1);`);
+  await x.fakeJS(process.platform === 'darwin' ? 'open' : 'xdg-open', `${check}fs.writeFileSync(${JSON.stringify(browser)},'opened');`);
+  const fallback = x.run([x.file, '--open'], { HC_TERMINAL_ID: 'terminal' });
+  assert.equal(fallback.status, 0, fallback.stderr); assert.equal(await readFile(browser, 'utf8'), 'opened');
+});
+
 test('registers html with title and title override', async t => {
   const x = await setup(t); await x.fakeJS('herdr-app', `${acknowledge}\nfs.writeFileSync(process.env.LOG, process.argv.slice(2).join('\\n'));`);
   for (const [args, title] of [[[x.file], 'Page title'], [[x.file, '--title', 'Override'], 'Override']]) {
@@ -59,6 +127,17 @@ test('fallbacks are silent on stderr', async t => {
     else await assert.rejects(access(`${x.file}.relay.json`), 'outside herdr there is no relay sidecar');
   }
 });
+test('printed poll command preserves shell metacharacters literally', async t => {
+  const x = await setup(t), file = path.join(x.dir, "a $HOME $(touch injected) `touch backtick` ' page.html");
+  await writeFile(file, '<title>Literal</title>');
+  const result = x.run([file]); assert.equal(result.status, 0, result.stderr);
+  const command = result.stdout.match(/Feedback requires agent polling: (.*)\.\n/)[1];
+  await x.fakeJS('lavish-axi', `console.log(JSON.stringify(process.argv.slice(2)));`);
+  const polled = spawnSync('/bin/sh', ['-c', command], { cwd: x.dir, env: x.env, encoding: 'utf8' });
+  assert.equal(polled.status, 0, polled.stderr); assert.deepEqual(JSON.parse(polled.stdout), ['poll', file]);
+  await assert.rejects(access(path.join(x.dir, 'injected'))); await assert.rejects(access(path.join(x.dir, 'backtick')));
+});
+
 test('bad input, lavish failure, and no shell interpolation', async t => {
   const x = await setup(t);
   for (const [args, message] of [[[], /^usage:/], [['missing.html'], /missing\.html: no such file/], [[x.file, '--bad'], /unknown argument --bad/], [['bad.txt'], /expected a \.html, \.md, or \.markdown file/], [[x.file, '--title'], /--title requires a value/]]) {

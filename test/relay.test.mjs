@@ -32,6 +32,28 @@ async function setup(t) {
 }
 const feedback = { session: { status: 'feedback' }, prompts: [{ prompt: 'Change this line\nKeep the context.', tag: 'code-comment', text: 'old line\nnext line', target: { path: 'x.mjs', side: 'new' } }] };
 
+for (const stop of ['listing', 'SIGTERM']) test(`initial persistence survives ${stop} shutdown before releasing the worker lock`, { timeout: 15000 }, async t => {
+  const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
+  const calls = path.join(x.dir, 'calls'), attempt = path.join(x.dir, 'attempt');
+  await recordWatch(x.file, null, true);
+  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconst fs=require('node:fs'),args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');console.log(args[0]==='poll' ? ${JSON.stringify(encode({ ...feedback, session: { session_ended: true } }))} : fs.existsSync(${JSON.stringify(attempt)}) ? ${JSON.stringify(encode({ sessions: [] }))} : ${JSON.stringify(encode({ sessions: [{ file: x.file, status: 'open' }] }))});\n`);
+  await chmod(path.join(bin, 'lavish-axi'), 0o755);
+  await writeFile(path.join(bin, 'hc'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(calls)},'hc\\n');console.log('[]');\n`);
+  await chmod(path.join(bin, 'hc'), 0o755);
+  const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
+  const files = fileURLToPath(new URL('../src/files.mjs', import.meta.url));
+  const script = `import {relayMain,relayPaths} from ${JSON.stringify(module)};import {atomicWrite} from ${JSON.stringify(files)};import {access,writeFile} from 'node:fs/promises';let attempts=0;await relayMain(${JSON.stringify(x.file)},{write:async(file,text)=>{if(++attempts===1){await writeFile(${JSON.stringify(attempt)},'failed');await new Promise(resolve=>setTimeout(resolve,400));${stop === 'SIGTERM' ? "process.kill(process.pid,'SIGTERM');" : ''}throw Error('first write failed');}await access(relayPaths(${JSON.stringify(x.file)}).lock);await atomicWrite(file,text);}});console.log(attempts);`;
+  const result = await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state') }, timeout: 12000 });
+  assert.equal(result.stdout.trim(), '2', result.stderr);
+  const [item] = JSON.parse(await readFile(relayPaths(x.file).outbox));
+  assert.equal(item.pending, true); assert.deepEqual(item.feedback.prompts, feedback.prompts);
+  assert.equal(item.target.terminal, 't1');
+  await assert.rejects(access(relayPaths(x.file).lock));
+  const commands = (await readFile(calls, 'utf8')).trim().split('\n');
+  assert.equal(commands.filter(line => line.startsWith('["poll"')).length, 1);
+  assert.ok(commands.every(line => line === '[]' || line.startsWith('["poll"')), 'shutdown must not run handlers, send, or reply after persistence');
+});
+
 test('records target labels, canonical page, title, and optional editable source', async t => {
   const x = await setup(t); const target = await recordTarget(x.file, { title: 'Recorded', sourceFile: path.join(x.dir, 'source.md') }, x.run);
   assert.deepEqual(target, { ...x.target, title: 'Recorded', sourceFile: path.join(x.dir, 'source.md') });

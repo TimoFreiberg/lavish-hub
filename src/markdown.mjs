@@ -52,7 +52,8 @@ export async function renderMarkdown(source, deps) {
   return { body: md.renderer.render(tokens, md.options, {}), metadata, title: title || heading };
 }
 
-export function markdownOutputPath(source) {
+export function markdownOutputPath(source, out) {
+  if (out) return path.resolve(out);
   const hash = createHash('sha256').update(source).digest('hex').slice(0, 10);
   const basename = path.basename(source, path.extname(source));
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-kit/pages/markdown', `${basename}-${hash}`, 'index.html');
@@ -60,7 +61,7 @@ export function markdownOutputPath(source) {
 
 export async function writeMarkdown(file, deps, { out } = {}) {
   const source = await realpath(file);
-  const output = out ? path.resolve(out) : markdownOutputPath(source);
+  const output = markdownOutputPath(source, out);
   const bytes = await readFile(source);
   const hash = createHash('sha256').update(bytes).digest('hex');
   const { body, metadata, title: extracted } = await renderMarkdown(bytes.toString('utf8'), deps);

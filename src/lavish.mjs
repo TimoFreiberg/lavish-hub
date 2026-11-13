@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
-import { ensureRelay, recordTarget, recordWatch } from './relay.mjs';
+import { ensureRelay, quote, recordTarget } from './relay.mjs';
 
 const exec = promisify(execFile);
 
@@ -30,7 +30,7 @@ async function registerArtifact(payload) {
   return false;
 }
 
-export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr, watch } = {}) {
+export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr } = {}) {
   file = path.resolve(file);
   let result;
   try { result = await exec('lavish-axi', [file, '--no-open', ...(reopen ? ['--reopen'] : [])]); }
@@ -49,8 +49,7 @@ export async function openReview(file, { title, open = false, reopen = false, so
   if (process.env.HC_TERMINAL_ID) {
     await recordTarget(file, { title, sourceFile, pr });
   }
-  const page = await recordWatch(file, watch, Boolean(process.env.HC_TERMINAL_ID));
-  const worker = await ensureRelay(page);
+  const worker = await ensureRelay(await realpath(file));
   if (process.env.HC_TERMINAL_ID) {
     registered = await registerArtifact({ terminal: process.env.HC_TERMINAL_ID, path: file, title });
   }
@@ -63,6 +62,6 @@ export async function openReview(file, { title, open = false, reopen = false, so
     : `Lavish review of ${file} ready: ${url}${open ? '' : ' — ask the user to open it.'}`);
   console.log(worker.delivery
     ? `Feedback is delivered automatically; do not poll ${file}.`
-    : `Feedback requires agent polling: lavish-axi poll ${JSON.stringify(file)}.`);
+    : `Feedback requires agent polling: lavish-axi poll ${quote(file)}.`);
   return { url, registered, delivery: worker.delivery };
 }

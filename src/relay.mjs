@@ -126,7 +126,7 @@ export function selectRetarget(target, terminals, terminal) {
   if (candidates[1]?.created_ms === candidates[0].created_ms) throw new Error('newest terminal is ambiguous; pass --terminal T');
   return candidates[0];
 }
-const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+export const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 export function formatMessage(target, batches) {
   const lines = [`Lavish feedback: ${target.title}\nPage: ${target.page}`];
   for (const batch of batches) {
@@ -208,7 +208,7 @@ async function processPending(file, target, outbox, handlers, write, run, recove
     await persist();
   }
 }
-export async function deliverFeedback(file, feedback, { run = command, log = () => {}, handlers = {}, write = atomicWrite } = {}) {
+export async function deliverFeedback(file, feedback, { run = command, log = () => {}, handlers = {}, write = atomicWrite, durable = () => {}, signal } = {}) {
   let item = consumedBatches.get(feedback);
   if (!item) {
     item = { id: randomUUID(), receivedAt: new Date().toISOString(), feedback, pending: true, results: [], states: [] };
@@ -224,6 +224,10 @@ export async function deliverFeedback(file, feedback, { run = command, log = () 
     if (index < 0) outbox.push(item); else outbox[index] = item;
     // Store consumed input before any source replacement or external launch.
     await write(relayPaths(file).outbox, JSON.stringify(outbox, null, 2) + '\n');
+    durable();
+    // Shutdown may have been waiting for this first durable copy. Leave the
+    // pending batch for recovery rather than starting handlers or delivery.
+    if (signal?.aborted) return { pending: outbox.length };
     await processPending(file, target, outbox, handlers, write, run);
     return flushLocked(file, target, run, log);
   });
@@ -272,7 +276,7 @@ export async function ensureRelay(file) {
     });
   } finally { await output.close(); }
 }
-export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {} } = {}) {
+export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {}, consumed = () => {} } = {}) {
   let failures = 0;
   while (!signal?.aborted) {
     let feedback;
@@ -295,8 +299,11 @@ export async function pollLoop(file, { run = command, decode, deliver = deliverF
     if (feedback.prompts?.length || feedback.artifact_failures?.length || feedback.rawOutput) {
       // Once poll consumes a response, retry persistence/delivery rather than
       // polling again and forgetting that response.
-      while (!signal?.aborted) {
-        try { await deliver(file, feedback, { run, log }); break; }
+      let persisted = false;
+      consumed(true);
+      const durable = () => { persisted = true; consumed(false); };
+      while (!signal?.aborted || !persisted) {
+        try { await deliver(file, feedback, { run, log, durable, signal }); durable(); break; }
         catch (error) { healthy(false); log(`feedback persistence failed: ${error.message}`); await sleep(1000); }
       }
     }
@@ -306,11 +313,12 @@ export async function pollLoop(file, { run = command, decode, deliver = deliverF
     else failures = 0;
   }
 }
-export async function relayMain(file) {
+export async function relayMain(file, { write = atomicWrite } = {}) {
   const log = message => console.error(`${new Date().toISOString()} ${message}`);
   let release;
   const controller = new AbortController();
-  const stop = () => controller.abort();
+  let undurableBatch = false, stopping = false;
+  const stop = () => { stopping = true; if (!undurableBatch) controller.abort(); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
   try {
     release = await claimLock(relayPaths(file).lock);
@@ -341,7 +349,8 @@ export async function relayMain(file) {
         }
         await pollLoop(file, { run, decode, log, sleep, signal: controller.signal,
           healthy: value => { healthyPoll = value; },
-          deliver: (page, feedback, options) => deliverFeedback(page, feedback, { ...options, handlers }),
+          consumed: value => { undurableBatch = value; if (!value && stopping) stop(); },
+          deliver: (page, feedback, options) => deliverFeedback(page, feedback, { ...options, handlers, write }),
         });
       })().catch(error => log(`delivery stopped: ${error.message}`)).finally(stop);
     };

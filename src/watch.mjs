@@ -50,8 +50,7 @@ export async function watchLoop(file, { readSpec, deps, run, decode, log = () =>
       if (!delivery() && !await sessionOpen(file, run, decode) && !delivery()) return;
       if (current) await publish(async () => {
         // The opener renders and records its spec under the same publication lock.
-        // Drop a tick superseded while it was waiting to publish, including snapshots.
-        if (JSON.stringify(await readSpec()) !== JSON.stringify(current)) return;
+        current = await readSpec();
         const signature = JSON.stringify(current.watch);
         if (signature !== previous) {
           state = { hash: current.watch?.hash };
