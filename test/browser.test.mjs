@@ -32,11 +32,15 @@ test('real Lavish offline browser smoke', { timeout: 120000 }, async t => {
   await frame.locator('body').evaluate(() => document.activeElement?.blur()); await frame.locator('body').press('v'); assert.doesNotMatch(await frame.locator('.sidebar').innerText(), /✓/); await frame.locator('body').press('v'); assert.match(await frame.locator('.sidebar').innerText(), /✓/);
   await frame.locator('body').evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: text => { window.__copied = text; } } })); await frame.getByRole('button', { name: 'Copy Zed command' }).click(); assert.equal(await frame.locator('body').evaluate(() => window.__copied), "zed '/tmp/test repo/example.js:1'");
   await frame.getByRole('button', { name: 'Collapse example.js' }).click(); await frame.getByRole('button', { name: 'Expand example.js' }).waitFor({ timeout: 5000 }); assert.equal(await frame.locator('[data-content] [data-line]').count(), 0); await frame.getByRole('button', { name: 'Expand example.js' }).click(); await frame.locator('[data-content] [data-line]').first().waitFor();
-  await frame.locator('body').evaluate(() => document.activeElement?.blur()); await frame.locator('body').press('s'); assert.equal(await frame.getByRole('button', { name: 'Unified', exact: true }).count(), 1); await frame.locator('body').press('s');
+  await frame.locator('body').evaluate(() => document.activeElement?.blur()); await frame.locator('body').press('s'); assert.equal(await frame.getByRole('button', { name: 'Unified', exact: true }).count(), 1);
+  const splitAddition = frame.locator('pre[data-diff-type="split"] [data-additions] [data-content] [data-line-type="change-addition"]').first();
+  await splitAddition.waitFor(); assert.match(await splitAddition.innerText(), /<\/script><img/);
+  await frame.locator('body').press('s');
+  const unifiedAddition = frame.locator('pre[data-diff-type="single"] [data-content] [data-line-type="change-addition"]').first();
+  await unifiedAddition.waitFor(); assert.match(await unifiedAddition.innerText(), /<\/script><img/);
   await frame.locator('body').press('?'); assert.equal(await frame.locator('.help').isVisible(), true); await frame.locator('body').press('?');
   await frame.locator('body').press('n'); await frame.locator('body').press('p'); await frame.locator('body').press('j'); await frame.locator('body').press('k');
   assert.equal(await frame.getByText('Viewed resets on reload').count(), 1);
-  assert.match(await frame.locator('[data-content]').innerText(), /<\/script><img/);
   await frame.locator('[data-gutter] [data-line-type="change-deletion"]').first().hover();
   await frame.getByRole('button', { name: 'Add comment' }).click();
   await frame.getByPlaceholder('Write a comment').waitFor({ timeout: 5000 });
