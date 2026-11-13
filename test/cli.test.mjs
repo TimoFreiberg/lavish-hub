@@ -292,7 +292,7 @@ test('output confinement precedes creating files for markdown and diff', async t
   let r = x.run(['diff', '--repo-root', repo, '-'], { HOME: repo, XDG_DATA_HOME: '' });
   assert.equal(r.status, 1); assert.match(r.stderr, /output inside/); await assert.rejects(access(path.join(repo, '.local')));
   const out = path.join(x.dir, 'outside', 'index.html'); r = x.run([md, '--out', out]);
-  assert.equal(r.status, 0, r.stderr); assert.match(await readFile(out, 'utf8'), /<h1 id="test"[^>]*>/);
+  assert.equal(r.status, 0, r.stderr); assert.match(await readFile(out, 'utf8'), /assets\/task-app\.js/);
   r = x.run([x.file, '--out', out]); assert.equal(r.status, 0); assert.equal(await readFile(out, 'utf8'), '<title>Page title</title>');
   r = x.run([md], { HOME: repo, XDG_DATA_HOME: '' }); assert.equal(r.status, 1); assert.match(r.stderr, /output inside/); await assert.rejects(access(path.join(repo, '.local')));
 });

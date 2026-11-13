@@ -36,11 +36,11 @@ await copyFile(path.join(root, 'web/diff.css'), path.join(out, 'diff.css'));
 await esbuild.build({
   entryPoints: [path.join(root, 'web/task-app.mjs')],
   outfile: path.join(out, 'task-app.js'), bundle: true, format: 'iife',
-  platform: 'browser', nodePaths: [path.join(deps, 'node_modules')], logLevel: 'silent',
+  platform: 'browser', nodePaths: [path.join(deps, 'node_modules')], plugins: [languageCatalog], logLevel: 'silent',
 });
 await esbuild.build({
   entryPoints: [path.join(root, 'web/pr-app.mjs')],
   outfile: path.join(out, 'pr-app.js'), bundle: true, format: 'iife',
-  platform: 'browser', nodePaths: [path.join(deps, 'node_modules')], logLevel: 'silent',
+  platform: 'browser', nodePaths: [path.join(deps, 'node_modules')], plugins: [languageCatalog], logLevel: 'silent',
 });
 await copyFile(path.join(root, 'web/document.css'), path.join(out, 'document.css'));

@@ -6,8 +6,7 @@ This index lists one doc per feature or topic. Start with the
 | Doc | Covers |
 | --- | --- |
 | [cli.md](cli.md) | Every command and option, the printed output, and exit codes |
-| [markdown.md](markdown.md) | Read-only Markdown pages: rendering, titles, frontmatter |
-| [task-documents.md](task-documents.md) | The Markdown editor: Save, conflicts, disk changes, limits |
+| [markdown.md](markdown.md) | Markdown rendering, editing, sending, and conflicts |
 | [diffs.md](diffs.md) | Diff ranges, line comments, keyboard shortcuts, Refresh |
 | [pr-drafts.md](pr-drafts.md) | PR draft files, the PR page, and the `createPr` config for Create PR |
 | [feedback-routing.md](feedback-routing.md) | Delivery inside herdr, polling outside it, the outbox, retarget, worker lifetime |

@@ -42,7 +42,7 @@ try {
   terminals.push(scratchSpace.terminal);
   await writeFile(sourceFile, '# Relay E2E\n\nQuoted E2E context\n');
   const taskStart = Date.now();
-  const taskOutput = await run(process.execPath, [cli, 'task', sourceFile, '--out', file, '--title', 'Relay E2E'], { env: { ...process.env, HC_TERMINAL_ID: terminals[0] }, timeout: 15000 });
+  const taskOutput = await run(process.execPath, [cli, sourceFile, '--out', file, '--title', 'Relay E2E'], { env: { ...process.env, HC_TERMINAL_ID: terminals[0] }, timeout: 15000 });
   assert.match(taskOutput, /Lavish review/); assert.ok(Date.now() - taskStart < 15000);
   console.log('PASS: task command returned promptly before feedback and disk updates.');
   assert.equal(JSON.parse(await readFile(relayPaths(file).target)).sourceFile, await realpath(sourceFile));
@@ -73,18 +73,20 @@ try {
     if (index) assert.ok(!(await exec('hc', ['read', terminals[0]])).stdout.includes(text), 'moved delivery must not reach the old terminal');
   }
   const editor = frame.getByRole('textbox', { name: 'Markdown text' });
+  await frame.getByRole('status').filter({ hasText: 'up to date with disk' }).waitFor();
+  await frame.getByRole('button', { name: 'Edit', exact: true }).click();
   await until(async () => (await editor.inputValue()).includes('Quoted E2E context'));
   const saved = '# Saved from task page\n\n' + ('Odd " \\ Context data: </script> 雪 🦊\u2028\n').repeat(20000);
   await editor.fill('# Saved from task page\n');
   await editor.evaluate((node, value) => { node.value = value; node.dispatchEvent(new Event('input', { bubbles: true })); }, saved);
-  await frame.getByRole('button', { name: 'Save', exact: true }).click();
+  await frame.getByRole('button', { name: 'Send', exact: true }).click();
   await until(async () => await readFile(sourceFile, 'utf8') === saved);
   let notice;
   await until(async () => { notice = (await exec('hc', ['read', terminals[1]])).stdout; return notice.includes('The user edited') && notice.includes(sourceFile); });
   assert.ok(!notice.includes('Odd "'), 'full save contents must not reach the agent');
-  await until(async () => (await frame.getByRole('status').innerText()).includes('Up to date with disk'));
+  await until(async () => (await frame.getByRole('status').innerText()).includes('up to date with disk'));
   assert.equal(await editor.inputValue(), saved);
-  console.log(`PASS: Save button wrote ${Buffer.byteLength(saved)} UTF-8 bytes exactly; watched page updated without reload.`);
+  console.log(`PASS: page Send wrote ${Buffer.byteLength(saved)} UTF-8 bytes exactly; watched page updated without reload.`);
   console.log(`hc read ${terminals[1]} confirmed short save notice:\n${notice.trim()}`);
   await run('lavish-axi', ['end', file]);
   await until(async () => { try { await access(relayPaths(file).lock); return false; } catch { return true; } });
@@ -112,7 +114,7 @@ try {
   const prStart = Date.now();
   const prOutput = await run(process.execPath, [cli, 'pr', prSource, '-r', '@-', '--out', prFile], { cwd: repo, env: { ...process.env, HC_TERMINAL_ID: terminals[1], XDG_CONFIG_HOME: config, HERDR_APP_HOME: herdrHome, PATH: `${bin}:${process.env.PATH}` }, timeout: 15000 });
   assert.match(prOutput, /Lavish review/); assert.ok(Date.now() - prStart < 15000);
-  console.log('PASS: PR command returned promptly before Save/Create PR.');
+  console.log('PASS: PR command returned promptly before Send/Create PR.');
   const prTarget = JSON.parse(await readFile(relayPaths(prFile).target));
   assert.equal(prTarget.pr.repo, await realpath(repo)); assert.equal(prTarget.pr.rev, '@-');
   const prOpened = await run('lavish-axi', [prFile, '--no-open']);
@@ -120,12 +122,13 @@ try {
   const prPage = await browser.newPage(); await prPage.goto(prURL);
   const prFrame = prPage.locator('iframe').first().contentFrame();
   const title = prFrame.getByRole('textbox', { name: 'Title', exact: true }), body = prFrame.getByRole('textbox', { name: 'PR body' });
-  await prFrame.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
+  await prFrame.getByRole('status').filter({ hasText: 'up to date with disk' }).waitFor();
+  await prFrame.getByRole('button', { name: 'Edit', exact: true }).click();
   await title.fill('Saved PR title'); await body.fill('\nSaved PR body 雪\n\n');
-  await prFrame.getByRole('button', { name: 'Save', exact: true }).click();
+  await prFrame.getByRole('button', { name: 'Send', exact: true }).click();
   await until(async () => await readFile(prSource, 'utf8') === '# Saved PR title\n\nSaved PR body 雪\n\n');
   await prFrame.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
-  console.log('PASS: PR page Save wrote title and body exactly and watched the save.');
+  console.log('PASS: PR page Send wrote title and body exactly and watched the save.');
   await title.fill('Create PR title'); await body.fill('\nCreate PR body " \\ 雪\n\n');
   const actionText = '# Create PR title\n\nCreate PR body " \\ 雪\n\n';
   await prFrame.getByRole('button', { name: 'Create PR', exact: true }).click();

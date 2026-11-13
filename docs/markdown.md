@@ -1,35 +1,46 @@
 # Markdown pages
 
-This covers `lavish-kit FILE.md`, which renders a Markdown file as a read-only
-Lavish page. To edit a file in the browser, use a
-[task document](task-documents.md) instead.
+Open an existing UTF-8 `.md` or `.markdown` file for review and editing:
 
 ```sh
-lavish-kit notes.md
-lavish-kit notes.md --title "Design review"
+lavish-kit "$HOME/docs/example.md" --title "Document"
 ```
 
-## Rendering
+The page starts in Rendered view; select Edit to change the text. Rendering uses
+markdown-it with links, tables, task lists, raw HTML, heading links and Shiki
+syntax highlighting. YAML frontmatter is shown as metadata. Both views support
+Lavish annotations.
 
-The page is rendered with markdown-it: links (bare URLs too), tables, task
-lists, raw HTML, heading anchors, and Shiki syntax highlighting with light and
-dark themes. YAML frontmatter is shown as a table at the top of the page (or as
-raw text if it isn't a mapping).
+## Sending edits
 
-The title is the frontmatter `title`, else the first H1, else the file name.
-`--title` overrides it.
+Press the page's **Send** button, labelled `(use this instead of sidebar send)`.
+It sends the current edit and all queued comments together. The sidebar Send
+button does not reliably save edits. The status line distinguishes unsent edits
+from the version saved on disk; leaving with unsent edits asks for confirmation.
+The immediate sent status is not confirmation of a write: check the Lavish reply.
 
-Styling (DaisyUI and Tailwind) loads from the jsDelivr CDN, so the page is
-unstyled without network access.
+| Reply | Meaning |
+| --- | --- |
+| `Saved` | The file was replaced and the agent received a short notice to reread it. |
+| `Conflict` | The file changed on disk since editing started; nothing was written. |
+| `Save failed: ...` | The message, source, or write failed; nothing was written. |
+| `Interrupted save: ...` | The worker crashed during a save and the disk no longer matches. Inspect the file before retrying. |
 
-Comments use Lavish's native annotations.
+A save checks the source's SHA-256 against the version editing started from.
+If the disk already holds exactly the sent text, it succeeds without writing.
+Otherwise replacement is atomic, preserving permissions, though an outside
+writer can still change the file between the final check and rename.
 
-## Updates
+The page checks for disk changes every second. With no unsent edits it updates
+in place; otherwise it retains your edits and offers Reload (discard mine) or
+Keep mine. Send is blocked until you choose. Keep mine makes the next Send
+check against the new disk version, so it overwrites the outside change.
 
-The worker checks the source file every second and re-renders the page when
-its bytes change. Lavish then live-reloads it. If rendering fails, the worker
-logs the error and keeps the last version on the page.
+## Who writes the file
 
-The default page path is
-`${XDG_DATA_HOME:-$HOME/.local/share}/lavish-kit/pages/markdown/<name>-<hash>/index.html`
-([files-and-logs.md](files-and-logs.md)).
+Inside herdr, the worker writes the file and replies on the page. Outside herdr,
+feedback arrives in `lavish-axi poll` as a prompt tagged `lavish-kit-save`;
+the receiving agent must compare the file hash, write only if it matches, and
+reply `Saved` or `Conflict`. See [files-and-logs.md](files-and-logs.md#save-message).
+Opening outside Lavish cannot send. The editor writes UTF-8 with LF newlines;
+Lavish 0.1.96 limits one feedback request, including queued comments, to 2 MiB.

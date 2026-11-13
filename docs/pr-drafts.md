@@ -32,11 +32,11 @@ Rendered tabs. The repository, head, and commit list are captured when the page
 opens and don't update. Your PR command may evaluate the revset again when it
 runs, so pass an explicit revision if that matters.
 
-Save, conflicts, disk changes, and limits work as on
-[task documents](task-documents.md), with three differences: frontmatter isn't
-hidden in the preview, an empty title can't be saved, and the saved file always
-has a newline after the title line. Like Save there, Save and Create PR also
-send every queued comment. If the file on disk becomes an invalid draft, the
+The body starts in Rendered view. Page Send, conflicts, disk changes, and limits
+work as on [Markdown pages](markdown.md), with three differences: frontmatter
+isn't hidden in the preview, an empty title can't be saved, and the saved file
+always has a newline after the title line. Page Send and the explicit Create PR
+action both send every queued comment. If the file on disk becomes an invalid draft, the
 page keeps your edits and says so until the file is fixed.
 
 ## Create PR

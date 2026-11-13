@@ -48,7 +48,7 @@ Before every delivery the worker lists live terminals with `hc ls --json`.
 A worker started without `HC_TERMINAL_ID` only watches. It never polls, saves,
 launches commands, or replies. The agent runs `lavish-axi poll`, `reply`, and
 `end` itself, as with plain Lavish, and handles saves and Create PR itself
-([task-documents.md](task-documents.md#who-writes-the-file),
+([markdown.md](markdown.md#who-writes-the-file),
 [pr-drafts.md](pr-drafts.md#create-pr-failures)).
 
 ## Reopening a page

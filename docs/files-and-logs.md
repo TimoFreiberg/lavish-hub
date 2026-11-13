@@ -12,7 +12,7 @@ the messages it sends and receives. Use it when debugging a page or a worker.
 | `deps/<lockfile-hash>/` | npm dependencies, installed with `npm ci --omit=dev` on first run |
 | `dist/<inputs-hash>/` | Browser bundles built by `build.mjs` |
 | `deps/<hash>.lock/`, `dist/<hash>.lock/` | Build lock with the builder's `pid` |
-| `pages/<kind>/<name>-<hash>/index.html` | Default page location. Kind is `markdown`, `diff`, `task`, or `pr`. |
+| `pages/<kind>/<name>-<hash>/index.html` | Default page location. Kind is `markdown`, `diff`, or `pr` (older pages may use `task`). |
 
 A changed `package-lock.json` reinstalls dependencies, and changed build inputs
 (`build.mjs`, `web/`, and a few `src/` files) rebuild the bundles. Delete

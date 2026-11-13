@@ -7,17 +7,17 @@ export function createDocumentEditor({ getText, setText, changed, status, normal
   const update = data => {
     if (disk?.hash === data.hash) {
       pending = null; changed(false);
-      status(dirty() ? 'Unsaved edits' : 'Up to date with disk');
+      status(dirty() ? 'Unsent edits' : 'Saved — up to date with disk');
       return;
     }
     const mine = getText();
     if (!disk || !dirty() || mine === data.text) {
       setText(data.text); baseline = getText(); disk = data; pending = null;
-      changed(false); status('Up to date with disk');
+      changed(false); status('Saved — up to date with disk');
     } else {
       pending = data;
       changed(true);
-      status('Disk changed; your unsaved edits are kept');
+      status('Disk changed; your unsent edits are kept');
     }
   };
   const reload = () => {
@@ -28,19 +28,19 @@ export function createDocumentEditor({ getText, setText, changed, status, normal
   const keep = () => {
     if (!pending) return;
     disk = pending; baseline = normalizeText(disk.text); pending = null; changed(false);
-    status('Kept your edits; next Save uses the new disk hash');
+    status('Kept your edits; next Send uses the new disk version');
   };
-  const send = ({ encode = encodeSave, tag = saveTag, context = 'Save document', sent = 'Save sent; check the Lavish reply for Saved or a conflict. Edits stay here until disk updates.' } = {}) => {
+  const send = ({ encode = encodeSave, tag = saveTag, context = 'Save document', sent = 'Sent; waiting for disk update. Check the Lavish reply for a conflict.' } = {}) => {
     if (!disk) { status('Waiting for the source file'); return; }
     if (pending) { status('Choose Reload (discard mine) or Keep mine before saving'); return; }
     if (typeof window.lavish?.queuePrompt !== 'function' || typeof window.lavish?.sendQueuedPrompts !== 'function') {
-      status('Save unavailable: open this page in Lavish'); return;
+      status('Send unavailable: open this page in Lavish'); return;
     }
     try {
       window.lavish.queuePrompt(encode(disk.hash, getText()), { tag, text: context });
       window.lavish.sendQueuedPrompts();
       status(sent);
-    } catch (error) { status(`Save failed to send: ${error.message}. Your edits are kept.`); }
+    } catch (error) { status(`Send failed: ${error.message}. Your edits are kept.`); }
   };
   return { update, reload, keep, save: () => send(), send, dirty };
 }

@@ -46,7 +46,7 @@ test('PR browser: hierarchy, preview, Save/Create PR envelopes, clean/dirty watc
   await writePRPage(source, dist, pr, { out: file });
   await page.reload();
   const frame = page.locator('iframe').first().contentFrame(), title = frame.getByRole('textbox', { name: 'Title', exact: true }), body = frame.getByRole('textbox', { name: 'PR body' });
-  await title.waitFor(); await frame.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
+  await title.waitFor(); await frame.getByRole('status').filter({ hasText: 'up to date with disk' }).waitFor();
   assert.equal(await title.inputValue(), 'Original title'); assert.match(await frame.locator('#repo').innerText(), /\/example\/repo/);
   assert.match(await frame.locator('#head').innerText(), /@-/);
   await frame.getByText('Commits at page creation', { exact: true }).click(); assert.match(await frame.locator('#commits').innerText(), /Commit first line/);
@@ -61,7 +61,8 @@ test('PR browser: hierarchy, preview, Save/Create PR envelopes, clean/dirty watc
   });
   const mine = '# Edited title\n\nQuotes " \\ 雪\n\n';
   await title.fill('Edited title'); await body.fill('\nQuotes " \\ 雪\n\n');
-  await body.press('Control+s');
+  assert.equal(await frame.getByText('(use this instead of sidebar send)').count(), 1);
+  await frame.getByRole('button', { name: 'Send', exact: true }).click();
   let messages = await frame.locator('body').evaluate(() => window.__messages);
   assert.equal(messages[0].tag, 'lavish-kit-save'); assert.deepEqual(decodeSave(messages[0].prompt), { baseHash: textHash('# Original title\n\n## Body heading\n\n- [x] Done\n'), text: mine });
   await writeFile(source, '# External title\nNew body\n'); await publishDocument(file, source);
@@ -79,7 +80,7 @@ test('PR browser: hierarchy, preview, Save/Create PR envelopes, clean/dirty watc
     async () => await frame.locator('body').evaluate((_body, hash) => window.__diskHash === hash, savedHash),
     async () => JSON.stringify(await frame.locator('body').evaluate(() => ({ hash: window.__diskHash, status: document.querySelector('#status').textContent }))),
   );
-  await frame.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
+  await frame.getByRole('status').filter({ hasText: 'up to date with disk' }).waitFor();
   await writeFile(source, '# Clean title\nClean body\n'); await publishDocument(file, source);
   await until(async () => await title.inputValue() === 'Clean title'); assert.equal(await body.inputValue(), 'Clean body\n');
   await title.fill('Dirty'); await writeFile(source, '# Reload title\nReload body\n'); await publishDocument(file, source);

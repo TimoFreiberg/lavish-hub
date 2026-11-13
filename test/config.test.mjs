@@ -34,7 +34,7 @@ test('generated pages default to XDG data, or the home data directory', () => {
       if (data === undefined) delete process.env.XDG_DATA_HOME;
       else process.env.XDG_DATA_HOME = data;
       const base = path.join(data || path.join(os.homedir(), '.local/share'), 'lavish-kit/pages');
-      assert.ok(documentOutputPath('/example/task.md').startsWith(path.join(base, 'task') + path.sep));
+      assert.ok(documentOutputPath('/example/task.md').startsWith(path.join(base, 'markdown') + path.sep));
       assert.ok(documentOutputPath('/example/pr.md', undefined, 'pr').startsWith(path.join(base, 'pr') + path.sep));
       assert.ok(markdownOutputPath('/example/doc.md').startsWith(path.join(base, 'markdown') + path.sep));
       assert.ok(pagePath({ root: '/example/repo', rangeSpec: '@' }).startsWith(path.join(base, 'diff') + path.sep));

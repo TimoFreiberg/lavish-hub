@@ -7,14 +7,12 @@ import { recordWatch, retarget, withPublication } from './relay.mjs';
 import { documentOutputPath, writeTaskPage } from './document-page.mjs';
 import { preparePR, writePRPage } from './pr-page.mjs';
 import { ensureDeps } from './deps.mjs';
-import { markdownOutputPath, writeMarkdown } from './markdown.mjs';
 import { DiffUsageError, prepareDiff, readDiff } from './diff/source.mjs';
 import { pagePath, writeDiffPage } from './diff/page.mjs';
 
 const usage = `usage: lavish-kit <file.html|file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit diff [-r REV | --from A --to B] [--git] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit diff - [--repo-root DIR] [--title T] [--out FILE] [--open] [--reopen]
-       lavish-kit task <file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit retarget <page.html> [--terminal T]
 Run lavish-kit --help for details.`;
@@ -23,12 +21,11 @@ const help = `Open an HTML file, a Markdown file, or a jj/git diff as a Lavish r
 usage: lavish-kit <file.html|file.md|file.markdown> [options]
        lavish-kit diff [range] [--git] [options]
        lavish-kit diff - [--repo-root DIR] [options]
-       lavish-kit task <file.md|file.markdown> [options]
        lavish-kit pr <pr.md|pr.markdown> [-r REV] [options]
        lavish-kit retarget <page.html> [--terminal T]
 
 Each command returns once the page is open and its background worker has
-started. The worker keeps Markdown, task, and PR pages and jj/git diffs up to
+started. The worker keeps Markdown and PR pages and jj/git diffs up to
 date until the Lavish session ends. Opening the same page again reuses the
 worker and switches it to the new source or range.
 
@@ -48,10 +45,10 @@ terminal address or unique name. Without it, retarget picks the newest
 Polytoken terminal in the page's recorded herdr space. It does not reopen an
 ended page or restart a stopped worker.
 
-Task documents:
-  task FILE         edit an existing UTF-8 Markdown file in Edit/Rendered views
-  Save / Cmd+S      (Ctrl+S on Linux) saves only if the file is unchanged on disk;
-                    check the page reply
+Markdown documents:
+  FILE              edit an existing UTF-8 Markdown file in Rendered/Edit views
+  Page Send         sends edits and queued comments; edits are saved only if the
+                    file is unchanged on disk. Do not use the sidebar Send.
 
 PR drafts:
   pr FILE [-r REV]  run from the jj repository the PR command should use (default
@@ -96,10 +93,10 @@ export function parseArgs(args) {
     if (args.length && (args.length !== 2 || args[0] !== '--terminal' || !args[1] || args[1].startsWith('-'))) throw new UsageError('retarget accepts only --terminal T');
     return { retarget: true, page, terminal: args[1] };
   }
-  const diff = target === 'diff', task = target === 'task', pr = target === 'pr';
-  const file = task || pr ? args.shift() : target;
-  if ((task || pr) && (!file || file.startsWith('-'))) throw new UsageError(`${target} requires a markdown source file`);
-  const result = { target: file, diff, ...(task ? { task: true } : {}), ...(pr ? { pr: true } : {}) };
+  const diff = target === 'diff', pr = target === 'pr';
+  const file = pr ? args.shift() : target;
+  if (pr && (!file || file.startsWith('-'))) throw new UsageError(`${target} requires a markdown source file`);
+  const result = { target: file, diff, ...(pr ? { pr: true } : {}) };
   const values = new Map([['--title', 'title'], ['--out', 'out'], ...(diff || pr ? [['-r', 'rev']] : []), ...(diff ? [['--from', 'from'], ['--to', 'to'], ['--repo-root', 'repoRoot']] : [])]);
   const switches = new Map([['--open', 'open'], ['--reopen', 'reopen'], ...(diff ? [['--git', 'git']] : [])]);
   for (let i = 0; i < args.length; i++) {
@@ -131,7 +128,7 @@ export async function main(args = process.argv.slice(2)) {
     let root;
     if (!options.diff) {
       const ext = path.extname(options.target).toLowerCase();
-      if ((options.task || options.pr) && !['.md', '.markdown'].includes(ext)) throw new UsageError(`${options.pr ? 'pr' : 'task'} requires a .md or .markdown file`);
+      if (options.pr && !['.md', '.markdown'].includes(ext)) throw new UsageError('pr requires a .md or .markdown file');
       if (!['.html', '.md', '.markdown'].includes(ext)) throw new UsageError(`${options.target}: expected a .html, .md, or .markdown file`);
       try { if (!(await stat(options.target)).isFile()) throw new UsageError(); } catch { throw new UsageError(`${options.target}: no such file`); }
       root = repoRoot(path.dirname(await realpath(options.target)));
@@ -145,25 +142,20 @@ export async function main(args = process.argv.slice(2)) {
     }
     else if (path.extname(options.target).toLowerCase() !== '.html') {
       const sourceFile = await realpath(options.target);
-      const out = options.task || pr ? documentOutputPath(sourceFile, undefined, pr ? 'pr' : 'task') : markdownOutputPath(sourceFile);
+      const out = documentOutputPath(sourceFile, undefined, pr ? 'pr' : 'markdown');
       await assertOutsideRepo(out, root);
       if (pr) await assertOutsideRepo(out, pr.repo);
     }
     const deps = await ensureDeps();
     const output = options.diff ? pagePath(source, options.out)
-      : options.task || pr ? documentOutputPath(await realpath(options.target), options.out, pr ? 'pr' : 'task')
       : path.extname(options.target).toLowerCase() === '.html' ? path.resolve(options.out || options.target)
-      : markdownOutputPath(await realpath(options.target), options.out);
+      : documentOutputPath(await realpath(options.target), options.out, pr ? 'pr' : 'markdown');
     const review = await withPublication(output, async () => {
       let settings = options, watch = null;
-      if (options.task || pr) {
-        const page = pr ? await writePRPage(options.target, deps.dist, pr, options) : await writeTaskPage(options.target, deps.dist, options);
+      if (!options.diff && (pr || path.extname(options.target).toLowerCase() !== '.html')) {
+        const page = pr ? await writePRPage(options.target, deps.dist, pr, options) : await writeTaskPage(options.target, deps.dist, { ...options, deps });
         settings = { ...options, title: page.title, sourceFile: page.source, pr };
         watch = { kind: 'document', source: page.source, hash: page.hash };
-      } else if (!options.diff && path.extname(options.target).toLowerCase() !== '.html') {
-        const page = await writeMarkdown(options.target, deps, options);
-        settings = { ...options, title: options.title ?? page.title };
-        watch = { kind: 'markdown', source: page.source, hash: page.hash };
       } else if (options.diff) {
         const initial = await readDiff(source);
         const { patchHash } = await writeDiffPage(initial, deps.dist, options.out);

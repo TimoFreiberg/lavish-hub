@@ -136,9 +136,9 @@ test('save retries recognize their completed replacement', async t => {
   const retry = await handleSave(prompt, x.target);
   assert.equal(retry.reply, 'Saved'); assert.match(retry.notice, /The user edited/);
 });
-test('task arguments accept only markdown/options and watch publishes source changes', async t => {
-  assert.deepEqual(parseArgs(['task', 'file.md', '--title', 'T']), { target: 'file.md', diff: false, task: true, title: 'T' });
-  for (const args of [['task'], ['task', 'file.md', '--watch'], ['task', 'file.md', '-r', '@']]) assert.throws(() => parseArgs(args));
+test('markdown arguments and watch publish source changes', async t => {
+  assert.deepEqual(parseArgs(['file.md', '--title', 'T']), { target: 'file.md', diff: false, title: 'T' });
+  for (const args of [['task', 'file.md'], ['file.md', '--watch'], ['file.md', '-r', '@']]) assert.throws(() => parseArgs(args));
   const x = await setup(t), initial = await publishDocument(x.page, x.sourceFile);
   await writeFile(x.sourceFile, '# External\n');
   await watchTick(x.page, { kind: 'document', source: x.sourceFile }, {}, { hash: initial });

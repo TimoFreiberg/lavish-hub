@@ -28,5 +28,5 @@ test('dirty disk changes block Save until a choice, and CRLF starts clean', t =>
   const x = setup(t); x.editor.update(version('original\r\n')); assert.ok(!x.editor.dirty());
   x.edit('mine'); x.editor.update(version('external')); x.editor.save(); assert.equal(x.messages.length, 0); assert.match(x.status, /Choose Reload/);
   x.editor.reload(); assert.equal(x.text, 'external'); assert.ok(!x.editor.dirty());
-  globalThis.window = {}; x.editor.save(); assert.match(x.status, /Save unavailable/);
+  globalThis.window = {}; x.editor.save(); assert.match(x.status, /Send unavailable/);
 });

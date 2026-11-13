@@ -77,10 +77,8 @@ async function ready(page, variant, artifact) {
     if (variant.name !== 'empty') await frame.waitForSelector('[data-content] [data-line-type="change-addition"] span[style]', { timeout: 20000 });
   } else if (['task', 'pr'].includes(variant.kind)) {
     await frame.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
-    if (variant.view === 'rendered') {
-      await frame.getByRole('button', { name: 'Rendered', exact: true }).click();
-      await frame.waitForFunction(() => document.querySelector('#preview')?.hidden === false);
-    }
+    await frame.getByRole('button', { name: variant.view === 'edit' ? 'Edit' : 'Rendered', exact: true }).click();
+    if (variant.view === 'rendered') await frame.waitForFunction(() => document.querySelector('#preview')?.hidden === false);
     if (variant.name === 'changed-on-disk') {
       await frame.getByRole('textbox', { name: 'Markdown text' }).fill('# Unsaved browser edit\n');
       await writeFile(artifact.source, '# External disk update\n');

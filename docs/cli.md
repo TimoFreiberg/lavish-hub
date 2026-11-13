@@ -9,7 +9,6 @@ This is the full list of lavish-kit commands, options, output, and exit codes.
 lavish-kit <file.html|file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
 lavish-kit diff [-r REV | --from A --to B] [--git] [--title T] [--out FILE] [--open] [--reopen]
 lavish-kit diff - [--repo-root DIR] [--title T] [--out FILE] [--open] [--reopen]
-lavish-kit task <file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
 lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
 lavish-kit retarget <page.html> [--terminal T]
 lavish-kit --help
@@ -18,10 +17,9 @@ lavish-kit --help
 | Command | Opens |
 | --- | --- |
 | `FILE.html` | The HTML file itself, or a copy at `--out` |
-| `FILE.md`, `FILE.markdown` | A read-only rendered page ([markdown.md](markdown.md)) |
+| `FILE.md`, `FILE.markdown` | A rendered-first editable page ([markdown.md](markdown.md)) |
 | `diff` | A diff page for a jj or git range ([diffs.md](diffs.md)) |
 | `diff -` | A diff page for a patch read from stdin, not watched |
-| `task FILE` | The Markdown editor for an existing file ([task-documents.md](task-documents.md)) |
 | `pr FILE` | A PR draft page, run from the jj repository the PR is for ([pr-drafts.md](pr-drafts.md)) |
 | `retarget PAGE` | Nothing. It sends retained feedback to a new herdr terminal ([feedback-routing.md](feedback-routing.md#retarget)) |
 
