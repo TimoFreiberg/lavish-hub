@@ -276,7 +276,7 @@ export async function ensureRelay(file) {
     });
   } finally { await output.close(); }
 }
-export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {}, consumed = () => {}, forced = () => false } = {}) {
+export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {}, consumed = () => {}, forced = () => false, emergency = async () => {} } = {}) {
   let failures = 0;
   while (!signal?.aborted) {
     let feedback;
@@ -299,13 +299,22 @@ export async function pollLoop(file, { run = command, decode, deliver = deliverF
     if (feedback.prompts?.length || feedback.artifact_failures?.length || feedback.rawOutput) {
       // Once poll consumes a response, retry persistence/delivery rather than
       // polling again and forgetting that response.
-      let persisted = false;
+      let persisted = false, attempts = 0;
       consumed(true);
       const durable = () => { persisted = true; consumed(false); };
       while ((!signal?.aborted || !persisted) && !forced()) {
         try { await deliver(file, feedback, { run, log, durable, signal }); durable(); break; }
-        catch (error) { healthy(false); log(`feedback persistence failed: ${error.message}`); await sleep(1000); }
+        catch (error) {
+          healthy(false); log(`feedback persistence failed: ${error.message}`);
+          if (!persisted && ++attempts >= 3) {
+            await emergency(file, feedback, error);
+            consumed(false);
+            return;
+          }
+          await sleep(1000);
+        }
       }
+      if (!persisted && forced()) { await emergency(file, feedback, new Error('forced shutdown')); consumed(false); return; }
     }
     if (feedback.session?.status === 'ended' || feedback.session?.session_ended || feedback.artifact_failures?.length) return;
     healthy(false);
@@ -329,7 +338,7 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
   const onSignal = () => {
     if (stopping && undurableBatch) {
       forceStop = true;
-      log('FORCED SHUTDOWN: consumed feedback could not be saved to the outbox and may be lost');
+      log('FORCED SHUTDOWN: attempting emergency feedback storage');
       controller.abort();
     } else stop();
   };
@@ -364,6 +373,18 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
         }
         await pollLoop(file, { run, decode, log, sleep, signal: controller.signal,
           healthy: value => { healthyPoll = value; },
+          emergency: async (page, feedback, cause) => {
+            const item = consumedBatches.get(feedback) || { id: randomUUID(), receivedAt: new Date().toISOString(), feedback, pending: true, results: [], states: [] };
+            const dir = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-kit', 'recovery');
+            const destination = path.join(dir, `${item.id}.json`);
+            try {
+              await atomicWrite(destination, JSON.stringify({ page, item }, null, 2) + '\n');
+              log(`EMERGENCY: feedback saved to ${destination}; see docs/feedback-routing.md for recovery. Outbox error: ${cause.message}`);
+            } catch (error) {
+              log(`EMERGENCY: feedback could not be saved to the outbox or ${destination}; feedback may be lost: ${error.message}`);
+              process.exitCode = 1;
+            }
+          },
           consumed: value => { undurableBatch = value; if (!value && stopping) stop(); },
           forced: () => forceStop,
           deliver: (page, feedback, options) => deliverFeedback(page, feedback, { ...options, handlers, write }),
@@ -373,7 +394,12 @@ export async function relayMain(file, { write = atomicWrite } = {}) {
     const readSpec = () => json(relayPaths(file).watch);
     if ((await readSpec()).delivery) await startDelivery();
     if (process.connected) process.send({ running: true, delivery: Boolean(deliveryTask) });
+    const exists = async name => { try { await stat(name); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
+    const stateDir = process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.local', 'state', 'lavish-axi');
+    const stateFile = path.join(stateDir, 'state.json');
+    const hadState = await exists(stateFile);
     await watchLoop(file, { readSpec, deps, run, decode, log, sleep, signal: controller.signal,
+      disappeared: async () => (!await exists(file) && !await exists(relayPaths(file).watch) && !await exists(relayPaths(file).target)) || (hadState && !await exists(stateFile)),
       startDelivery, delivery: () => healthyPoll, publish: fn => withPublication(file, fn),
     });
     stop();

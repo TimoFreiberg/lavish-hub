@@ -54,15 +54,19 @@ for (const stop of ['listing', 'SIGTERM']) test(`initial persistence survives ${
   assert.ok(commands.every(line => line === '[]' || line.startsWith('["poll"')), 'shutdown must not run handlers, send, or reply after persistence');
 });
 
-test('a second termination signal stops retries when the outbox is unwritable', { timeout: 15000 }, async t => {
+test('a second termination signal saves emergency feedback when the outbox is unwritable', { timeout: 15000 }, async t => {
   const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
   await recordWatch(x.file, null, true);
   await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log(${JSON.stringify(encode(feedback))});\n`);
   await chmod(path.join(bin, 'lavish-axi'), 0o755);
   const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
   const script = `import {relayMain} from ${JSON.stringify(module)};let n=0;await relayMain(${JSON.stringify(x.file)},{write:async()=>{if(++n===1){process.kill(process.pid,'SIGTERM');setTimeout(()=>process.kill(process.pid,'SIGTERM'),100);}throw Error('disk full');}});`;
-  const result = await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state') }, timeout: 12000 });
-  assert.match(result.stderr, /FORCED SHUTDOWN: consumed feedback.*may be lost/);
+  const result = await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state'), XDG_DATA_HOME: path.join(x.dir, 'data') }, timeout: 12000 });
+  assert.match(result.stderr, /FORCED SHUTDOWN: attempting emergency/);
+  const recovery = path.join(x.dir, 'data/lavish-kit/recovery');
+  const names = await (await import('node:fs/promises')).readdir(recovery);
+  const record = JSON.parse(await readFile(path.join(recovery, names[0]), 'utf8'));
+  assert.deepEqual(record.item.feedback, feedback); assert.equal(record.item.target.terminal, 't1');
   await assert.rejects(access(relayPaths(x.file).lock));
 });
 

@@ -36,9 +36,10 @@ export async function watchTick(file, spec, deps, state = {}) {
   return { hash: nextHash };
 }
 
-export async function watchLoop(file, { readSpec, deps, run, decode, log = () => {}, sleep, signal, delivery = () => false, startDelivery = () => {}, interval = 1000, publish = fn => fn() } = {}) {
+export async function watchLoop(file, { readSpec, deps, run, decode, log = () => {}, sleep, signal, delivery = () => false, startDelivery = () => {}, interval = 1000, publish = fn => fn(), disappeared = async () => false } = {}) {
   let previous, state = {};
   while (!signal?.aborted) {
+    if (await disappeared()) { log('page or Lavish state disappeared; stopping worker'); return; }
     let current;
     try {
       current = await readSpec();
