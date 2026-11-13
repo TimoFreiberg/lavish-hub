@@ -5,12 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { parsePR, serializePR } from '../src/pr-format.mjs';
 import { decodeAction, encodeCreatePR, actionTag } from '../src/action-message.mjs';
-import { handleAction, fishQuote } from '../src/pr-action.mjs';
+import { handleAction } from '../src/pr-action.mjs';
 import { textHash } from '../src/save.mjs';
 import { deliverFeedback, recoverFeedback, relayPaths, recordTarget } from '../src/relay.mjs';
 import { atomicWrite } from '../src/files.mjs';
 import { parseArgs } from '../src/cli.mjs';
-import { execFileSync } from 'node:child_process';
 
 const configRoot = await mkdtemp(path.join(os.tmpdir(), 'lavish-pr-config-'));
 const oldConfig = process.env.XDG_CONFIG_HOME;
@@ -153,11 +152,6 @@ test('absent or invalid config refuses Create PR visibly without saving or launc
   } finally {
     await writeFile(config, JSON.stringify({ createPr: ['stub-pr', 'literal prefix'] }));
   }
-});
-test('fish command quoting preserves literal paths and revisions without executing input', () => {
-  const values = ["a'b\\c $HOME ; (false)\n雪", '@-', 'foo|bar'];
-  const script = 'printf "%s\\0" ' + values.map(fishQuote).join(' ');
-  assert.deepEqual(execFileSync('fish', ['--no-config', '-c', script]).toString().split('\0').slice(0, -1), values);
 });
 test('pr CLI arguments and sidecar metadata', async t => {
   const x = await setup(t);

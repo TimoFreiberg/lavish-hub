@@ -248,12 +248,14 @@ export async function retarget(file, terminal, { run = command, log = () => {} }
 }
 export async function recordWatch(file, watch, delivery = false) {
   file = await realpath(file);
-  await withState(file, async () => {
-    const previous = await json(relayPaths(file).watch, {});
-    // An outside-herdr reopen must not take away an existing delivery listener.
-    await atomicWrite(relayPaths(file).watch, JSON.stringify({ version: 1, delivery: delivery || Boolean(previous.delivery), watch: watch || null }, null, 2) + '\n');
-  });
+  await atomicWrite(relayPaths(file).watch, JSON.stringify({ version: 1, delivery, watch: watch || null }, null, 2) + '\n');
   return file;
+}
+// Keep opener writes and watch ticks ordered without waiting for terminal sends.
+export async function withPublication(file, fn) {
+  await mkdir(path.dirname(file), { recursive: true });
+  const release = await claimLock(`${file}.publication.lock`, { wait: true });
+  try { return await fn(); } finally { await release(); }
 }
 export async function ensureRelay(file) {
   const log = relayLog(file);
@@ -261,20 +263,21 @@ export async function ensureRelay(file) {
   const output = await open(log, 'a', 0o600);
   try {
     const child = spawn(process.execPath, [worker, file], { detached: true, stdio: ['ignore', output.fd, output.fd, 'ipc'] });
-    await new Promise((resolve, reject) => {
+    return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => { child.kill(); reject(new Error(`relay startup timed out; see ${log}`)); }, 10000);
-      const done = error => { clearTimeout(timer); child.removeAllListeners('exit'); if (child.connected) child.disconnect(); child.unref(); error ? reject(error) : resolve(); };
+      const done = (error, result) => { clearTimeout(timer); child.removeAllListeners('exit'); if (child.connected) child.disconnect(); child.unref(); error ? reject(error) : resolve(result); };
       child.once('error', done);
       child.once('exit', code => done(new Error(`relay exited before startup (${code}); see ${log}`)));
-      child.once('message', result => done(result.error ? new Error(`${result.error}; see ${log}`) : undefined));
+      child.once('message', result => done(result.error ? new Error(`${result.error}; see ${log}`) : undefined, result));
     });
   } finally { await output.close(); }
 }
-export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal } = {}) {
+export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {} } = {}) {
   let failures = 0;
   while (!signal?.aborted) {
     let feedback;
     try {
+      healthy(true);
       const { stdout } = await run('lavish-axi', ['poll', file, '--owner', `lavish-kit:${file}`]);
       try { feedback = decode(stdout); }
       catch (error) {
@@ -282,6 +285,7 @@ export async function pollLoop(file, { run = command, decode, deliver = deliverF
         feedback = { rawOutput: stdout };
       }
     } catch (error) {
+      healthy(false);
       const text = error.stderr?.trim() || error.message;
       log(`poll failed: ${text}`);
       if (signal?.aborted || /LISTENER_REPLACED|NOT_FOUND/.test(text)) return;
@@ -293,10 +297,11 @@ export async function pollLoop(file, { run = command, decode, deliver = deliverF
       // polling again and forgetting that response.
       while (!signal?.aborted) {
         try { await deliver(file, feedback, { run, log }); break; }
-        catch (error) { log(`feedback persistence failed: ${error.message}`); await sleep(1000); }
+        catch (error) { healthy(false); log(`feedback persistence failed: ${error.message}`); await sleep(1000); }
       }
     }
     if (feedback.session?.status === 'ended' || feedback.session?.session_ended || feedback.artifact_failures?.length) return;
+    healthy(false);
     if (feedback.session?.status !== 'feedback') await sleep(Math.min(30000, 500 * 2 ** Math.min(failures++, 6)));
     else failures = 0;
   }
@@ -309,10 +314,14 @@ export async function relayMain(file) {
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
   try {
     release = await claimLock(relayPaths(file).lock);
-    if (!release) { if (process.connected) process.send({ running: true }); return; }
+    if (!release) {
+      const delivery = await json(path.join(relayPaths(file).lock, 'delivery'), false);
+      const requested = (await json(relayPaths(file).watch)).delivery;
+      if (process.connected) process.send({ running: true, delivery: delivery || Boolean(requested) });
+      return;
+    }
     const deps = await ensureDeps();
     const { decode } = await import(pathToFileURL(deps.resolve('@toon-format/toon')).href);
-    if (process.connected) process.send({ running: true });
     log(`relay started for ${file} (pid ${process.pid})`);
     const run = (name, args) => exec(name, args, { maxBuffer: 32 * 1024 * 1024, signal: controller.signal });
     const sleep = async ms => { try { await delay(ms, undefined, { signal: controller.signal }); } catch (error) { if (error.name !== 'AbortError') throw error; } };
@@ -320,9 +329,10 @@ export async function relayMain(file) {
       [saveTag]: handleSave,
       [actionTag]: (prompt, target, context) => handleAction(prompt, target, { ...context, run }),
     };
-    let deliveryTask;
-    const startDelivery = () => {
+    let deliveryTask, healthyPoll = false;
+    const startDelivery = async () => {
       if (deliveryTask) return;
+      await atomicWrite(path.join(relayPaths(file).lock, 'delivery'), 'true\n');
       deliveryTask = (async () => {
         // Finish consumed input and durable deliveries before polling again.
         while (!controller.signal.aborted) {
@@ -330,13 +340,16 @@ export async function relayMain(file) {
           catch (error) { log(`outbox recovery failed: ${error.message}; retrying before poll`); await sleep(1000); }
         }
         await pollLoop(file, { run, decode, log, sleep, signal: controller.signal,
+          healthy: value => { healthyPoll = value; },
           deliver: (page, feedback, options) => deliverFeedback(page, feedback, { ...options, handlers }),
         });
       })().catch(error => log(`delivery stopped: ${error.message}`)).finally(stop);
     };
     const readSpec = () => json(relayPaths(file).watch);
+    if ((await readSpec()).delivery) await startDelivery();
+    if (process.connected) process.send({ running: true, delivery: Boolean(deliveryTask) });
     await watchLoop(file, { readSpec, deps, run, decode, log, sleep, signal: controller.signal,
-      startDelivery, delivery: () => Boolean(deliveryTask),
+      startDelivery, delivery: () => healthyPoll, publish: fn => withPublication(file, fn),
     });
     stop();
     if (deliveryTask) await deliveryTask;

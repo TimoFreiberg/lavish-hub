@@ -7,9 +7,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encode, decode } from '@toon-format/toon';
-import { recordWatch, relayPaths, relayLog } from '../src/relay.mjs';
+import { recordWatch, relayPaths, relayLog, withPublication, claimLock } from '../src/relay.mjs';
+import { atomicWrite } from '../src/files.mjs';
+import { writeDiffPage } from '../src/diff/page.mjs';
+import { ensureDeps } from '../src/deps.mjs';
 import { sessionOpen, watchLoop } from '../src/watch.mjs';
-import { publishDocument } from '../src/document-page.mjs';
 import { textHash } from '../src/save.mjs';
 const exec = promisify(execFile);
 const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
@@ -25,12 +27,13 @@ async function setup(t) {
   await mkdir(bin);
   const file = path.join(dir, 'page.html'), listing = path.join(dir, 'sessions'), calls = path.join(dir, 'calls');
   await writeFile(file, '<title>Watch</title>');
+  await writeFile(calls, '');
   await writeFile(listing, encode({ sessions: [{ file, status: 'open' }] }));
   await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconst fs=require('node:fs'),args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');if(!args.length)console.log(fs.readFileSync(${JSON.stringify(listing)},'utf8'));else if(args[0]==='poll'){const timer=setInterval(()=>{if(fs.readFileSync(${JSON.stringify(listing)},'utf8').trim()===${JSON.stringify(encode({ sessions: [] }))}){clearInterval(timer);console.log('session:\\n  status: ended');}},20);}else if(args[0]==='reply'){}else throw Error('unexpected Lavish command');\n`);
   await chmod(path.join(bin, 'lavish-axi'), 0o755);
   await writeFile(relayPaths(file).target, JSON.stringify({ version: 1, page: file, title: 'Watch', terminal: 'scratch' }));
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(dir, 'state') };
-  const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)};await ensureRelay(${JSON.stringify(file)});`], { env, timeout: 15000 });
+  const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)};console.log(JSON.stringify(await ensureRelay(${JSON.stringify(file)})));`], { env, timeout: 15000 });
   t.after(async () => {
     try { process.kill(Number(await readFile(path.join(relayPaths(file).lock, 'pid'))), 'SIGTERM'); } catch {}
     await until(async () => !await exists(relayPaths(file).lock));
@@ -81,12 +84,43 @@ test('watch-only worker can acquire delivery on herdr reopen and preserves deliv
   await recordWatch(x.file, null); await x.launch();
   const pid = await readFile(path.join(relayPaths(x.file).lock, 'pid'), 'utf8');
   await until(() => exists(x.calls));
-  await recordWatch(x.file, null, true); await x.launch();
+  await recordWatch(x.file, null, true);
+  assert.equal(JSON.parse((await x.launch()).stdout).delivery, true, 'herdr reopen reports requested automatic delivery immediately');
   await until(async () => (await readFile(x.calls, 'utf8')).includes('poll'));
   await recordWatch(x.file, null, false);
-  assert.equal(JSON.parse(await readFile(relayPaths(x.file).watch)).delivery, true);
+  assert.equal(JSON.parse(await readFile(relayPaths(x.file).watch)).delivery, false);
+  assert.equal(JSON.parse((await x.launch()).stdout).delivery, true, 'live worker reports automatic feedback ownership');
   assert.equal(await readFile(path.join(relayPaths(x.file).lock, 'pid'), 'utf8'), pid);
+  const listings = (await readFile(x.calls, 'utf8')).trim().split('\n').map(JSON.parse).filter(args => !args.length).length;
+  await until(async () => (await readFile(x.log, 'utf8')).includes('relay started'));
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  assert.equal((await readFile(x.calls, 'utf8')).trim().split('\n').map(JSON.parse).filter(args => !args.length).length, listings, 'healthy delivery retains polling ownership on outside reopen');
   await x.end(); await until(async () => !await exists(relayPaths(x.file).lock));
+});
+
+test('an ended delivery worker reopened outside herdr is watch-only', async t => {
+  const x = await setup(t);
+  await recordWatch(x.file, null, true); await x.launch();
+  await until(async () => (await readFile(x.calls, 'utf8')).includes('poll'));
+  await x.end(); await until(async () => !await exists(relayPaths(x.file).lock));
+  await writeFile(x.calls, '');
+  await writeFile(x.listing, encode({ sessions: [{ file: x.file, status: 'open' }] }));
+  await recordWatch(x.file, null, false);
+  assert.equal(JSON.parse((await x.launch()).stdout).delivery, false, 'restarted worker reports agent polling');
+  await until(async () => (await readFile(x.calls, 'utf8')).includes('[]'));
+  await x.end(); await until(async () => !await exists(relayPaths(x.file).lock));
+  assert.ok((await readFile(x.calls, 'utf8')).trim().split('\n').map(JSON.parse).every(args => !args.length));
+});
+
+test('delivery recovery failure still exits on session end and retains pending outbox', async t => {
+  const x = await setup(t);
+  const outbox = JSON.stringify([{ id: 'pending', pending: true, feedback: { prompts: [{ tag: 'lavish-kit-save', prompt: 'saved input' }] } }]);
+  await writeFile(relayPaths(x.file).outbox, outbox);
+  await recordWatch(x.file, null, true); await x.launch();
+  await until(async () => (await readFile(x.log, 'utf8')).includes('outbox recovery failed:'));
+  await x.end(); await until(async () => !await exists(relayPaths(x.file).lock));
+  assert.equal(await readFile(relayPaths(x.file).outbox, 'utf8'), outbox);
+  assert.ok((await readFile(x.calls, 'utf8')).trim().split('\n').map(JSON.parse).every(args => !args.length));
 });
 
 test('watch failures and session-listing failures are logged and retried', async t => {
@@ -104,22 +138,53 @@ test('watch failures and session-listing failures are logged and retried', async
   assert.ok(await exists(path.join(dir, 'latest.js')));
 });
 
-test('a changed spec republishes after an old in-flight publication', async t => {
+for (const snapshot of ['HTML', 'stdin']) test(`an in-flight watch cannot overwrite a reopened ${snapshot} snapshot`, { timeout: 10000 }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-watch-reopen-')); t.after(() => rm(dir, { recursive: true, force: true }));
-  const source = path.join(dir, 'old.md'), other = path.join(dir, 'new.md'), file = path.join(dir, 'page.html');
-  await writeFile(source, '# Old\n'); await writeFile(other, '# New\n');
-  const hash = await publishDocument(file, source), controller = new AbortController();
-  let current = { delivery: true, watch: { kind: 'document', source, hash } }, ticks = 0;
-  await watchLoop(file, { deps: {}, readSpec: async () => current, delivery: () => true, signal: controller.signal,
-    sleep: async () => {
-      if (!ticks++) {
-        await publishDocument(file, other);
-        current = { delivery: true, watch: { kind: 'document', source: other, hash: textHash('# New\n') } };
-        await publishDocument(file, source); // simulate the previous tick finishing late
-      } else controller.abort();
-    },
+  const source = path.join(dir, 'old.md'), file = path.join(dir, 'page.html');
+  await writeFile(source, '# Old\n'); await writeFile(file, '<title>Old</title>');
+  await recordWatch(file, { kind: 'markdown', source });
+  const controller = new AbortController();
+  let queued, resume;
+  const waiting = new Promise(resolve => { queued = resolve; });
+  const gate = new Promise(resolve => { resume = resolve; });
+  const loop = watchLoop(file, { deps: await ensureDeps(), readSpec: async () => JSON.parse(await readFile(relayPaths(file).watch)),
+    delivery: () => true, signal: controller.signal,
+    publish: async fn => { queued(); await gate; return withPublication(file, fn); },
+    sleep: async () => controller.abort(),
   });
-  assert.ok((await readFile(path.join(dir, 'latest.js'), 'utf8')).includes(textHash('# New\n')));
+  await waiting;
+  await withPublication(file, async () => {
+    if (snapshot === 'HTML') await atomicWrite(file, '<title>Snapshot</title>');
+    else {
+      const dist = path.join(dir, 'dist'); await mkdir(dist);
+      await writeDiffPage({ kind: 'stdin', root: dir, range: 'snapshot', patch: 'snapshot patch', commits: [] }, dist, file);
+    }
+    await recordWatch(file, null);
+  });
+  const expected = await readFile(file, 'utf8');
+  resume(); await loop;
+  assert.equal(await readFile(file, 'utf8'), expected);
+  if (snapshot === 'stdin') assert.ok((await readFile(path.join(dir, 'latest.js'), 'utf8')).includes(textHash('snapshot patch')));
+});
+
+test('a lifecycle listing cannot abort delivery that entered a healthy poll', async () => {
+  const controller = new AbortController(); let healthy = false, ticks = 0;
+  await watchLoop('/tmp/review.html', {
+    readSpec: async () => ({ watch: null }), signal: controller.signal, decode,
+    delivery: () => healthy,
+    run: async () => { healthy = true; return { stdout: encode({ sessions: [] }) }; },
+    sleep: async () => { ticks++; controller.abort(); },
+  });
+  assert.equal(ticks, 1, 'healthy delivery must finish its final batch before stopping');
+});
+
+test('recordWatch does not wait for a held delivery state lock', async t => {
+  const x = await setup(t), release = await claimLock(relayPaths(x.file).stateLock);
+  let timer;
+  try {
+    await Promise.race([recordWatch(x.file, null), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('watch waited for delivery')), 500); })]);
+  } finally { clearTimeout(timer); await release(); }
+  assert.equal(JSON.parse(await readFile(relayPaths(x.file).watch)).delivery, false);
 });
 
 test('watch-only worker picks up changed diff ranges without rewriting the shell', async t => {

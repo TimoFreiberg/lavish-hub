@@ -1,6 +1,6 @@
 test:
     npm ci
-    node --test test/
+    node --test --test-concurrency=1 test/
 
 test-e2e:
     node test/relay-e2e.mjs

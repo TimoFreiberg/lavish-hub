@@ -45,7 +45,7 @@ async function assertRegistration(log, expected) {
 test('registers html with title and title override', async t => {
   const x = await setup(t); await x.fakeJS('herdr-app', `${acknowledge}\nfs.writeFileSync(process.env.LOG, process.argv.slice(2).join('\\n'));`);
   for (const [args, title] of [[[x.file], 'Page title'], [[x.file, '--title', 'Override'], 'Override']]) {
-    const r = x.run(args, { HC_TERMINAL_ID: 'terminal' }); assert.equal(r.status, 0); assert.equal(r.stdout, `Lavish review of ${x.file} is listed under the task's Artifacts.\n`); assert.equal(r.stderr, '');
+    const r = x.run(args, { HC_TERMINAL_ID: 'terminal' }); assert.equal(r.status, 0); assert.equal(r.stdout, `Lavish review of ${x.file} is listed under the task's Artifacts.\nFeedback is delivered automatically; do not poll ${x.file}.\n`); assert.equal(r.stderr, '');
     await assertRegistration(x.env.LOG, { terminal: 'terminal', path: x.file, title });
   }
 });
@@ -53,7 +53,8 @@ test('fallbacks are silent on stderr', async t => {
   const x = await setup(t);
   for (const [terminal, script] of [['', null], ['t', null], ['t', 'echo need the mod loaded >&2; exit 1']]) {
     if (script) await x.fake('herdr-app', script);
-    const r = x.run([x.file], { HC_TERMINAL_ID: terminal }); assert.equal(r.status, 0); assert.match(r.stdout, /^Lavish review of .+page\.html ready: http:\/\/localhost:123\/review\S* — ask the user to open it\.\n$/); assert.equal(r.stderr, '');
+    const r = x.run([x.file], { HC_TERMINAL_ID: terminal }); assert.equal(r.status, 0); assert.match(r.stdout, /^Lavish review of .+page\.html ready: http:\/\/localhost:123\/review\S* — ask the user to open it\.\nFeedback (is delivered automatically|requires agent polling):?/);
+    assert.match(r.stdout, terminal ? /Feedback is delivered automatically; do not poll/ : /Feedback requires agent polling: lavish-axi poll/); assert.equal(r.stderr, '');
     if (terminal) assert.equal(JSON.parse(await readFile(`${x.file}.relay.json`)).terminal, terminal, 'target is recorded even without registration');
     else await assert.rejects(access(`${x.file}.relay.json`), 'outside herdr there is no relay sidecar');
   }
@@ -163,7 +164,7 @@ test('git command returns promptly while its watch-only worker updates data', as
   const latest=path.join(path.dirname(out),'latest.js'), before=await readFile(latest,'utf8');
   const shellTime=(await import('node:fs/promises')).stat, mtime=(await shellTime(out)).mtimeMs;
   await writeFile(path.join(repo,'x'),'three\n'); await until(async()=>await readFile(latest,'utf8')!==before);
-  assert.equal((await shellTime(out)).mtimeMs,mtime); assert.equal(r.stdout.trim().split('\n').length,1); assert.equal(r.stderr,'');
+  assert.equal((await shellTime(out)).mtimeMs,mtime); assert.equal(r.stdout.trim().split('\n').length,2); assert.match(r.stdout, /Feedback requires agent polling/); assert.equal(r.stderr,'');
   await assert.rejects(access(path.join(x.dir,'unexpected-poll')));
 });
 test('diff argument errors name the conflicting or missing option', async t => {

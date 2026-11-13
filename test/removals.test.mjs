@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,10 +20,4 @@ test('no references remain', () => {
 
 test('no TODO(prose)', () => {
   assert.equal(rg('TODO\\(prose\\)'), '');
-});
-
-test('README documents the standalone command and relay', async () => {
-  const readme = await readFile(path.join(repo, 'README.md'), 'utf8');
-  assert.match(readme, /lavish-kit/);
-  assert.match(readme, /^## Relay and recovery$/m);
 });

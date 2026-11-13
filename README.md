@@ -112,8 +112,11 @@ one-second ticks. An in-flight update can finish before the new spec takes
 effect. Pending saves/actions keep their original receipt targets.
 
 Reopening a watch-only page inside herdr enables delivery in the same worker.
-Once delivery is configured for a page, an outside-herdr reopen preserves it
+An outside-herdr reopen preserves delivery only in a running delivering worker
 rather than taking away its listener. Agents must not poll such a page themselves.
+A newly started outside-herdr worker is watch-only, even if the page previously
+had delivery configured. Follow the printed feedback line: it says either that
+feedback is delivered automatically or that the agent must poll.
 Dead-PID locks are reclaimed on the next open. Failed or timed-out polls,
 browser disconnects, and `LISTENER_ACTIVE` retry with capped exponential backoff. The relay does
 not take over another listener and stops if another listener takes over its
@@ -296,6 +299,7 @@ Relay files beside the page:
 | `<page>.outbox.json` | Undelivered feedback; unfinished actions also retain full input, receipt target, and progress |
 | `<page>.relay.lock/pid` | Worker PID |
 | `<page>.relay-state.lock/pid` | Short-lived delivery/retarget/outbox lock |
+| `<page>.publication.lock/pid` | Orders opener writes and watch updates |
 
 Keep these files local. Completed entries retain forwarded feedback, short
 notices and page replies. Logs are under
@@ -310,8 +314,11 @@ just test
 just test-e2e
 ```
 
-`just test` runs `npm ci` and the Node/browser suites. Browser tests start and
-end their own Lavish sessions and use cached Chromium. The optional real npm
+`just test` runs `npm ci` and the Node/browser suites. Run it serially: concurrent
+runs in one checkout are not safe because `npm ci` replaces shared `node_modules`
+while tests read it. Browser tests also use the shared Lavish server and cached
+Chromium, though each test starts and ends its own session. The recipe runs test
+files serially to avoid overlapping browser suites. The optional real npm
 first-use test runs when `LAVISH_KIT_REAL_NPM=1`.
 
 Run `just test-e2e` explicitly inside herdr. It creates a scratch jj repository,

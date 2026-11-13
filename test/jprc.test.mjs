@@ -5,9 +5,9 @@ import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { readCreatePr } from '../src/config.mjs';
-import { fishQuote } from '../src/pr-action.mjs';
 import { preparePR } from '../src/pr-page.mjs';
 
+const fishQuote = value => `'${String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`;
 const example = ['fish', '-c', 'jprc $argv', '--'];
 test('documented fish argv prefix forwards appended arguments to a stub function', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-jprc-'));

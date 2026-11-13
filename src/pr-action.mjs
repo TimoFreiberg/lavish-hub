@@ -3,8 +3,6 @@ import { saveDocument } from './save.mjs';
 import { parsePR } from './pr-format.mjs';
 import { readCreatePr } from './config.mjs';
 
-// Fish single quotes interpret only escaped backslashes and single quotes.
-export const fishQuote = value => `'${String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`;
 export async function handleAction(prompt, target, { run, resolve, state = {}, checkpoint = async () => {}, recovering = false } = {}) {
   let saved, space, argv;
   try {

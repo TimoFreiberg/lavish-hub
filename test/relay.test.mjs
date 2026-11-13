@@ -117,6 +117,14 @@ test('poll handles actual TOON, retries disconnect/crash/listener conflict, exit
   assert.equal(calls.length, 4); assert.equal(delivered.length, 1); assert.equal(delivered[0].session.session_ended, true);
   assert.deepEqual(sleeps, [500, 1000, 2000]); assert.ok(calls.every(c => c.includes('--owner') && !c.includes('--takeover')));
 });
+test('a healthy poll stays protected until its final batch is processed', async () => {
+  let healthy = false, delivered = false;
+  await pollLoop('x', { decode, healthy: value => { healthy = value; },
+    run: async () => { assert.equal(healthy, true); return { stdout: encode({ ...feedback, session: { session_ended: true } }) }; },
+    deliver: async () => { await Promise.resolve(); assert.equal(healthy, true); delivered = true; },
+  });
+  assert.equal(delivered, true);
+});
 test('plain session end and artifact failures terminate relay loop', async () => {
   for (const response of [{ session: { status: 'ended' } }, { session: { status: 'feedback' }, artifact_failures: [{ kind: 'fatal', detail: 'broken' }] }]) {
     let polls = 0, deliveries = 0;
@@ -185,7 +193,7 @@ test('detached relay starts once, survives its caller, exits on stub session end
   const x = await setup(t); await recordWatch(x.file, null, true); const bin = path.join(x.dir, 'bin'); await mkdir(bin);
   const stop = path.join(x.dir, 'stop'), calls = path.join(x.dir, 'polls');
   await writeFile(path.join(bin, 'hc'), `#!${process.execPath}\nconsole.log('[]');\n`); await chmod(path.join(bin, 'hc'), 0o755);
-  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconst fs=require('node:fs'); fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(' ')+'\\n'); const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(stop)})){clearInterval(timer); console.log('session:\\n  status: ended');}},20);\n`); await chmod(path.join(bin, 'lavish-axi'), 0o755);
+  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconst fs=require('node:fs'); const args=process.argv.slice(2); if(!args.length) {console.log(fs.existsSync(${JSON.stringify(stop)}) ? 'sessions[0]:' : ${JSON.stringify(encode({ sessions: [{ file: x.file, status: 'open' }] }))}); process.exit();} fs.appendFileSync(${JSON.stringify(calls)}, args.join(' ')+'\\n'); const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(stop)})){clearInterval(timer); console.log('session:\\n  status: ended');}},20);\n`); await chmod(path.join(bin, 'lavish-axi'), 0o755);
   const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state') };
   const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)}; await ensureRelay(${JSON.stringify(x.file)});`], { env });

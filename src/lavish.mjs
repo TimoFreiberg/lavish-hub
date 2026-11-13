@@ -50,7 +50,7 @@ export async function openReview(file, { title, open = false, reopen = false, so
     await recordTarget(file, { title, sourceFile, pr });
   }
   const page = await recordWatch(file, watch, Boolean(process.env.HC_TERMINAL_ID));
-  await ensureRelay(page);
+  const worker = await ensureRelay(page);
   if (process.env.HC_TERMINAL_ID) {
     registered = await registerArtifact({ terminal: process.env.HC_TERMINAL_ID, path: file, title });
   }
@@ -61,5 +61,8 @@ export async function openReview(file, { title, open = false, reopen = false, so
   console.log(registered
     ? `Lavish review of ${file} is listed under the task's Artifacts.`
     : `Lavish review of ${file} ready: ${url}${open ? '' : ' — ask the user to open it.'}`);
-  return { url, registered };
+  console.log(worker.delivery
+    ? `Feedback is delivered automatically; do not poll ${file}.`
+    : `Feedback requires agent polling: lavish-axi poll ${JSON.stringify(file)}.`);
+  return { url, registered, delivery: worker.delivery };
 }

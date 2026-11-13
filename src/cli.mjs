@@ -2,7 +2,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { assertOutsideRepo, atomicWrite, repoRoot } from './files.mjs';
 import { openReview } from './lavish.mjs';
-import { retarget } from './relay.mjs';
+import { retarget, withPublication } from './relay.mjs';
 import { documentOutputPath, writeTaskPage } from './document-page.mjs';
 import { preparePR, writePRPage } from './pr-page.mjs';
 import { ensureDeps } from './deps.mjs';
@@ -26,9 +26,9 @@ that page yourself. Answer with lavish-axi reply <page> --agent-reply '...'.
 Outside herdr, a watch-only worker never polls; the agent uses lavish-axi poll,
 reply, and end. Every command returns after opening. Workers watch markdown,
 task/PR sources and jj/git diffs until the Lavish session ends. Reopening replaces
-the watch source/range between ticks and reuses the worker; pending saves/actions
-keep their receipt targets. An existing delivery relay stays the listener even
-when reopened outside herdr.
+the watch source/range between ticks and reuses the worker. A running delivering
+worker stays the listener when reopened outside herdr; a restarted outside worker
+is watch-only. Follow the printed feedback line to decide whether to poll.
 
 usage: lavish-kit <file.html|file.md|file.markdown> [options]
        lavish-kit diff [range] [--git] [options]
@@ -37,73 +37,27 @@ usage: lavish-kit <file.html|file.md|file.markdown> [options]
        lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit retarget <page.html> [--terminal T]
 
-Retarget sets a new live target and flushes retained feedback, even while the
-old target is live. Without --terminal it picks the newest live terminal with a
-polytoken.session label in the recorded herdr.space, and fails rather than
-guess when there is none or two tie. T is a live terminal address or unique name.
-Retarget does not reopen an ended page or restart its relay.
-
-Worker files beside the page: <page>.watch.json (source/range and delivery mode),
-<page>.relay.json (herdr target), <page>.outbox.json
-(undelivered feedback), <page>.relay.lock/pid (relay process), and
-<page>.relay-state.lock/pid (delivery/retarget lock). Keep them local.
-Logs: ${'${XDG_STATE_HOME:-$HOME/.local/state}'}/lavish-kit/relay-<page-hash>.log
-Stop with lavish-axi end <page> or Send & End. Fatal artifact failures, an
-ended Lavish session, or another listener taking over also stop the relay.
-Disconnects and poll failures are retried. To stop just the relay, kill -TERM
-its recorded PID. Open through lavish-kit to restart a stopped or crashed relay.
-A missing or ambiguous target, or a failed send, keeps feedback for retarget.
-An unfinished save or Create PR left by a crash blocks retarget's flush until
-the relay restarts. Retarget gives up after 120 seconds on a busy state lock.
-Failed page replies are logged and may leave Working visible. If the relay can't
-start, the command fails (the page may already be open). Undecodable feedback is
-forwarded raw for inspection. Delivery is at-least-once and may repeat after a
-crash, and feedback can be lost if the relay dies right after Lavish hands it
-over. See README.md for sidecar formats and recovery details.
+Retarget changes the live delivery target and flushes retained feedback.
+--terminal T accepts a live terminal address or unique name; without it,
+retarget selects the newest Polytoken terminal in the recorded herdr space.
+It does not reopen an ended page or restart its worker.
+End a review with lavish-axi end <page> or Send & End.
+See README.md for save/action protocols, worker files, logs, and recovery.
 
 Task documents:
   task FILE         edit existing UTF-8 markdown with Edit/Rendered views
   Save / Cmd+S      (Ctrl+S on Linux) sends a conditional save. Check the page reply.
-                    The agent gets a short notice, not the source contents.
-  Always watches    the command returns; its worker watches until the session ends.
-                    Clean editors update in place; dirty editors offer Reload
-                    (discard mine) or Keep mine before saving.
-  Page files        ${'${XDG_DATA_HOME:-$HOME/.local/share}'}/lavish-kit/pages/task/<name>-<hash>/
-                    contains index.html, assets/, latest.js and versioned data scripts
-  Limits/failures   Lavish 0.1.96 caps the whole JSON request at 2 MiB (escaped text
-                    and comments included). Oversized edits stay unsaved. Poll output
-                    limit: 32 MiB. Invalid input/output paths fail page creation. Save
-                    failures keep edits, and watch/load failures retry. Save needs the
-                    Lavish API. Conflicts write nothing. After a crash, an interrupted
-                    save may need you to inspect the file.
-  Outside herdr     no automatic save. The polling agent does the conditional save
-                    described in README.md and replies.
 
 PR drafts:
   pr FILE [-r REV]  run from the jj repository the PR command should use. Default head: @-.
-                    FILE starts with # <title>, then the body. Repository/head metadata
-                    is captured at page creation. A command may evaluate REV at launch,
-                    so pass an explicit revision to pin it. Save/watch match task pages.
+                    FILE starts with # <title>, then the body.
   Create PR         configure createPr (an argv array) in
                     ${'${XDG_CONFIG_HOME:-$HOME/.config}'}/lavish-kit/config.json.
-                    No default command; unset/invalid config disables Create PR.
-                    Saves first, then opens a terminal in the live target's space,
-                    appending -r REV --body-file FILE to createPr in the recorded repo.
-                    A conflict/save failure prevents launch. A launch reply doesn't mean
-                    a PR was created. It never falls back to another space. A restarted
-                    relay won't repeat an interrupted launch. Check herdr before
-                    submitting another action. Command errors appear in that terminal.
-  Page files        ${'${XDG_DATA_HOME:-$HOME/.local/share}'}/lavish-kit/pages/pr/<name>-<hash>/
-                    --out must be outside both the draft's and the current repository
-  Failures          invalid drafts, non-jj cwd and invalid/multiple heads fail creation.
-                    Invalid disk updates keep edits until you fix the file. Malformed
-                    actions fail visibly. Missing target/space needs retargeting. Launch
-                    failures leave a successful save intact. Check herdr before retrying.
+                    Unset/invalid config disables Create PR. The worker saves first,
+                    then appends -r REV --body-file FILE to createPr in the recorded repo.
   Config example    {"createPr":["fish","-c","jprc $argv","--"]} for an existing
                     fish jprc function that accepts -r REV --body-file FILE.
                     lavish-kit does not provide jprc, fish, or a PR command.
-  Outside herdr     no automatic save or launch. The agent handles Save and asks the
-                    user to run their configured command. Protocol details are in README.md.
 
 Diff range (default: jj fork_point(trunk() | @) to @; git: the working tree
 against its merge base with origin/HEAD, origin/main, origin/master, main, or master):
@@ -187,35 +141,40 @@ export async function main(args = process.argv.slice(2)) {
       if (pr) await assertOutsideRepo(out, pr.repo);
     }
     const deps = await ensureDeps();
-    if (options.task || pr) {
-      const page = pr ? await writePRPage(options.target, deps.dist, pr, options) : await writeTaskPage(options.target, deps.dist, options);
-      await openReview(page.file, { ...options, title: page.title, sourceFile: page.source, pr,
-        watch: { kind: 'document', source: page.source, hash: page.hash },
-      });
-      return 0;
-    }
-    if (!options.diff && path.extname(options.target).toLowerCase() !== '.html') {
-      const page = await writeMarkdown(options.target, deps, options);
-      await openReview(page.file, { ...options, title: options.title ?? page.title,
-        watch: { kind: 'markdown', source: page.source, hash: page.hash },
-      });
-      return 0;
-    }
-    if (options.diff) {
-      const initial = await readDiff(source);
-      const { file, patchHash } = await writeDiffPage(initial, deps.dist, options.out);
-      await openReview(file, { ...options,
-        watch: source.kind === 'stdin' ? null : { kind: 'diff', source, hash: patchHash },
-      });
-      return 0;
-    }
-    if (!options.diff && path.extname(options.target).toLowerCase() === '.html') {
-      const file = options.out ? path.resolve(options.out) : path.resolve(options.target);
-      if (options.out) await atomicWrite(file, await readFile(options.target));
-      await openReview(file, options);
-      return 0;
-    }
-    throw new Error(`no renderer for ${options.target}`);
+    const output = options.diff ? pagePath(source, options.out)
+      : options.task || pr ? documentOutputPath(await realpath(options.target), options.out, pr ? 'pr' : 'task')
+      : path.extname(options.target).toLowerCase() === '.html' ? path.resolve(options.out || options.target)
+      : markdownOutputPath(await realpath(options.target), options.out);
+    return await withPublication(output, async () => {
+      if (options.task || pr) {
+        const page = pr ? await writePRPage(options.target, deps.dist, pr, options) : await writeTaskPage(options.target, deps.dist, options);
+        await openReview(page.file, { ...options, title: page.title, sourceFile: page.source, pr,
+          watch: { kind: 'document', source: page.source, hash: page.hash },
+        });
+        return 0;
+      }
+      if (!options.diff && path.extname(options.target).toLowerCase() !== '.html') {
+        const page = await writeMarkdown(options.target, deps, options);
+        await openReview(page.file, { ...options, title: options.title ?? page.title,
+          watch: { kind: 'markdown', source: page.source, hash: page.hash },
+        });
+        return 0;
+      }
+      if (options.diff) {
+        const initial = await readDiff(source);
+        const { file, patchHash } = await writeDiffPage(initial, deps.dist, options.out);
+        await openReview(file, { ...options,
+          watch: source.kind === 'stdin' ? null : { kind: 'diff', source, hash: patchHash },
+        });
+        return 0;
+      }
+      if (path.extname(options.target).toLowerCase() === '.html') {
+        if (options.out) await atomicWrite(output, await readFile(options.target));
+        await openReview(output, options);
+        return 0;
+      }
+      throw new Error(`no renderer for ${options.target}`);
+    });
   } catch (error) {
     if (error instanceof UsageError || error instanceof DiffUsageError) { console.error(error.message ? `lavish-kit: ${error.message}\n${usage}` : usage); return 2; }
     console.error(`lavish-kit: ${error.message}`); return 1;

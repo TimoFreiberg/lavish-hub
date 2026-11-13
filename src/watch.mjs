@@ -36,28 +36,29 @@ export async function watchTick(file, spec, deps, state = {}) {
   return { hash: nextHash };
 }
 
-export async function watchLoop(file, { readSpec, deps, run, decode, log = () => {}, sleep, signal, delivery = () => false, startDelivery = () => {}, interval = 1000 } = {}) {
+export async function watchLoop(file, { readSpec, deps, run, decode, log = () => {}, sleep, signal, delivery = () => false, startDelivery = () => {}, interval = 1000, publish = fn => fn() } = {}) {
   let previous, state = {};
   while (!signal?.aborted) {
     let current;
     try {
       current = await readSpec();
-      if (current.delivery) startDelivery();
+      if (current.delivery) await startDelivery();
     } catch (error) {
       if (!signal?.aborted) log(`watch spec failed: ${error.message} (still watching)`);
     }
     try {
-      if (!delivery() && !await sessionOpen(file, run, decode)) return;
-      if (current) {
+      if (!delivery() && !await sessionOpen(file, run, decode) && !delivery()) return;
+      if (current) await publish(async () => {
+        // The opener renders and records its spec under the same publication lock.
+        // Drop a tick superseded while it was waiting to publish, including snapshots.
+        if (JSON.stringify(await readSpec()) !== JSON.stringify(current)) return;
         const signature = JSON.stringify(current.watch);
         if (signature !== previous) {
-          // A previous tick may have published after the opener's initial write.
-          // Republish a changed spec once even when its initial hash is unchanged.
-          state = previous === undefined ? { hash: current.watch?.hash } : {};
+          state = { hash: current.watch?.hash };
           previous = signature;
         }
         state = await watchTick(file, current.watch, deps, state);
-      }
+      });
     } catch (error) {
       if (!signal?.aborted) log(`watch failed: ${error.message} (still watching; last version remains on the page)`);
     }
