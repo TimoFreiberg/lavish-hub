@@ -195,12 +195,19 @@ test('save/action hooks are reserved, return notices only, and do not implement 
   const handled = await dispatchPrompts(prompts, {}, { 'lavish-kit-save': async () => ({ reply: 'Saved', notice: 'User edited source.md; reread it.' }) });
   assert.deepEqual(handled.prompts, [{ prompt: 'User edited source.md; reread it.' }, prompts[2]]);
 });
-test('poll handles actual TOON, retries disconnect/crash/listener conflict, exits after final feedback', async () => {
-  const responses = [new Error('crash'), { session: { status: 'browser_disconnected' } }, new Error('LISTENER_ACTIVE'), { ...feedback, session: { status: 'feedback', session_ended: true } }];
+test('poll handles actual TOON, retries disconnect/listener conflict, exits after final feedback', async () => {
+  const responses = [{ session: { status: 'browser_disconnected' } }, new Error('LISTENER_ACTIVE'), { ...feedback, session: { status: 'feedback', session_ended: true } }];
   const calls = [], delivered = [], sleeps = [];
   await pollLoop('/tmp/test.html', { decode, run: async (name, args) => { calls.push([name, ...args]); const next = responses.shift(); if (next instanceof Error) throw next; return { stdout: encode(next) }; }, deliver: async (file, data) => delivered.push(data), sleep: async ms => sleeps.push(ms) });
-  assert.equal(calls.length, 4); assert.equal(delivered.length, 1); assert.equal(delivered[0].session.session_ended, true);
-  assert.deepEqual(sleeps, [500, 1000, 2000]); assert.ok(calls.every(c => c.includes('--owner') && !c.includes('--takeover')));
+  assert.equal(calls.length, 3); assert.equal(delivered.length, 1); assert.equal(delivered[0].session.session_ended, true);
+  assert.deepEqual(sleeps, [500, 1000]); assert.ok(calls.every(c => c.includes('--owner') && !c.includes('--takeover')));
+});
+test('an ambiguous poll failure stops without another claim', async () => {
+  let polls = 0; const messages = [];
+  await pollLoop('/tmp/test.html', { decode, run: async () => { polls++; throw new Error('connection lost'); },
+    log: message => messages.push(message), sleep: async () => assert.fail('must not retry') });
+  assert.equal(polls, 1);
+  assert.ok(messages.some(message => /outcome is unknown.*may have been consumed/.test(message)));
 });
 test('a healthy poll stays protected until its final batch is processed', async () => {
   let healthy = false, delivered = false;

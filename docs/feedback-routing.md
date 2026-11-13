@@ -87,6 +87,12 @@ If a record has no receipt target, the worker leaves it for manual inspection
 and does not resume polling. If neither location can be written, the log warns
 that feedback may be lost and the worker exits with an error.
 
+If a poll fails without a definite listener or missing-session response, the
+worker stops instead of polling again. The relay log reports that the outcome
+is unknown: Lavish may have consumed feedback that never reached the worker, so
+it cannot be recovered from the outbox. Inspect the page and relay log, and ask
+the user to resend any missing feedback before reopening the page inside herdr.
+
 ## Retarget
 
 ```sh

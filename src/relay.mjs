@@ -341,6 +341,10 @@ export async function pollLoop(file, { run = command, decode, deliver = deliverF
       const text = error.stderr?.trim() || error.message;
       log(`poll failed: ${text}`);
       if (signal?.aborted || /LISTENER_REPLACED|NOT_FOUND/.test(text)) return;
+      if (!/LISTENER_ACTIVE/.test(text)) {
+        log('poll outcome is unknown: feedback may have been consumed without reaching the relay; inspect the page and relay log before reopening');
+        return;
+      }
       await sleep(Math.min(30000, 500 * 2 ** Math.min(failures++, 6)));
       continue;
     }
