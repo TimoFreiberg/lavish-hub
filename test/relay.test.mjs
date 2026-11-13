@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, realpath, writeFile, chmod, rm, access, utimes } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +11,15 @@ import { decode, encode } from '@toon-format/toon';
 import { claimLock, deliverFeedback, deliveryReady, dispatchPrompts, formatMessage, liveTerminals, pageLifetime, relayPages, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
 import { parseArgs } from '../src/cli.mjs';
 const exec = promisify(execFile);
+const daemonLock = state => path.join('/tmp', `lavish-kit-${process.getuid()}-${createHash('sha256').update(path.resolve(state)).digest('hex').slice(0, 24)}`, 'daemon.lock');
+async function waitForDaemonExit(state) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    try { await access(daemonLock(state)); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('daemon did not exit');
+}
 const terminal = (address, session = 'session-a', space = 'space-a', created_ms = 1) => ({ address, state: 'live', created_ms, labels: { 'polytoken.session': session, 'herdr.space': space } });
 async function setup(t) {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'lavish-relay-')));
@@ -377,7 +387,7 @@ test('concurrent callers register multiple real pages in one daemon', async t =>
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(x.dir, 'lavish') };
   const launch = file => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)};await ensureRelay(${JSON.stringify(file)});`], { env, timeout: 15000 });
   const until = async fn => { const deadline = Date.now() + 15000; while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 25)); } throw Error('daemon lifecycle timeout'); };
-  x.cleanups.push(async () => { await writeFile(listing, encode({ sessions: [] })); await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch {} try { await access(relayPaths(other).lock); return false; } catch { return true; } }); });
+  x.cleanups.push(async () => { await writeFile(listing, encode({ sessions: [] })); await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch {} try { await access(relayPaths(other).lock); return false; } catch { return true; } }); await waitForDaemonExit(env.LAVISH_AXI_STATE_DIR); });
   await Promise.all([launch(x.file), launch(other), launch(x.file), launch(other)]);
   const pid = await readFile(path.join(relayPaths(x.file).lock, 'pid'), 'utf8');
   assert.equal(await readFile(path.join(relayPaths(other).lock, 'pid'), 'utf8'), pid);
@@ -386,6 +396,25 @@ test('concurrent callers register multiple real pages in one daemon', async t =>
   assert.equal(await readFile(path.join(relayPaths(other).lock, 'pid'), 'utf8'), pid);
   await launch(x.file);
   assert.equal(await readFile(path.join(relayPaths(x.file).lock, 'pid'), 'utf8'), pid);
+});
+
+test('a daemon holding ownership before bind prevents a competing socket bind', async t => {
+  const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
+  await recordWatch(x.file, null, false);
+  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log(${JSON.stringify(encode({ sessions: [{ file: x.file, status: 'open' }] }))});\n`);
+  await chmod(path.join(bin, 'lavish-axi'), 0o755);
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(x.dir, 'lavish') };
+  const lock = daemonLock(env.LAVISH_AXI_STATE_DIR); await mkdir(path.dirname(lock), { mode: 0o700 });
+  const release = await claimLock(lock); let released = false;
+  x.cleanups.push(async () => { if (!released) await release(); });
+  const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
+  const launching = exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)};await ensureRelay(${JSON.stringify(x.file)});`], { env, timeout: 15000 });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await assert.rejects(access(path.join(path.dirname(lock), 'relay.sock')));
+  await release(); released = true;
+  await launching;
+  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log('sessions[0]:');\n`);
+  await waitForDaemonExit(env.LAVISH_AXI_STATE_DIR);
 });
 
 test('detached relay starts once, survives its caller, exits on stub session end', async t => {
@@ -397,7 +426,7 @@ test('detached relay starts once, survives its caller, exits on stub session end
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(x.dir, 'lavish') };
   const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)}; await ensureRelay(${JSON.stringify(x.file)});`], { env });
   const until = async fn => { const deadline = Date.now() + 10000; while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 25)); } throw new Error('relay lifecycle timeout'); };
-  x.cleanups.push(async () => { await writeFile(stop, 'end'); await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch { return true; } }); });
+  x.cleanups.push(async () => { await writeFile(stop, 'end'); await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch { return true; } }); await waitForDaemonExit(env.LAVISH_AXI_STATE_DIR); });
   await Promise.all([launch(), launch(), launch()]);
   await until(async () => { try { return Boolean(await readFile(calls, 'utf8')); } catch { return false; } });
   const pid = Number(await readFile(path.join(relayPaths(x.file).lock, 'pid'))); assert.ok(pid); process.kill(pid, 0);

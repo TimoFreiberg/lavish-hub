@@ -339,7 +339,7 @@ async function daemonPaths() {
   await mkdir(dir, { mode: 0o700 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
   const info = await lstat(dir);
   if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o077)) throw new Error(`unsafe relay directory: ${dir}`);
-  return { socket: path.join(dir, 'relay.sock'), lock: path.join(dir, 'start.lock') };
+  return { socket: path.join(dir, 'relay.sock'), lock: path.join(dir, 'start.lock'), owner: path.join(dir, 'daemon.lock') };
 }
 function registerSocket(socket, file) {
   return new Promise((resolve, reject) => {
@@ -367,21 +367,28 @@ export async function ensureRelay(file) {
   try {
     try { return await registerSocket(paths.socket, file); }
     catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code)) throw error; }
-    await rm(paths.socket, { force: true });
-    const output = await open(log, 'a', 0o600);
-    try {
-      const marker = process.env.LAVISH_KIT_TEST_RUN;
-      const args = [worker, '--daemon', ...(marker ? [`LAVISH_KIT_TEST_RUN=${marker}`] : [])];
-      const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', output.fd, output.fd, 'ipc'] });
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { child.kill(); done(new Error(`relay startup timed out; see ${log}`)); }, 10000);
-        const done = error => { clearTimeout(timer); child.removeAllListeners('exit'); if (child.connected) child.disconnect(); child.unref(); error ? reject(error) : resolve(); };
-        child.once('error', done);
-        child.once('exit', code => done(new Error(`relay exited before startup (${code}); see ${log}`)));
-        child.once('message', result => done(result.error ? new Error(`${result.error}; see ${log}`) : undefined));
-      });
-    } finally { await output.close(); }
-    return await registerSocket(paths.socket, file);
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const output = await open(log, 'a', 0o600);
+      let result;
+      try {
+        const marker = process.env.LAVISH_KIT_TEST_RUN;
+        const args = [worker, '--daemon', ...(marker ? [`LAVISH_KIT_TEST_RUN=${marker}`] : [])];
+        const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', output.fd, output.fd, 'ipc'] });
+        result = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { child.kill(); done(new Error(`relay startup timed out; see ${log}`)); }, Math.max(1, deadline - Date.now()));
+          const done = (error, value) => { clearTimeout(timer); child.removeAllListeners('exit'); if (child.connected) child.disconnect(); child.unref(); error ? reject(error) : resolve(value); };
+          child.once('error', done);
+          child.once('exit', code => done(new Error(`relay exited before startup (${code}); see ${log}`)));
+          child.once('message', value => done(value.error ? new Error(`${value.error}; see ${log}`) : undefined, value));
+        });
+      } finally { await output.close(); }
+      if (!result.busy) return await registerSocket(paths.socket, file);
+      await pause(25);
+      try { return await registerSocket(paths.socket, file); }
+      catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code)) throw error; }
+    }
+    throw new Error(`relay startup timed out; see ${log}`);
   } finally { await release(); }
 }
 export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {}, consumed = () => {}, forced = () => false, emergency = async () => {} } = {}) {
@@ -564,6 +571,11 @@ export function relayPages({ start = relayPage, write = atomicWrite, log = () =>
 
 export async function relayDaemon() {
   const paths = await daemonPaths();
+  const releaseOwner = await claimLock(paths.owner);
+  if (!releaseOwner) {
+    if (process.connected) process.send({ busy: true });
+    return;
+  }
   let idleTimer, closing = false, connections = 0;
   const log = (file, message) => {
     const line = `${new Date().toISOString()} ${message}\n`;
@@ -611,6 +623,7 @@ export async function relayDaemon() {
   const onSignal = () => { pages.terminate(); };
   process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
   try {
+    await rm(paths.socket, { force: true });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(paths.socket, resolve); });
     if (process.connected) process.send({ running: true });
     scheduleIdle();
@@ -618,7 +631,10 @@ export async function relayDaemon() {
   } catch (error) {
     if (process.connected) process.send({ error: error.message });
     console.error(error); process.exitCode = 1;
-  } finally { process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal); }
+  } finally {
+    process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal);
+    await releaseOwner();
+  }
 }
 
 export async function relayMain(file, { write = atomicWrite } = {}) {
