@@ -38,6 +38,17 @@ test('task browser: real save transport, rendered annotations, clean/dirty disk 
   await frame.getByPlaceholder(/tell the agent/i).waitFor();
   await frame.getByRole('button', { name: 'Cancel', exact: true }).click();
   await frame.getByRole('button', { name: 'Edit', exact: true }).click();
+  await editor.fill('# Highlight test\n\n```javascript\nconst answer = 42;\n```\n\n```not-a-real-language\nplain fallback\n```\n');
+  await frame.getByRole('button', { name: 'Rendered', exact: true }).click();
+  await frame.locator('#preview pre.shiki span[style]').first().waitFor({ timeout: 20000 });
+  assert.equal(await frame.locator('#preview pre.shiki').count(), 2);
+  assert.match(await frame.locator('#preview pre.shiki').nth(1).innerText(), /plain fallback/);
+  await frame.getByRole('button', { name: 'Edit', exact: true }).click();
+  await editor.fill('# Highlight test\n\n```javascript\nconst changed = 99;\n```\n');
+  await frame.getByRole('button', { name: 'Rendered', exact: true }).click();
+  assert.match(await frame.locator('#preview pre.shiki').innerText(), /const changed = 99/);
+  await frame.getByRole('button', { name: 'Edit', exact: true }).click();
+  await editor.fill('---\ntitle: Hidden metadata\n---\n# Original\n\n- [x] Done\n\n<strong id="inline-html">Inline HTML</strong>\n');
   await writeFile(source, '# Clean update\n'); await publishDocument(file, source);
   await frame.getByRole('status').filter({ hasText: 'up to date with disk' }).waitFor();
   await assertEventually(() => editor.inputValue(), '# Clean update\n');
