@@ -117,6 +117,37 @@ test('delivery waits for the target matching the new watch', async t => {
   assert.equal(await deliveryReady(x.file), true);
 });
 
+for (const active of [false, true]) test(`reverse-order openers retain the published target${active ? ' with active delivery' : ' before delivery'}`, async t => {
+  const x = await setup(t), sourceA = path.join(x.dir, 'a.md'), sourceB = path.join(x.dir, 'b.md');
+  await writeFile(sourceA, 'A'); await writeFile(sourceB, 'B');
+  await recordWatch(x.file, null, true, 'a');
+  let resume, entered;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { resume = resolve; });
+  const a = recordTarget(x.file, { title: 'A', sourceFile: sourceA, generation: 'a' }, async () => {
+    entered(); await gate; return { stdout: JSON.stringify(terminal('a')) };
+  });
+  await waiting;
+  await recordWatch(x.file, null, true, 'b');
+  if (active) {
+    const consumed = { prompts: [{ tag: 'lavish-kit-save', prompt: 'save' }] };
+    await assert.rejects(deliverFeedback(x.file, consumed, { run: x.run }), /missing its receipt target/);
+    const [pending] = JSON.parse(await readFile(relayPaths(x.file).outbox));
+    assert.equal(pending.generation, 'b'); assert.equal(pending.target, undefined);
+  }
+  await recordTarget(x.file, { title: 'B', sourceFile: sourceB, generation: 'b' }, x.run);
+  resume(); assert.equal(await a, null);
+  assert.equal(await deliveryReady(x.file), true);
+  const target = JSON.parse(await readFile(relayPaths(x.file).target));
+  assert.equal(target.sourceFile, sourceB); assert.equal(target.generation, 'b');
+  if (active) {
+    let received;
+    const { recoverFeedback } = await import('../src/relay.mjs');
+    await recoverFeedback(x.file, { run: x.run, handlers: { 'lavish-kit-save': async (_prompt, target) => { received = target; return {}; } } });
+    assert.equal(received.sourceFile, sourceB);
+  }
+});
+
 test('records target labels, canonical page, title, and optional editable source', async t => {
   const x = await setup(t); const target = await recordTarget(x.file, { title: 'Recorded', sourceFile: path.join(x.dir, 'source.md') }, x.run);
   assert.deepEqual(target, { ...x.target, title: 'Recorded', sourceFile: path.join(x.dir, 'source.md') });

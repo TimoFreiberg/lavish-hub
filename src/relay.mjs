@@ -19,14 +19,22 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const worker = fileURLToPath(new URL('./relay-worker.mjs', import.meta.url));
 const renderer = fileURLToPath(new URL('./watch-renderer.mjs', import.meta.url));
 
-export async function renderWatch(file, spec, _deps, state, signal) {
+export async function renderWatch(file, spec, _deps, state, signal, startRenderer = spawn) {
   if (!spec) return state;
-  if (spec.kind !== 'diff') {
+  let data, fingerprint;
+  if (spec.kind === 'diff') {
+    const source = await import('./diff/source.mjs');
+    fingerprint = await source.diffFingerprint(spec.source);
+    if (fingerprint !== null && fingerprint === state.fingerprint) return state;
+    data = await source.readDiff(spec.source);
+    const hash = createHash('sha256').update(data.patch).digest('hex');
+    if (hash === state.hash) return { hash, fingerprint };
+  } else {
     const hash = createHash('sha256').update(await readFile(spec.source)).digest('hex');
     if (hash === state.hash) return state;
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [renderer], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], signal });
+    const child = startRenderer(process.execPath, [renderer], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], signal });
     let result;
     child.on('message', message => { result = message; });
     child.once('error', reject);
@@ -35,7 +43,7 @@ export async function renderWatch(file, spec, _deps, state, signal) {
       else if (result.error) reject(new Error(result.error));
       else resolve(result.result);
     });
-    child.send({ file, spec, state });
+    child.send({ file, spec, state, data, fingerprint });
   });
 }
 export const relayPaths = file => ({ target: `${file}.relay.json`, watch: `${file}.watch.json`, outbox: `${file}.outbox.json`, lock: `${file}.relay.lock`, stateLock: `${file}.relay-state.lock` });
@@ -126,8 +134,12 @@ export async function recordTarget(file, { title, sourceFile, pr, generation } =
   const terminal = JSON.parse(stdout);
   if (terminal.state !== 'live' || !terminal.address) throw new Error('the opening herdr terminal is not live');
   const target = recorded(terminal, { version: 1, page: file, title, ...(generation ? { generation } : {}), ...(sourceFile ? { sourceFile: path.resolve(sourceFile) } : {}), ...(pr ? { pr } : {}) });
-  await withState(file, () => atomicWrite(relayPaths(file).target, JSON.stringify(target, null, 2) + '\n'));
-  return target;
+  return withState(file, () => withPublication(file, async () => {
+    const spec = await json(relayPaths(file).watch, null);
+    if (generation && spec?.generation !== generation) return null;
+    await atomicWrite(relayPaths(file).target, JSON.stringify(target, null, 2) + '\n');
+    return target;
+  }));
 }
 export function resolveTarget(target, terminals) {
   const matches = terminals.filter(t => target.session ? t.labels?.['polytoken.session'] === target.session : t.address === target.terminal);
@@ -220,6 +232,10 @@ async function processPending(file, target, outbox, handlers, write, run, recove
   const resolve = async () => resolveTarget(target, await liveTerminals(run));
   for (const item of outbox) {
     if (!item.pending) continue;
+    if (!item.target && item.generation && target?.generation === item.generation) {
+      item.target = { ...target, ...(target.sourceFile ? { sourceFile: await realpath(target.sourceFile).catch(() => path.resolve(target.sourceFile)) } : {}) };
+      await persist();
+    }
     if (!item.target) throw new Error('pending feedback is missing its receipt target');
     const dispatched = await dispatchPrompts(item.feedback.prompts || [], item.target, handlers, { results: item.results, states: item.states, persist, recovering, resolve });
     item.feedback = { ...item.feedback, prompts: dispatched.prompts };
@@ -236,10 +252,17 @@ export async function deliverFeedback(file, feedback, { run = command, log = () 
     consumedBatches.set(feedback, item);
   }
   const result = await withState(file, async () => {
-    const target = await json(relayPaths(file).target);
-    // Freeze the save/launch inputs before any side effect. Retargeting only
-    // changes where feedback goes and which space Create PR opens in.
-    if (item.pending) item.target ||= { ...target, ...(target.sourceFile ? { sourceFile: await realpath(target.sourceFile).catch(() => path.resolve(target.sourceFile)) } : {}) };
+    const { target, generation } = await withPublication(file, async () => ({
+      target: await json(relayPaths(file).target, null),
+      generation: (await json(relayPaths(file).watch, null))?.generation,
+    }));
+    // Keep the generation observed at receipt even if another opener publishes.
+    if (item.pending && !item.target) {
+      item.generation ??= generation;
+      if (target && (!item.generation || target.generation === item.generation)) {
+        item.target = { ...target, ...(target.sourceFile ? { sourceFile: await realpath(target.sourceFile).catch(() => path.resolve(target.sourceFile)) } : {}) };
+      }
+    }
     const outbox = await json(relayPaths(file).outbox, []);
     const index = outbox.findIndex(batch => batch.id === item.id);
     if (index < 0) outbox.push(item); else outbox[index] = item;
@@ -267,7 +290,7 @@ async function importRecovery(file, write, log) {
     try { record = await json(recordPath); } catch (error) { log(`recovery record ${recordPath} cannot be read: ${error.message}`); continue; }
     if (record.page !== file) continue;
     const item = record.item;
-    if (!item?.id || !item.feedback || (item.pending && !item.target)) {
+    if (!item?.id || !item.feedback || (item.pending && !item.target && !item.generation)) {
       log(`recovery record ${recordPath} needs manual inspection`);
       throw new Error(`invalid recovery record: ${recordPath}`);
     }
