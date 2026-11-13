@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Clipping regressions</title><style>
+body{font:18px/24px system-ui;background:#fff;color:#111;margin:20px}
+#multiline{width:140px;height:24px;overflow:hidden;text-overflow:ellipsis}
+#short-ellipsis{width:80px;height:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ellipsis-wrapper{width:40px;overflow:hidden}#nested-ellipsis{width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#clipped-wrapper{height:30px;overflow:hidden}#scroll-pane{height:100px;overflow:auto}#pane-text{margin:0}#pane-end{margin-top:200px}
+#negative-top{position:absolute;top:-100px;left:20px}
+#negative-left{position:absolute;left:-60px;top:500px;width:100px}
+#below-fold{margin-top:1200px}
+</style></head><body><main><h1>Clipping regressions</h1>
+<p id="multiline">Multiple lines of text clipped by a short box with an ellipsis declaration</p>
+<p id="short-ellipsis">An ellipsis cannot excuse vertical clipping</p>
+<div id="ellipsis-wrapper"><p id="nested-ellipsis">An ellipsis cannot excuse clipping by another box</p></div>
+<div id="clipped-wrapper"><div id="scroll-pane"><p id="pane-text">Visible text in a pane clipped by its outer wrapper</p><p id="pane-end">End of scrolling text</p></div></div>
+<button id="negative-top">Above the document</button><button id="negative-left">Negative center</button>
+<button id="below-fold">Reachable below the fold</button>
+</main></body></html>

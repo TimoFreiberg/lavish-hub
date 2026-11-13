@@ -7,7 +7,7 @@ import { writeDiffPage } from '../src/diff/page.mjs';
 import { prepareDiff, readDiff } from '../src/diff/source.mjs';
 import { writeTaskPage, publishDocument } from '../src/document-page.mjs';
 import { writePRPage } from '../src/pr-page.mjs';
-import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues } from './visual/browser.mjs';
+import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues, closeVisualResources } from './visual/browser.mjs';
 import { scanDocument, failedChecks } from './visual/checks.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -168,9 +168,10 @@ try {
 } catch (error) {
   report.runnerErrors = [error.message]; console.error(error.message);
 } finally {
-  await browser?.close();
+  const teardown = await closeVisualResources(browser, lavish);
   if (oldConfig === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = oldConfig;
-  if (lavish) { try { report.cleanup = await lavish.close(); } catch (error) { report.cleanupErrors = [error.message]; console.error(error.message); } }
+  report.cleanup = teardown.cleanup;
+  if (teardown.errors.length) { report.cleanupErrors = teardown.errors; console.error(teardown.errors.join('; ')); }
 }
 await writeFile(path.join(out, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
 await writeFile(path.join(out, 'index.html'), gallery(report));

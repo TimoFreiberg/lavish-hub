@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, readFile } from 'node:fs/promises';
+import { cp, readFile, mkdtemp, readdir, rm, access, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
-import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues } from '../scripts/visual/browser.mjs';
+import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues, closeVisualResources } from '../scripts/visual/browser.mjs';
 import { scanDocument } from '../scripts/visual/checks.mjs';
 
 test('visual checker allows reachable scroll panes, ellipses, and shadow controls', async t => {
@@ -17,10 +19,76 @@ test('visual checker allows reachable scroll panes, ellipses, and shadow control
   assert.ok(broken.geometry.controls.some(issue => issue.target.includes('>>>') && issue.problem === 'zero-size'));
 });
 
+test('visual checker catches clipped ellipses, negative controls, and outer-clipped panes', async t => {
+  const browser = await launchBrowser(); t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 480, height: 900 } });
+  await page.setContent(await readFile(path.join(import.meta.dirname, 'visual/fixtures/clipping.html'), 'utf8'));
+  const { geometry } = await scanDocument(page.mainFrame());
+  for (const target of ['p#multiline', 'p#short-ellipsis', 'p#nested-ellipsis', 'p#pane-text', 'p#pane-end']) {
+    assert.ok(geometry.clippedText.some(issue => issue.target === target), `${target} must be reported`);
+  }
+  assert.ok(geometry.clippedText.some(issue => issue.target === 'p#pane-text' && issue.container === 'div#clipped-wrapper'));
+  for (const target of ['button#negative-top', 'button#negative-left']) {
+    assert.ok(geometry.controls.some(issue => issue.target === target && issue.problem === 'off-screen-or-clipped'), `${target} must be unreachable`);
+  }
+  assert.ok(!geometry.controls.some(issue => issue.target === 'button#below-fold'));
+  await page.evaluate(() => window.scrollTo(0, 1000));
+  const scrolled = await scanDocument(page.mainFrame());
+  assert.ok(!scrolled.geometry.controls.some(issue => issue.target === 'button#below-fold'), 'document scrolling must not make ordinary content unreachable');
+});
+
+test('isolated Lavish removes its directory after port allocation fails', async t => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'lavish-init-test-'));
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  await assert.rejects(isolatedLavish({ tempRoot, portAllocator: async () => { throw new Error('Injected port failure'); } }), /Injected port failure/);
+  assert.deepEqual(await readdir(tempRoot), []);
+});
+
+test('browser-close failure still runs Lavish teardown and aggregates errors', async () => {
+  let lavishClosed = false;
+  const cleanup = { serverStopped: true, tempRemoved: true };
+  const result = await closeVisualResources(
+    { close: async () => { throw new Error('Injected browser-close failure'); } },
+    { close: async () => { lavishClosed = true; const error = new Error('Injected Lavish cleanup failure'); error.cleanup = cleanup; throw error; } },
+  );
+  assert.equal(lavishClosed, true); assert.deepEqual(result.cleanup, cleanup);
+  assert.equal(result.errors.length, 2);
+  assert.match(result.errors[0], /browser-close failure/); assert.match(result.errors[1], /Lavish cleanup failure/);
+});
+
+for (const failure of ['end', 'state', 'partial-open']) {
+  test(`isolated Lavish cleans up after ${failure} failure`, { timeout: 60000 }, async t => {
+    const exec = (name, args, options) => {
+      if (failure === 'end' && name === 'lavish-axi' && args[0] === 'end') throw new Error('Injected end failure');
+      const output = execFileSync(name, args, options);
+      if (failure === 'partial-open' && name === 'lavish-axi' && args.includes('--no-open')) throw new Error('Injected failure after server startup');
+      return output;
+    };
+    const lavish = await isolatedLavish({ exec, shutdownTimeoutMs: 200 }); let teardown;
+    t.after(async () => { if (!teardown) await closeVisualResources(undefined, lavish); });
+    const file = path.join(lavish.dir, 'clean.html');
+    await cp(path.join(import.meta.dirname, 'visual/fixtures/clean.html'), file);
+    assert.equal(lavish.env.HC_TERMINAL_ID, undefined);
+    if (failure === 'partial-open') assert.throws(() => lavish.open(file), /failure after server startup/);
+    else lavish.open(file);
+    if (failure === 'state') await writeFile(path.join(lavish.env.LAVISH_AXI_STATE_DIR, 'state.json'), 'unreadable JSON');
+    const browser = failure === 'end' ? { close: async () => { throw new Error('Injected browser-close failure'); } } : undefined;
+    teardown = await closeVisualResources(browser, lavish);
+    assert.equal(teardown.cleanup.serverStopped, true); assert.equal(teardown.cleanup.tempRemoved, true);
+    await assert.rejects(access(lavish.dir), { code: 'ENOENT' });
+    if (failure === 'partial-open') { assert.deepEqual(teardown.errors, []); assert.equal(teardown.cleanup.sessionsEnded, 1); }
+    else {
+      assert.ok(teardown.errors.length > 0);
+      if (failure === 'end') { assert.match(teardown.errors.join('; '), /Injected end failure/); assert.match(teardown.errors.join('; '), /browser-close failure/); }
+      if (failure === 'state') assert.match(teardown.errors.join('; '), /JSON/);
+    }
+  });
+}
+
 for (const kind of ['clean', 'broken']) {
   test(`visual checker catches ${kind} fixture through real Lavish`, { timeout: 60000 }, async t => {
     const lavish = await isolatedLavish(); let browser;
-    t.after(async () => { await browser?.close(); const cleanup = await lavish.close(); assert.equal(cleanup.serverStopped, true); assert.equal(cleanup.tempRemoved, true); });
+    t.after(async () => { const { cleanup, errors } = await closeVisualResources(browser, lavish); assert.deepEqual(errors, []); assert.equal(cleanup.serverStopped, true); assert.equal(cleanup.tempRemoved, true); });
     const file = path.join(lavish.dir, `${kind}.html`);
     await cp(path.join(import.meta.dirname, 'visual/fixtures', `${kind}.html`), file);
     browser = await launchBrowser(); const page = await browser.newPage({ viewport: { width: 480, height: 900 } });

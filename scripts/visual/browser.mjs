@@ -7,65 +7,124 @@ import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 const require = createRequire(import.meta.url);
 
-export async function isolatedLavish() {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-shots-'));
-  const port = await new Promise((resolve, reject) => {
+async function allocatePort() {
+  return new Promise((resolve, reject) => {
     const server = net.createServer(); server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(() => resolve(port)); });
+    server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(error => error ? reject(error) : resolve(port)); });
   });
+}
+
+export async function isolatedLavish({ tempRoot = os.tmpdir(), portAllocator = allocatePort, exec = execFileSync, shutdownTimeoutMs = 15000 } = {}) {
+  const dir = await mkdtemp(path.join(tempRoot, 'lavish-shots-'));
+  let port;
+  try { port = await portAllocator(); }
+  catch (error) {
+    try { await rm(dir, { recursive: true, force: true }); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Initialization and cleanup failed'); }
+    throw error;
+  }
   const env = { ...process.env, LAVISH_AXI_STATE_DIR: path.join(dir, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(dir, 'config'), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'state') };
   delete env.HC_TERMINAL_ID;
-  const files = new Set(); let serverPid;
-  const run = args => execFileSync('lavish-axi', args, { env, encoding: 'utf8', timeout: 30000 });
+  const files = new Set(); let serverProcess;
+  const command = (name, args, options = {}) => exec(name, args, { encoding: 'utf8', timeout: 30000, ...options });
+  const run = args => command('lavish-axi', args, { env });
+  const serverCommand = new RegExp(`lavish-axi[^\\n]*server --port ${port}(?:\\s|$)`);
+  const startTime = pid => command('ps', ['-p', String(pid), '-o', 'lstart=']).trim();
+  const owned = pid => {
+    // Inspect locally, never log process environments: they may contain secrets.
+    const args = command('ps', ['eww', '-p', String(pid), '-o', 'command=']);
+    return serverCommand.test(args) && args.split(/\s+/).includes(`LAVISH_AXI_STATE_DIR=${env.LAVISH_AXI_STATE_DIR}`);
+  };
+  const identifyServer = () => {
+    if (serverProcess) return;
+    const processes = command('ps', ['-A', '-o', 'pid=,args=']);
+    for (const line of processes.split('\n').filter(line => serverCommand.test(line))) {
+      const pid = Number(line.trim().split(/\s+/)[0]);
+      if (owned(pid)) { serverProcess = { pid, started: startTime(pid) }; return; }
+    }
+  };
+  const alive = () => {
+    if (!serverProcess) return false;
+    try { process.kill(serverProcess.pid, 0); return true; }
+    catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+  };
+  const listening = () => new Promise(resolve => {
+    const socket = net.connect(port, '127.0.0.1');
+    const finish = value => { socket.destroy(); resolve(value); };
+    socket.once('connect', () => finish(true)); socket.once('error', () => finish(false));
+    socket.setTimeout(250, () => finish(true));
+  });
+  const waitStopped = async timeout => {
+    const deadline = Date.now() + timeout;
+    do {
+      if (!await listening() && !alive()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    return false;
+  };
+  const terminate = signal => {
+    if (!alive()) return;
+    if (startTime(serverProcess.pid) !== serverProcess.started || !owned(serverProcess.pid)) throw new Error('Refusing to terminate an unverified server process');
+    try { process.kill(serverProcess.pid, signal); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+  };
   return {
     dir, env,
     open(file) {
       files.add(file); // Track even an open that fails after creating the session.
-      const output = run([file, '--no-open']);
-      if (!serverPid) {
-        const processes = execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8' });
-        const line = processes.split('\n').find(line => line.includes('lavish-axi') && new RegExp(`server --port ${port}(?:\\s|$)`).test(line));
-        if (!line) throw new Error('Cannot identify the isolated Lavish server process');
-        serverPid = Number(line.trim().split(/\s+/)[0]);
-      }
+      let output, openError;
+      try { output = run([file, '--no-open']); } catch (error) { openError = error; }
+      try { identifyServer(); }
+      catch (error) { if (!openError) throw error; }
+      if (openError) throw openError;
+      if (!serverProcess) throw new Error('Cannot identify the isolated Lavish server process');
       const url = output.match(/url:\s*"?(https?:\/\/[^"\s]+)/)?.[1];
       if (!url) throw new Error(`Lavish did not return a URL: ${output}`);
       return url;
     },
     async close() {
-      const errors = [];
-      for (const file of files) { try { run(['end', file]); } catch (error) { errors.push(error.message); } }
-      // Lavish shuts down after its last live session ends. Do not delete its
-      // state directory until its HTTP listener is gone.
-      const deadline = Date.now() + 15000;
-      let listening = true;
-      while (listening && Date.now() < deadline) {
-        listening = await new Promise(resolve => {
-          const socket = net.connect(port, '127.0.0.1');
-          socket.once('connect', () => { socket.destroy(); resolve(true); });
-          socket.once('error', () => resolve(false));
+      const errors = [], cleanup = { sessionsEnded: 0, workersStarted: 0, serverStopped: false, tempRemoved: false };
+      const attempt = async action => { try { await action(); } catch (error) { errors.push(error); } };
+      try {
+        await attempt(() => identifyServer());
+        for (const file of files) await attempt(() => { run(['end', file]); cleanup.sessionsEnded++; });
+        await attempt(async () => {
+          cleanup.serverStopped = await waitStopped(shutdownTimeoutMs);
+          if (!cleanup.serverStopped) {
+            errors.push(new Error('Isolated Lavish server did not stop normally'));
+            // Only signal the server with the private environment and original start time.
+            terminate('SIGTERM'); cleanup.serverStopped = await waitStopped(1000);
+            if (!cleanup.serverStopped) { terminate('SIGKILL'); cleanup.serverStopped = await waitStopped(1000); }
+            if (!cleanup.serverStopped) throw new Error('Isolated Lavish server is still running');
+          }
         });
-        if (listening) await new Promise(resolve => setTimeout(resolve, 50));
+        if (files.size) await attempt(async () => {
+          const state = JSON.parse(await readFile(path.join(env.LAVISH_AXI_STATE_DIR, 'state.json'), 'utf8'));
+          if (Object.values(state.sessions).some(session => session.status !== 'ended')) throw new Error('Private state contains a live session');
+        });
+      } finally {
+        await attempt(async () => {
+          await rm(dir, { recursive: true, force: true });
+          try { await access(dir); }
+          catch (error) { if (error.code === 'ENOENT') cleanup.tempRemoved = true; else throw error; }
+          if (!cleanup.tempRemoved) throw new Error('Private temporary directory still exists');
+        });
       }
-      if (listening) errors.push('Isolated Lavish server did not stop');
-      if (serverPid) {
-        let alive = true;
-        while (alive && Date.now() < deadline) {
-          try { process.kill(serverPid, 0); await new Promise(resolve => setTimeout(resolve, 50)); }
-          catch (e) { if (e.code === 'ESRCH') alive = false; else throw e; }
-        }
-        if (alive) errors.push('Isolated Lavish server process is still alive');
+      if (errors.length) {
+        const error = new AggregateError(errors, `Cleanup failed: ${errors.map(error => error.message).join('; ')}`);
+        error.cleanup = cleanup; throw error;
       }
-      if (files.size) {
-        const state = JSON.parse(await readFile(path.join(env.LAVISH_AXI_STATE_DIR, 'state.json'), 'utf8'));
-        if (Object.values(state.sessions).some(session => session.status !== 'ended')) errors.push('Private state contains a live session');
-      }
-      if (errors.length) throw new Error(`Cleanup failed: ${errors.join('; ')}`);
-      await rm(dir, { recursive: true, force: true });
-      let tempRemoved = false; try { await access(dir); } catch (e) { if (e.code === 'ENOENT') tempRemoved = true; else throw e; }
-      return { sessionsEnded: files.size, workersStarted: 0, serverStopped: !listening, tempRemoved };
+      return cleanup;
     },
   };
+}
+
+export async function closeVisualResources(browser, lavish) {
+  const errors = []; let cleanup;
+  try { await browser?.close(); } catch (error) { errors.push(`Browser cleanup: ${error.message}`); }
+  try { cleanup = await lavish?.close(); }
+  catch (error) { cleanup = error.cleanup; errors.push(error.message); }
+  return { cleanup, errors };
 }
 
 export async function launchBrowser() {

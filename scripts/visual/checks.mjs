@@ -31,14 +31,22 @@ export function inspectGeometry() {
       if (text.nodeType !== Node.TEXT_NODE || !text.textContent.trim()) continue;
       const range = document.createRange(); range.selectNodeContents(text);
       const rects = [...range.getClientRects()].filter(r => r.width && r.height);
-      let clipping, scrollX = false, scrollY = false;
+      let clipping;
+      const visible = rects.map(r => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom }));
       for (let p = el; p && !clipping; p = parent(p)) {
         const s = getComputedStyle(p), r = p.getBoundingClientRect();
-        if (s.textOverflow === 'ellipsis') break;
-        const x = !scrollX && ['hidden', 'clip'].includes(s.overflowX), y = !scrollY && ['hidden', 'clip'].includes(s.overflowY);
-        if (rects.some(t => (x && (t.left < r.left - tolerance || t.right > r.right + tolerance)) || (y && (t.top < r.top - tolerance || t.bottom > r.bottom + tolerance)))) clipping = label(p);
-        scrollX ||= ['auto', 'scroll'].includes(s.overflowX) && p.scrollWidth > p.clientWidth + tolerance;
-        scrollY ||= ['auto', 'scroll'].includes(s.overflowY) && p.scrollHeight > p.clientHeight + tolerance;
+        const x = ['hidden', 'clip'].includes(s.overflowX), y = ['hidden', 'clip'].includes(s.overflowY);
+        const ellipsis = s.textOverflow === 'ellipsis' && ['nowrap', 'pre'].includes(s.whiteSpace) && rects.every(t => Math.abs(t.top - rects[0].top) <= tolerance);
+        if (visible.some(t => (x && !ellipsis && (t.left < r.left - tolerance || t.right > r.right + tolerance)) || (y && (t.top < r.top - tolerance || t.bottom > r.bottom + tolerance)))) clipping = label(p);
+        const scrollX = ['auto', 'scroll'].includes(s.overflowX) && p.scrollWidth > p.clientWidth + tolerance;
+        const scrollY = ['auto', 'scroll'].includes(s.overflowY) && p.scrollHeight > p.clientHeight + tolerance;
+        // Scrolling can reveal the text inside a pane, not enlarge the pane's
+        // visible region through an outer clipping ancestor.
+        for (const t of visible) {
+          if (scrollX) { t.left = r.left; t.right = r.right; }
+          else if (x && ellipsis) { t.left = Math.max(t.left, r.left); t.right = Math.min(t.right, r.right); }
+          if (scrollY) { t.top = r.top; t.bottom = r.bottom; }
+        }
       }
       if (clipping) clippedText.push({ target: label(el), container: clipping, text: text.textContent.trim().slice(0, 100) });
     }
@@ -53,8 +61,10 @@ export function inspectGeometry() {
       scrollX ||= ['auto', 'scroll'].includes(s.overflowX) && p.scrollWidth > p.clientWidth + tolerance;
       scrollY ||= ['auto', 'scroll'].includes(s.overflowY) && p.scrollHeight > p.clientHeight + tolerance;
     }
-    if (!scrollX && r.right <= 0) unreachable = true;
     const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    // Negative document overflow cannot be reached by scrolling toward the
+    // origin. Current viewport coordinates alone may be negative after a scroll.
+    if ((!scrollX && x + window.scrollX < 0) || (!scrollY && y + window.scrollY < 0)) unreachable = true;
     // Ordinary below-fold content and controls in scrollable panes are reachable.
     // A fixed control outside the viewport cannot be reached by scrolling.
     if (getComputedStyle(el).position === 'fixed' && (x < 0 || x > innerWidth || y < 0 || y > innerHeight)) unreachable = true;
