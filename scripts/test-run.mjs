@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { markedProcesses } from './test-process-audit.mjs';
 
 const mode = process.argv[2];
 if (!['test', 'shots'].includes(mode)) throw new Error('Expected test or shots');
@@ -28,21 +29,7 @@ try {
   else console.error('Test audit: no private Lavish sessions remain');
 } catch (error) { console.error(`Test audit: cannot list private Lavish sessions: ${error.message}`); status = 1; }
 try {
-  // Do not print process environments: they can contain credentials. The unique
-  // marker is inherited by detached children as well as ordinary descendants.
-  const pids = execFileSync('ps', ['-A', '-o', 'pid='], { encoding: 'utf8' }).trim().split(/\s+/);
-  const leaked = [];
-  for (const pid of pids) {
-    if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
-    try {
-      const details = execFileSync('ps', ['eww', '-p', pid, '-o', 'command='], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
-      if (details.split(/\s+/).includes(`LAVISH_KIT_TEST_RUN=${marker}`)) leaked.push(pid);
-    } catch (error) {
-      // A process can disappear between the two snapshots. Other errors mean
-      // the audit could not establish whether that process was ours.
-      if (error.status !== 1) throw error;
-    }
-  }
+  const leaked = markedProcesses(marker);
   if (leaked.length) { console.error(`Test audit: processes with the run marker remain (PIDs): ${leaked.join(', ')}`); status = 1; }
   else console.error('Test audit: no processes with the run marker remain');
 } catch (error) { console.error(`Test audit: cannot inspect processes: ${error.message}`); status = 1; }

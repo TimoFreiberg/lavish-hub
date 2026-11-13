@@ -35,7 +35,7 @@ async function setup(t) {
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(dir, 'lavish') };
   const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)};console.log(JSON.stringify(await ensureRelay(${JSON.stringify(file)})));`], { env, timeout: 15000 });
   t.after(async () => {
-    try { process.kill(Number(await readFile(path.join(relayPaths(file).lock, 'pid'))), 'SIGTERM'); } catch {}
+    await writeFile(listing, encode({ sessions: [] }));
     await until(async () => !await exists(relayPaths(file).lock));
     await rm(dir, { recursive: true, force: true });
   });

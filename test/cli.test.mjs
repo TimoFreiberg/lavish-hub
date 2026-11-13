@@ -25,7 +25,10 @@ async function setup(t) {
     const entries = await readdir(dir, { recursive: true });
     for (const entry of entries.filter(name => name.endsWith('.relay.lock/pid'))) {
       const lock = path.join(dir, path.dirname(entry));
-      try { process.kill(Number(await readFile(path.join(dir, entry), 'utf8')), 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH' && error.code !== 'ENOENT') throw error; }
+      const page = lock.slice(0, -'.relay.lock'.length);
+      await rm(page, { force: true });
+      await rm(relayPaths(page).watch, { force: true });
+      await rm(relayPaths(page).target, { force: true });
       await until(async () => !await exists(lock));
     }
     await rm(dir, { recursive: true, force: true });

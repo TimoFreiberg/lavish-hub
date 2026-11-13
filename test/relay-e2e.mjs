@@ -170,14 +170,17 @@ try {
   await assert.rejects(access(relayPaths(outsideFile).target));
   console.log('PASS: outside-herdr command returned, Markdown updated in the browser, watch-only worker never polled, and real session end stopped it.');
 } finally {
-  if (browser) await browser.close();
+  let cleanupError;
+  try { if (browser) await browser.close(); } catch (error) { cleanupError ??= error; }
   for (const page of [file, prFile, outsideFile]) {
-    try { await exec('lavish-axi', ['end', page]); } catch {}
     try {
-      process.kill(Number(await readFile(path.join(relayPaths(page).lock, 'pid'))), 'SIGTERM');
-      await until(async () => { try { await access(relayPaths(page).lock); return false; } catch { return true; } });
-    } catch {}
+    try { await exec('lavish-axi', ['end', page]); } catch {}
     try { await rm(relayLog(await realpath(page)), { force: true }); } catch {}
+    await rm(page, { force: true });
+    await rm(relayPaths(page).watch, { force: true });
+    await rm(relayPaths(page).target, { force: true });
+    await until(async () => { try { await access(relayPaths(page).lock); return false; } catch { return true; } });
+    } catch (error) { cleanupError ??= error; }
   }
   // Include a launched terminal even if an assertion failed before capture was read.
   if (space) {
@@ -191,5 +194,6 @@ try {
     try { await run('hc', ['kill', terminal]); } catch {}
     try { await run('hc', ['rm', terminal]); } catch {}
   }
-  await rm(dir, { recursive: true, force: true });
+  if (!cleanupError) await rm(dir, { recursive: true, force: true });
+  if (cleanupError) throw cleanupError;
 }

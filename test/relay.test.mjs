@@ -13,7 +13,8 @@ const exec = promisify(execFile);
 const terminal = (address, session = 'session-a', space = 'space-a', created_ms = 1) => ({ address, state: 'live', created_ms, labels: { 'polytoken.session': session, 'herdr.space': space } });
 async function setup(t) {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'lavish-relay-')));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const cleanups = [];
+  t.after(async () => { for (const cleanup of cleanups) await cleanup(); await rm(dir, { recursive: true, force: true }); });
   const file = path.join(dir, 'page.html'); await writeFile(file, '<title>Relay test</title>');
   const target = { version: 1, page: file, title: 'Relay test', terminal: 't1', session: 'session-a', space: 'space-a' };
   await writeFile(relayPaths(file).target, JSON.stringify(target));
@@ -28,7 +29,7 @@ async function setup(t) {
     if (name === 'lavish-axi' && replyFails) throw new Error('reply failed');
     return { stdout: '' };
   };
-  return { dir, file, target, calls, run, setTerminals: value => terminals = value, failSend: value => sendFails = value, failReply: value => replyFails = value };
+  return { dir, file, target, calls, run, cleanups, setTerminals: value => terminals = value, failSend: value => sendFails = value, failReply: value => replyFails = value };
 }
 const feedback = { session: { status: 'feedback' }, prompts: [{ prompt: 'Change this line\nKeep the context.', tag: 'code-comment', text: 'old line\nnext line', target: { path: 'x.mjs', side: 'new' } }] };
 
@@ -282,7 +283,7 @@ test('detached relay starts once, survives its caller, exits on stub session end
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state') };
   const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)}; await ensureRelay(${JSON.stringify(x.file)});`], { env });
   const until = async fn => { const deadline = Date.now() + 10000; while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 25)); } throw new Error('relay lifecycle timeout'); };
-  t.after(async () => { try { process.kill(Number(await readFile(path.join(relayPaths(x.file).lock, 'pid'))), 'SIGTERM'); } catch {} });
+  x.cleanups.push(async () => { await writeFile(stop, 'end'); await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch { return true; } }); });
   await Promise.all([launch(), launch(), launch()]);
   await until(async () => { try { return Boolean(await readFile(calls, 'utf8')); } catch { return false; } });
   const pid = Number(await readFile(path.join(relayPaths(x.file).lock, 'pid'))); assert.ok(pid); process.kill(pid, 0);
@@ -290,6 +291,6 @@ test('detached relay starts once, survives its caller, exits on stub session end
   await writeFile(stop, 'end'); await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch { return true; } });
   await rm(stop); await launch();
   await until(async () => (await readFile(calls, 'utf8')).trim().split('\n').length === 2);
-  process.kill(Number(await readFile(path.join(relayPaths(x.file).lock, 'pid'))), 'SIGTERM');
+  await writeFile(stop, 'end');
   await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch { return true; } });
 });
