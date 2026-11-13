@@ -37,7 +37,7 @@ async function setup(t) {
   const fake = async (name, body) => { const p = path.join(bin, name); const prefix = name === 'lavish-axi' ? 'if [ "$#" = 0 ]; then printf "sessions[0]:\\n"; exit; fi\nif [ "$1" = poll ]; then printf "session:\\n  status: ended\\n"; exit; fi\n' : ''; await writeFile(p, `#!/bin/sh\n${prefix}${body}\n`); await chmod(p, 0o755); };
   await fake('hc', 'if [ "$1" = get ]; then printf \'{"address":"%s","state":"live","labels":{}}\\n\' "$2"; else printf \'[]\\n\'; fi');
   await fake('lavish-axi', 'printf "  url: http://localhost:123/review\\n"');
-  const env = { ...process.env, PATH: `${bin}:/usr/bin:/bin`, XDG_DATA_HOME: shared, XDG_STATE_HOME: path.join(dir, 'state'), HC_TERMINAL_ID: '', LOG: path.join(dir, 'log') };
+  const env = { ...process.env, PATH: `${bin}:/usr/bin:/bin`, XDG_DATA_HOME: shared, XDG_STATE_HOME: path.join(dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(dir, 'lavish'), HC_TERMINAL_ID: '', LOG: path.join(dir, 'log') };
   const run = (args, extra = {}) => spawnSync(process.execPath, [cli, ...args], { cwd: dir, env: { ...env, ...extra }, encoding: 'utf8' });
   const file = path.join(dir, 'page.html'); await writeFile(file, '<title>Page title</title>');
   const fakeJS = async (name, body) => { const p = path.join(bin, name); await writeFile(p, `#!${process.execPath}\n${body}\n`); await chmod(p, 0o755); };

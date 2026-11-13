@@ -3,8 +3,9 @@
 This explains how a page's background worker gets Lavish feedback to the agent
 inside herdr, what happens outside herdr, and what to do when delivery fails.
 
-Every opening command starts (or reuses) one background worker per page. The
-worker keeps the page up to date. Inside herdr it also listens for feedback and
+Every opening command registers its page with a shared background process for
+the current user and Lavish state directory. Each page has its own worker in
+that process. The worker keeps the page up to date. Inside herdr it also listens for feedback and
 delivers it.
 
 ## Inside herdr
@@ -142,9 +143,12 @@ second.
 Nothing restarts a stopped or crashed worker. Rerun the command that opened
 the page to start a new one. Inside herdr, the new worker first finishes
 pending saves and actions from the outbox; outside herdr it only watches and
-leaves the outbox alone. To stop a worker without ending the review, send TERM
-to the PID in `<page>.relay.lock/pid`. Locks left by dead processes are reclaimed on the
-next open.
+leaves the outbox alone. To stop workers without ending their reviews, send TERM
+to the PID in `<page>.relay.lock/pid`. This stops every page in that shared
+process, not just that page. Locks left by dead processes are reclaimed on the
+next open. The process exits when its last page stops. It uses the environment
+of the command that started it, including executable search paths and XDG
+settings; changing those settings takes effect after the process exits.
 
 ## Delivery guarantees
 

@@ -365,13 +365,36 @@ test('hc/lavish subprocess stubs record metadata and deliver without a shell', a
   const calls = (await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
   assert.equal(calls.find(c => c[1] === 'send')[2], 't2'); assert.match(calls.at(-1).at(-1), /Delivered to session-a/);
 });
+test('concurrent callers register multiple real pages in one daemon', async t => {
+  const x = await setup(t), other = path.join(x.dir, 'other.html'), bin = path.join(x.dir, 'bin');
+  await writeFile(other, '<title>Other</title>'); await mkdir(bin);
+  await recordWatch(x.file, null, false); await recordWatch(other, null, false);
+  const listing = path.join(x.dir, 'listing');
+  await writeFile(listing, encode({ sessions: [{ file: x.file, status: 'open' }, { file: other, status: 'open' }] }));
+  await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log(require('node:fs').readFileSync(${JSON.stringify(listing)},'utf8'));\n`);
+  await chmod(path.join(bin, 'lavish-axi'), 0o755);
+  const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(x.dir, 'lavish') };
+  const launch = file => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)};await ensureRelay(${JSON.stringify(file)});`], { env, timeout: 15000 });
+  const until = async fn => { const deadline = Date.now() + 15000; while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 25)); } throw Error('daemon lifecycle timeout'); };
+  x.cleanups.push(async () => { await writeFile(listing, encode({ sessions: [] })); await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch {} try { await access(relayPaths(other).lock); return false; } catch { return true; } }); });
+  await Promise.all([launch(x.file), launch(other), launch(x.file), launch(other)]);
+  const pid = await readFile(path.join(relayPaths(x.file).lock, 'pid'), 'utf8');
+  assert.equal(await readFile(path.join(relayPaths(other).lock, 'pid'), 'utf8'), pid);
+  await writeFile(listing, encode({ sessions: [{ file: other, status: 'open' }] }));
+  await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch { return true; } });
+  assert.equal(await readFile(path.join(relayPaths(other).lock, 'pid'), 'utf8'), pid);
+  await launch(x.file);
+  assert.equal(await readFile(path.join(relayPaths(x.file).lock, 'pid'), 'utf8'), pid);
+});
+
 test('detached relay starts once, survives its caller, exits on stub session end', async t => {
   const x = await setup(t); await recordWatch(x.file, null, true); const bin = path.join(x.dir, 'bin'); await mkdir(bin);
   const stop = path.join(x.dir, 'stop'), calls = path.join(x.dir, 'polls');
   await writeFile(path.join(bin, 'hc'), `#!${process.execPath}\nconsole.log('[]');\n`); await chmod(path.join(bin, 'hc'), 0o755);
   await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconst fs=require('node:fs'); const args=process.argv.slice(2); if(!args.length) {console.log(fs.existsSync(${JSON.stringify(stop)}) ? 'sessions[0]:' : ${JSON.stringify(encode({ sessions: [{ file: x.file, status: 'open' }] }))}); process.exit();} fs.appendFileSync(${JSON.stringify(calls)}, args.join(' ')+'\\n'); const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(stop)})){clearInterval(timer); console.log('session:\\n  status: ended');}},20);\n`); await chmod(path.join(bin, 'lavish-axi'), 0o755);
   const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state') };
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(x.dir, 'lavish') };
   const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)}; await ensureRelay(${JSON.stringify(x.file)});`], { env });
   const until = async fn => { const deadline = Date.now() + 10000; while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 25)); } throw new Error('relay lifecycle timeout'); };
   x.cleanups.push(async () => { await writeFile(stop, 'end'); await until(async () => { try { await access(relayPaths(x.file).lock); return false; } catch { return true; } }); });

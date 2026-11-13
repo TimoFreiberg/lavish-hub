@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, open, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -330,22 +331,58 @@ export async function withPublication(file, fn) {
   const release = await claimLock(`${file}.publication.lock`, { wait: true });
   try { return await fn(); } finally { await release(); }
 }
-export async function ensureRelay(file) {
-  const log = relayLog(file);
-  await mkdir(path.dirname(log), { recursive: true });
-  const output = await open(log, 'a', 0o600);
-  try {
-    const marker = process.env.LAVISH_KIT_TEST_RUN;
-    const args = [worker, file, ...(marker ? [`LAVISH_KIT_TEST_RUN=${marker}`] : [])];
-    const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', output.fd, output.fd, 'ipc'] });
-    return await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { child.kill(); reject(new Error(`relay startup timed out; see ${log}`)); }, 10000);
-      const done = (error, result) => { clearTimeout(timer); child.removeAllListeners('exit'); if (child.connected) child.disconnect(); child.unref(); error ? reject(error) : resolve(result); };
-      child.once('error', done);
-      child.once('exit', code => done(new Error(`relay exited before startup (${code}); see ${log}`)));
-      child.once('message', result => done(result.error ? new Error(`${result.error}; see ${log}`) : undefined, result));
+// Keep the socket path short enough for macOS, even when XDG paths are long.
+async function daemonPaths() {
+  const state = path.resolve(process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.local/state/lavish-axi'));
+  const key = createHash('sha256').update(state).digest('hex').slice(0, 24);
+  const dir = path.join('/tmp', `lavish-kit-${process.getuid()}-${key}`);
+  await mkdir(dir, { mode: 0o700 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
+  const info = await lstat(dir);
+  if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o077)) throw new Error(`unsafe relay directory: ${dir}`);
+  return { socket: path.join(dir, 'relay.sock'), lock: path.join(dir, 'start.lock') };
+}
+function registerSocket(socket, file) {
+  return new Promise((resolve, reject) => {
+    const connection = net.createConnection(socket);
+    let data = '', settled = false;
+    const finish = (error, result) => { if (settled) return; settled = true; connection.destroy(); error ? reject(error) : resolve(result); };
+    connection.setTimeout(10000, () => finish(new Error('relay registration timed out')));
+    connection.on('error', error => finish(error));
+    connection.on('connect', () => connection.write(JSON.stringify({ file }) + '\n'));
+    connection.on('data', chunk => {
+      data += chunk;
+      if (data.length > 65536) return finish(new Error('invalid relay response'));
+      if (!data.includes('\n')) return;
+      try { const result = JSON.parse(data.slice(0, data.indexOf('\n'))); finish(result.error ? new Error(result.error) : null, result); }
+      catch (error) { finish(error); }
     });
-  } finally { await output.close(); }
+    connection.on('end', () => finish(new Error('relay closed before registration')));
+  });
+}
+export async function ensureRelay(file) {
+  file = await realpath(file);
+  const paths = await daemonPaths(), log = relayLog(file);
+  await mkdir(path.dirname(log), { recursive: true });
+  const release = await claimLock(paths.lock, { wait: true });
+  try {
+    try { return await registerSocket(paths.socket, file); }
+    catch (error) { if (!['ENOENT', 'ECONNREFUSED'].includes(error.code)) throw error; }
+    await rm(paths.socket, { force: true });
+    const output = await open(log, 'a', 0o600);
+    try {
+      const marker = process.env.LAVISH_KIT_TEST_RUN;
+      const args = [worker, '--daemon', ...(marker ? [`LAVISH_KIT_TEST_RUN=${marker}`] : [])];
+      const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', output.fd, output.fd, 'ipc'] });
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { child.kill(); done(new Error(`relay startup timed out; see ${log}`)); }, 10000);
+        const done = error => { clearTimeout(timer); child.removeAllListeners('exit'); if (child.connected) child.disconnect(); child.unref(); error ? reject(error) : resolve(); };
+        child.once('error', done);
+        child.once('exit', code => done(new Error(`relay exited before startup (${code}); see ${log}`)));
+        child.once('message', result => done(result.error ? new Error(`${result.error}; see ${log}`) : undefined));
+      });
+    } finally { await output.close(); }
+    return await registerSocket(paths.socket, file);
+  } finally { await release(); }
 }
 export async function pollLoop(file, { run = command, decode, deliver = deliverFeedback, log = () => {}, sleep = pause, signal, healthy = () => {}, consumed = () => {}, forced = () => false, emergency = async () => {} } = {}) {
   let failures = 0;
@@ -495,7 +532,7 @@ export async function relayPage(file, { write = atomicWrite, log = () => {}, lif
 }
 // Keep a page registered until all of its work, including durable shutdown,
 // has finished. Concurrent requests for the same page share its startup.
-export function relayPages({ start = relayPage, write = atomicWrite, log = () => {}, onError = (file, error) => log(file, error.stack || error.message) } = {}) {
+export function relayPages({ start = relayPage, write = atomicWrite, log = () => {}, onError = (file, error) => log(file, error.stack || error.message), onIdle = () => {} } = {}) {
   const pages = new Map();
   let stopping = false;
   function register(file) {
@@ -513,15 +550,75 @@ export function relayPages({ start = relayPage, write = atomicWrite, log = () =>
       } catch (error) {
         if (!announced) rejectReady(error);
         else onError(file, error);
-      } finally { pages.delete(file); }
+      } finally { pages.delete(file); if (!pages.size) onIdle(); }
     })();
     return ready;
   }
   return {
     register,
+    get size() { return pages.size; },
     terminate() { stopping = true; for (const { lifetime } of pages.values()) lifetime.terminate(); },
     async wait() { while (pages.size) await Promise.all([...pages.values()].map(entry => entry.done)); },
   };
+}
+
+export async function relayDaemon() {
+  const paths = await daemonPaths();
+  let idleTimer, closing = false, connections = 0;
+  const log = (file, message) => {
+    const line = `${new Date().toISOString()} ${message}\n`;
+    appendFile(relayLog(file), line, { mode: 0o600 }).catch(error => console.error(error));
+  };
+  const pages = relayPages({ log, onIdle: scheduleIdle });
+  const server = net.createServer(connection => {
+    connections++;
+    clearTimeout(idleTimer);
+    let data = '', handled = false;
+    connection.setTimeout(10000, () => connection.destroy());
+    connection.on('error', () => {});
+    connection.on('close', () => { connections--; scheduleIdle(); });
+    connection.on('data', async chunk => {
+      if (handled) return;
+      data += chunk;
+      if (data.length > 65536) return connection.destroy();
+      if (!data.includes('\n')) return;
+      handled = true;
+      try {
+        const request = JSON.parse(data.slice(0, data.indexOf('\n')));
+        if (closing || typeof request.file !== 'string' || !path.isAbsolute(request.file)) throw new Error('invalid relay registration');
+        const file = await realpath(request.file);
+        await mkdir(path.dirname(relayLog(file)), { recursive: true });
+        const result = await pages.register(file);
+        const requested = (await json(relayPaths(file).watch)).delivery;
+        const delivery = await json(path.join(relayPaths(file).lock, 'delivery'), false);
+        connection.end(JSON.stringify({ ...result, delivery: Boolean(result.delivery || delivery || requested) }) + '\n');
+      } catch (error) { connection.end(JSON.stringify({ error: error.message }) + '\n'); }
+    });
+  });
+  function scheduleIdle() {
+    if (closing || pages.size || connections) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(async () => {
+      const release = await claimLock(paths.lock, { wait: true });
+      try {
+        if (pages.size || connections || closing) return;
+        closing = true;
+        await new Promise(resolve => server.close(resolve));
+        await rm(paths.socket, { force: true });
+      } finally { await release(); }
+    }, 1000);
+  }
+  const onSignal = () => { pages.terminate(); };
+  process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(paths.socket, resolve); });
+    if (process.connected) process.send({ running: true });
+    scheduleIdle();
+    await new Promise(resolve => server.once('close', resolve));
+  } catch (error) {
+    if (process.connected) process.send({ error: error.message });
+    console.error(error); process.exitCode = 1;
+  } finally { process.off('SIGTERM', onSignal); process.off('SIGINT', onSignal); }
 }
 
 export async function relayMain(file, { write = atomicWrite } = {}) {
