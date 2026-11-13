@@ -1,7 +1,7 @@
 // Run explicitly inside herdr: node test/relay-e2e.mjs
 // This creates and cleans up only its own scratch terminals and Lavish page.
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, chmod, readFile, writeFile, rm, access, realpath } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -16,9 +16,8 @@ const file = path.join(dir, 'page.html');
 const sourceFile = path.join(dir, 'task.md');
 const prFile = path.join(dir, 'pr-page/index.html'), prSource = path.join(dir, 'pr.md');
 const launchFile = path.join(dir, 'launch.json'), captureFile = path.join(dir, 'create-pr.json');
-const terminals = []; let browser, watcher, prWatcher, space;
-let prOutput = '', prErrors = '';
-let watcherOutput = '', watcherErrors = '';
+const terminals = []; let browser, space;
+const outsideFile = path.join(dir, 'markdown/index.html'), outsideSource = path.join(dir, 'notes.md');
 const run = async (name, args, options = {}) => {
   const result = await exec(name, args, { ...options, maxBuffer: 4 * 1024 * 1024 });
   console.log(`$ ${name === process.execPath ? 'node' : name} ${args.join(' ')}`);
@@ -42,12 +41,10 @@ try {
   // Keep the space's initial terminal separate from the two delivery targets.
   terminals.push(scratchSpace.terminal);
   await writeFile(sourceFile, '# Relay E2E\n\nQuoted E2E context\n');
-  console.log(`$ node ${cli} task ${sourceFile} --out ${file} --title Relay E2E`);
-  watcher = spawn(process.execPath, [cli, 'task', sourceFile, '--out', file, '--title', 'Relay E2E'], { env: { ...process.env, HC_TERMINAL_ID: terminals[0] } });
-  watcher.stdout.setEncoding('utf8'); watcher.stderr.setEncoding('utf8');
-  watcher.stdout.on('data', chunk => watcherOutput += chunk); watcher.stderr.on('data', chunk => watcherErrors += chunk);
-  await until(() => watcherOutput.includes('Lavish review'));
-  console.log(watcherOutput.trim());
+  const taskStart = Date.now();
+  const taskOutput = await run(process.execPath, [cli, 'task', sourceFile, '--out', file, '--title', 'Relay E2E'], { env: { ...process.env, HC_TERMINAL_ID: terminals[0] }, timeout: 15000 });
+  assert.match(taskOutput, /Lavish review/); assert.ok(Date.now() - taskStart < 15000);
+  console.log('PASS: task command returned promptly before feedback and disk updates.');
   assert.equal(JSON.parse(await readFile(relayPaths(file).target)).sourceFile, await realpath(sourceFile));
   // Querying open's URL does not create a second poll listener.
   const opened = await run('lavish-axi', [file, '--no-open']);
@@ -112,11 +109,10 @@ try {
   await writeFile(path.join(repo, 'fixture.txt'), 'E2E fixture\n');
   await run('jj', ['commit', '-m', 'Create E2E fixture'], { cwd: repo });
   await writeFile(prSource, '# PR E2E title\n\nInitial PR body\n');
-  console.log(`$ node ${cli} pr ${prSource} -r @- --out ${prFile}`);
-  prWatcher = spawn(process.execPath, [cli, 'pr', prSource, '-r', '@-', '--out', prFile], { cwd: repo, env: { ...process.env, HC_TERMINAL_ID: terminals[1], XDG_CONFIG_HOME: config, HERDR_APP_HOME: herdrHome, PATH: `${bin}:${process.env.PATH}` } });
-  prWatcher.stdout.setEncoding('utf8'); prWatcher.stderr.setEncoding('utf8');
-  prWatcher.stdout.on('data', chunk => prOutput += chunk); prWatcher.stderr.on('data', chunk => prErrors += chunk);
-  await until(() => prOutput.includes('Lavish review')); console.log(prOutput.trim());
+  const prStart = Date.now();
+  const prOutput = await run(process.execPath, [cli, 'pr', prSource, '-r', '@-', '--out', prFile], { cwd: repo, env: { ...process.env, HC_TERMINAL_ID: terminals[1], XDG_CONFIG_HOME: config, HERDR_APP_HOME: herdrHome, PATH: `${bin}:${process.env.PATH}` }, timeout: 15000 });
+  assert.match(prOutput, /Lavish review/); assert.ok(Date.now() - prStart < 15000);
+  console.log('PASS: PR command returned promptly before Save/Create PR.');
   const prTarget = JSON.parse(await readFile(relayPaths(prFile).target));
   assert.equal(prTarget.pr.repo, await realpath(repo)); assert.equal(prTarget.pr.rev, '@-');
   const prOpened = await run('lavish-axi', [prFile, '--no-open']);
@@ -154,15 +150,28 @@ try {
   await run('lavish-axi', ['end', prFile]);
   await until(async () => { try { await access(relayPaths(prFile).lock); return false; } catch { return true; } });
   console.log('PASS: Create PR saved first, launched the configured stub command in the same herdr space and recorded repo, replied, and exited its relay.');
+
+  // Trace only this page's watch-only worker through a wrapper of the real CLI.
+  const realLavish = (await exec('which', ['lavish-axi'])).stdout.trim(), outsideCalls = path.join(dir, 'outside-calls');
+  await executable('lavish-axi', `const fs=require('node:fs'),cp=require('node:child_process'),args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(outsideCalls)},JSON.stringify(args)+'\\n');try{process.stdout.write(cp.execFileSync(${JSON.stringify(realLavish)},args,{encoding:'utf8'}));}catch(error){process.stderr.write(error.stderr||error.message);process.exit(1);}`);
+  await writeFile(outsideSource, '# Outside review\n\nInitial Markdown\n');
+  const outsideOutput = await run(process.execPath, [cli, outsideSource, '--out', outsideFile], { env: { ...process.env, HC_TERMINAL_ID: '', PATH: `${bin}:${process.env.PATH}` }, timeout: 15000 });
+  const outsideURL = outsideOutput.match(/ready: (https?:\/\/\S+)/)?.[1]; assert.ok(outsideURL);
+  const outsidePage = await browser.newPage(); await outsidePage.goto(outsideURL);
+  const outsideFrame = outsidePage.locator('iframe').first().contentFrame();
+  await outsideFrame.getByRole('heading', { name: 'Outside review' }).waitFor();
+  await writeFile(outsideSource, '# Updated outside review\n\nChanged Markdown\n');
+  await outsideFrame.getByRole('heading', { name: 'Updated outside review' }).waitFor();
+  await until(async () => (await readFile(outsideCalls, 'utf8')).trim().split('\n').map(JSON.parse).some(args => args.length === 0));
+  await run('lavish-axi', ['end', outsideFile]);
+  await until(async () => { try { await access(relayPaths(outsideFile).lock); return false; } catch { return true; } });
+  const outsideTrace = (await readFile(outsideCalls, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(outsideTrace.every(args => !['poll', 'reply', 'end'].includes(args[0])));
+  await assert.rejects(access(relayPaths(outsideFile).target));
+  console.log('PASS: outside-herdr command returned, Markdown updated in the browser, watch-only worker never polled, and real session end stopped it.');
 } finally {
-  if (watcherErrors) console.log(`Task watcher stderr: ${watcherErrors.trim()}`);
-  if (prErrors) console.log(`PR watcher stderr: ${prErrors.trim()}`);
-  for (const child of [watcher, prWatcher]) if (child && child.exitCode === null) {
-    const stopped = new Promise(resolve => child.once('close', resolve));
-    child.kill('SIGTERM'); await stopped;
-  }
   if (browser) await browser.close();
-  for (const page of [file, prFile]) {
+  for (const page of [file, prFile, outsideFile]) {
     try { await exec('lavish-axi', ['end', page]); } catch {}
     try {
       process.kill(Number(await readFile(path.join(relayPaths(page).lock, 'pid'))), 'SIGTERM');

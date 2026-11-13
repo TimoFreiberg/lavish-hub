@@ -61,7 +61,9 @@ export function markdownOutputPath(source) {
 export async function writeMarkdown(file, deps, { out } = {}) {
   const source = await realpath(file);
   const output = out ? path.resolve(out) : markdownOutputPath(source);
-  const { body, metadata, title: extracted } = await renderMarkdown(await readFile(source, 'utf8'), deps);
+  const bytes = await readFile(source);
+  const hash = createHash('sha256').update(bytes).digest('hex');
+  const { body, metadata, title: extracted } = await renderMarkdown(bytes.toString('utf8'), deps);
   const title = extracted || path.basename(source);
   const escape = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const html = `<!doctype html>
@@ -92,5 +94,5 @@ export async function writeMarkdown(file, deps, { out } = {}) {
 <body><main class="document prose">${metadata}\n${body}</main></body>
 </html>\n`;
   await atomicWrite(output, html);
-  return { file: output, title };
+  return { file: output, title, source, hash };
 }

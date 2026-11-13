@@ -12,11 +12,12 @@ import { handleSave } from './save.mjs';
 import { saveTag } from './save-message.mjs';
 import { actionTag } from './action-message.mjs';
 import { handleAction } from './pr-action.mjs';
+import { watchLoop } from './watch.mjs';
 
 const exec = promisify(execFile);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const worker = fileURLToPath(new URL('./relay-worker.mjs', import.meta.url));
-export const relayPaths = file => ({ target: `${file}.relay.json`, outbox: `${file}.outbox.json`, lock: `${file}.relay.lock`, stateLock: `${file}.relay-state.lock` });
+export const relayPaths = file => ({ target: `${file}.relay.json`, watch: `${file}.watch.json`, outbox: `${file}.outbox.json`, lock: `${file}.relay.lock`, stateLock: `${file}.relay-state.lock` });
 export function relayLog(file) {
   const id = createHash('sha256').update(file).digest('hex').slice(0, 16);
   return path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local/state'), 'lavish-kit', `relay-${id}.log`);
@@ -150,11 +151,10 @@ export async function dispatchPrompts(prompts, target, handlers = {}, { results 
   for (const [index, prompt] of prompts.entries()) {
     if (!handledTags.includes(prompt.tag)) { forwarded.push(prompt); continue; }
     if (!results[index]) {
-      results[index] = !target
-        ? { reply: 'Interrupted feedback has no recorded handler target. No file or action was changed during recovery. Inspect the source file and herdr before submitting again.' }
-        : handlers[prompt.tag]
-          ? await handlers[prompt.tag](prompt, target, { recovering, resolve, state: states[index], checkpoint: async state => { states[index] = state; await persist(); } })
-          : { reply: `${prompt.tag} is not supported by this version of lavish-kit. No file or action was changed.` };
+      if (!target) throw new Error('pending feedback is missing its receipt target');
+      results[index] = handlers[prompt.tag]
+        ? await handlers[prompt.tag](prompt, target, { recovering, resolve, state: states[index], checkpoint: async state => { states[index] = state; await persist(); } })
+        : { reply: `${prompt.tag} is not supported by this version of lavish-kit. No file or action was changed.` };
       await persist();
     }
     const result = results[index];
@@ -199,6 +199,7 @@ async function processPending(file, target, outbox, handlers, write, run, recove
   const resolve = async () => resolveTarget(target, await liveTerminals(run));
   for (const item of outbox) {
     if (!item.pending) continue;
+    if (!item.target) throw new Error('pending feedback is missing its receipt target');
     const dispatched = await dispatchPrompts(item.feedback.prompts || [], item.target, handlers, { results: item.results, states: item.states, persist, recovering, resolve });
     item.feedback = { ...item.feedback, prompts: dispatched.prompts };
     item.replies = dispatched.replies;
@@ -217,7 +218,7 @@ export async function deliverFeedback(file, feedback, { run = command, log = () 
     const target = await json(relayPaths(file).target);
     // Freeze the save/launch inputs before any side effect. Retargeting only
     // changes where feedback goes and which space Create PR opens in.
-    item.target ||= { ...target, ...(target.sourceFile ? { sourceFile: await realpath(target.sourceFile).catch(() => path.resolve(target.sourceFile)) } : {}) };
+    if (item.pending) item.target ||= { ...target, ...(target.sourceFile ? { sourceFile: await realpath(target.sourceFile).catch(() => path.resolve(target.sourceFile)) } : {}) };
     const outbox = await json(relayPaths(file).outbox, []);
     const index = outbox.findIndex(batch => batch.id === item.id);
     if (index < 0) outbox.push(item); else outbox[index] = item;
@@ -244,6 +245,15 @@ export async function retarget(file, terminal, { run = command, log = () => {} }
     await atomicWrite(relayPaths(file).target, JSON.stringify(next, null, 2) + '\n');
     return { target: next, ...await flushLocked(file, next, run, log) };
   });
+}
+export async function recordWatch(file, watch, delivery = false) {
+  file = await realpath(file);
+  await withState(file, async () => {
+    const previous = await json(relayPaths(file).watch, {});
+    // An outside-herdr reopen must not take away an existing delivery listener.
+    await atomicWrite(relayPaths(file).watch, JSON.stringify({ version: 1, delivery: delivery || Boolean(previous.delivery), watch: watch || null }, null, 2) + '\n');
+  });
+  return file;
 }
 export async function ensureRelay(file) {
   const log = relayLog(file);
@@ -310,14 +320,26 @@ export async function relayMain(file) {
       [saveTag]: handleSave,
       [actionTag]: (prompt, target, context) => handleAction(prompt, target, { ...context, run }),
     };
-    // Finish consumed input and durable deliveries before polling again.
-    while (!controller.signal.aborted) {
-      try { await recoverFeedback(file, { run, log, handlers }); break; }
-      catch (error) { log(`outbox recovery failed: ${error.message}; retrying before poll`); await sleep(1000); }
-    }
-    await pollLoop(file, { run, decode, log, sleep, signal: controller.signal,
-      deliver: (page, feedback, options) => deliverFeedback(page, feedback, { ...options, handlers }),
+    let deliveryTask;
+    const startDelivery = () => {
+      if (deliveryTask) return;
+      deliveryTask = (async () => {
+        // Finish consumed input and durable deliveries before polling again.
+        while (!controller.signal.aborted) {
+          try { await recoverFeedback(file, { run, log, handlers }); break; }
+          catch (error) { log(`outbox recovery failed: ${error.message}; retrying before poll`); await sleep(1000); }
+        }
+        await pollLoop(file, { run, decode, log, sleep, signal: controller.signal,
+          deliver: (page, feedback, options) => deliverFeedback(page, feedback, { ...options, handlers }),
+        });
+      })().catch(error => log(`delivery stopped: ${error.message}`)).finally(stop);
+    };
+    const readSpec = () => json(relayPaths(file).watch);
+    await watchLoop(file, { readSpec, deps, run, decode, log, sleep, signal: controller.signal,
+      startDelivery, delivery: () => Boolean(deliveryTask),
     });
+    stop();
+    if (deliveryTask) await deliveryTask;
     log('relay stopped');
   } catch (error) { if (process.connected) process.send({ error: error.message }); log(error.stack || error.message); process.exitCode = 1; }
   finally { if (release) await release(); process.off('SIGTERM', stop); process.off('SIGINT', stop); }

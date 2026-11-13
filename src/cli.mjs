@@ -3,16 +3,15 @@ import path from 'node:path';
 import { assertOutsideRepo, atomicWrite, repoRoot } from './files.mjs';
 import { openReview } from './lavish.mjs';
 import { retarget } from './relay.mjs';
-import { documentOutputPath, writeTaskPage, watchDocument } from './document-page.mjs';
+import { documentOutputPath, writeTaskPage } from './document-page.mjs';
 import { preparePR, writePRPage } from './pr-page.mjs';
 import { ensureDeps } from './deps.mjs';
 import { markdownOutputPath, writeMarkdown } from './markdown.mjs';
-import { createHash } from 'node:crypto';
-import { DiffUsageError, prepareDiff, readDiff, diffFingerprint } from './diff/source.mjs';
+import { DiffUsageError, prepareDiff, readDiff } from './diff/source.mjs';
 import { pagePath, writeDiffPage } from './diff/page.mjs';
 
 const usage = `usage: lavish-kit <file.html|file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
-       lavish-kit diff [-r REV | --from A --to B] [--git] [--watch] [--title T] [--out FILE] [--open] [--reopen]
+       lavish-kit diff [-r REV | --from A --to B] [--git] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit diff - [--repo-root DIR] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit task <file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
@@ -24,10 +23,15 @@ the URL is printed. Prints one line naming the page file. Inside herdr,
 feedback is delivered automatically to the opening Polytoken session (or terminal
 if it has no session label), even if artifact registration fails. Do not poll
 that page yourself. Answer with lavish-axi reply <page> --agent-reply '...'.
-Outside herdr, pass the page file to lavish-axi poll, reply, and end.
+Outside herdr, a watch-only worker never polls; the agent uses lavish-axi poll,
+reply, and end. Every command returns after opening. Workers watch markdown,
+task/PR sources and jj/git diffs until the Lavish session ends. Reopening replaces
+the watch source/range between ticks and reuses the worker; pending saves/actions
+keep their receipt targets. An existing delivery relay stays the listener even
+when reopened outside herdr.
 
 usage: lavish-kit <file.html|file.md|file.markdown> [options]
-       lavish-kit diff [range] [--git] [--watch] [options]
+       lavish-kit diff [range] [--git] [options]
        lavish-kit diff - [--repo-root DIR] [options]
        lavish-kit task <file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
@@ -39,7 +43,8 @@ polytoken.session label in the recorded herdr.space, and fails rather than
 guess when there is none or two tie. T is a live terminal address or unique name.
 Retarget does not reopen an ended page or restart its relay.
 
-Relay files beside the page: <page>.relay.json (target), <page>.outbox.json
+Worker files beside the page: <page>.watch.json (source/range and delivery mode),
+<page>.relay.json (herdr target), <page>.outbox.json
 (undelivered feedback), <page>.relay.lock/pid (relay process), and
 <page>.relay-state.lock/pid (delivery/retarget lock). Keep them local.
 Logs: ${'${XDG_STATE_HOME:-$HOME/.local/state}'}/lavish-kit/relay-<page-hash>.log
@@ -60,9 +65,9 @@ Task documents:
   task FILE         edit existing UTF-8 markdown with Edit/Rendered views
   Save / Cmd+S      (Ctrl+S on Linux) sends a conditional save. Check the page reply.
                     The agent gets a short notice, not the source contents.
-  Always watches    run as a background job, then stop it when done. Ending the page
-                    does not stop the watch. Clean editors update in place; dirty
-                    editors offer Reload (discard mine) or Keep mine before saving.
+  Always watches    the command returns; its worker watches until the session ends.
+                    Clean editors update in place; dirty editors offer Reload
+                    (discard mine) or Keep mine before saving.
   Page files        ${'${XDG_DATA_HOME:-$HOME/.local/share}'}/lavish-kit/pages/task/<name>-<hash>/
                     contains index.html, assets/, latest.js and versioned data scripts
   Limits/failures   Lavish 0.1.96 caps the whole JSON request at 2 MiB (escaped text
@@ -106,8 +111,8 @@ against its merge base with origin/HEAD, origin/main, origin/master, main, or ma
   --from A --to B   diff between two revisions
   --git             use git even inside a jj repository
   -                 read a patch from stdin; --repo-root DIR sets the root for its paths
-  --watch           keep running and refresh the page data when the diff changes
-                    (not with -); run it as a background job and stop it after the review
+  Watching          jj/git diffs update automatically until the Lavish session ends.
+                    A patch on stdin is a snapshot.
 
 Options:
   --title T         title under Artifacts (default: the page's <title>, then the file name)
@@ -133,7 +138,7 @@ export function parseArgs(args) {
   if ((task || pr) && (!file || file.startsWith('-'))) throw new UsageError(`${target} requires a markdown source file`);
   const result = { target: file, diff, ...(task ? { task: true } : {}), ...(pr ? { pr: true } : {}) };
   const values = new Map([['--title', 'title'], ['--out', 'out'], ...(diff || pr ? [['-r', 'rev']] : []), ...(diff ? [['--from', 'from'], ['--to', 'to'], ['--repo-root', 'repoRoot']] : [])]);
-  const switches = new Map([['--open', 'open'], ['--reopen', 'reopen'], ...(diff ? [['--watch', 'watch'], ['--git', 'git']] : [])]);
+  const switches = new Map([['--open', 'open'], ['--reopen', 'reopen'], ...(diff ? [['--git', 'git']] : [])]);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (values.has(arg)) {
@@ -147,7 +152,7 @@ export function parseArgs(args) {
   if (diff && result.rev && (result.from || result.to)) throw new UsageError('-r conflicts with --from/--to');
   if (diff && Boolean(result.from) !== Boolean(result.to)) throw new UsageError('--from and --to must be given together');
   if (diff && result.repoRoot && !result.stdin) throw new UsageError('--repo-root requires a patch on stdin (lavish-kit diff -)');
-  if (diff && result.stdin && (result.watch || result.git || result.rev || result.from || result.to)) throw new UsageError('a patch on stdin conflicts with --watch, --git, -r, --from, and --to');
+  if (diff && result.stdin && (result.git || result.rev || result.from || result.to)) throw new UsageError('a patch on stdin conflicts with --git, -r, --from, and --to');
   return result;
 }
 
@@ -184,33 +189,24 @@ export async function main(args = process.argv.slice(2)) {
     const deps = await ensureDeps();
     if (options.task || pr) {
       const page = pr ? await writePRPage(options.target, deps.dist, pr, options) : await writeTaskPage(options.target, deps.dist, options);
-      await openReview(page.file, { ...options, title: page.title, sourceFile: page.source, pr });
-      await watchDocument(page.file, page.source, page.hash);
+      await openReview(page.file, { ...options, title: page.title, sourceFile: page.source, pr,
+        watch: { kind: 'document', source: page.source, hash: page.hash },
+      });
       return 0;
     }
     if (!options.diff && path.extname(options.target).toLowerCase() !== '.html') {
       const page = await writeMarkdown(options.target, deps, options);
-      await openReview(page.file, { ...options, title: options.title ?? page.title });
+      await openReview(page.file, { ...options, title: options.title ?? page.title,
+        watch: { kind: 'markdown', source: page.source, hash: page.hash },
+      });
       return 0;
     }
     if (options.diff) {
-      let fingerprint = options.watch && source.kind === 'jj' ? await diffFingerprint(source) : null;
       const initial = await readDiff(source);
-      let { file, patchHash } = await writeDiffPage(initial, deps.dist, options.out);
-      await openReview(file, options);
-      if (options.watch) {
-        const tick = async () => {
-          try {
-            const nextFingerprint = source.kind === 'jj' ? await diffFingerprint(source) : null;
-            if (source.kind === 'jj' && nextFingerprint === fingerprint) return;
-            const data = await readDiff(source);
-            const nextHash = createHash('sha256').update(data.patch).digest('hex');
-            if (nextHash !== patchHash) ({ patchHash } = await writeDiffPage(data, deps.dist, options.out));
-            fingerprint = nextFingerprint;
-          } catch (error) { console.error(`lavish-kit --watch: ${error.message} (still watching)`); }
-        };
-        while (true) { await new Promise(resolve => setTimeout(resolve, 3000)); await tick(); }
-      }
+      const { file, patchHash } = await writeDiffPage(initial, deps.dist, options.out);
+      await openReview(file, { ...options,
+        watch: source.kind === 'stdin' ? null : { kind: 'diff', source, hash: patchHash },
+      });
       return 0;
     }
     if (!options.diff && path.extname(options.target).toLowerCase() === '.html') {

@@ -31,7 +31,7 @@ cached Chromium in addition to the runtime requirements. You can set
 lavish-kit document.html
 lavish-kit notes.md --title "Design review"
 lavish-kit diff -r @-
-lavish-kit diff --from A --to B --watch
+lavish-kit diff --from A --to B
 lavish-kit diff --git
 jj diff --git | lavish-kit diff - --repo-root "$PWD"
 lavish-kit task "$HOME/tasks/example.md" --title "Task document"
@@ -43,16 +43,18 @@ lavish-kit retarget "page.html" --terminal T
 reviewed repository. An HTML file opens where it is, or is copied to `--out`.
 Markdown renders links, tables, task lists, syntax highlighting, raw HTML, and
 frontmatter metadata. Its title comes from frontmatter, the first H1, or the
-file name. Plain HTML and Markdown commands open the page and return.
+file name. Every command opens the page and returns after its worker starts.
+HTML files are served directly by Lavish (including Lavish's live reload).
 
 The default jj diff is from `fork_point(trunk() | @)` to `@`. The git default
 is the working tree against a merge base selected from origin's default
 branch, main, or master. `-r REV` selects a jj revset or git `A..B` range.
 `--from A --to B` selects two endpoints. `diff -` reads a snapshot from stdin.
-`--watch` keeps a diff command running and refreshes its data as the diff
-changes (not available with stdin). Run it as a background job and stop it
-when the review ends. Task and PR commands also keep running to watch their
-source files. Ending a Lavish page stops its relay, but not these watch jobs.
+The page's detached worker watches jj/git diffs and Markdown, task, and PR
+source files until the Lavish session ends. There is no `--watch` option or
+foreground watch job. Diff and editable-page data update without reloading
+through `latest.js` and versioned data scripts. Markdown changes replace the
+rendered HTML, which Lavish live-reloads. Stdin diffs are snapshots.
 
 Diff pages start with native Annotate off. Click a code line or select a range
 in the line-number gutter to add a comment beside it. These controls queue
@@ -80,9 +82,14 @@ Create PR needs `herdr-app do tab.new`, a live delivery target with a
 that space, in the recorded repository. It does not type into the agent's
 terminal or fall back to the active space.
 
-Outside herdr (no `HC_TERMINAL_ID`) there is no relay or sidecar. The agent
-uses `lavish-axi poll`, `reply`, and `end` itself. Saves and PR launches do not
-happen automatically there. The editable-page protocols are described below.
+Outside herdr (no `HC_TERMINAL_ID`), new pages start the same worker in
+watch-only mode, with a watch sidecar but no delivery target. It never polls,
+saves, launches commands, or replies. The agent uses `lavish-axi poll`, `reply`,
+and `end` itself. The worker checks the documented no-argument `lavish-axi`
+session listing, which reads persistent non-ended sessions without consuming
+feedback or starting the server. A successful listing that omits the page
+ends watching. Listing failures are logged and retried, not treated as end.
+The editable-page protocols are described below.
 
 ## Relay and recovery
 
@@ -98,9 +105,17 @@ label, delivery stays with that terminal. A missing or ambiguous session never
 falls back to its former terminal when another session runs there.
 
 The worker outlives the opening shell and needs no task tab. A lock/PID keeps
-one worker per resolved page path. Reopening reuses it. Dead-PID locks are
-reclaimed on the next open. Failed or timed-out polls, browser disconnects,
-and `LISTENER_ACTIVE` retry with capped exponential backoff. The relay does
+one worker per resolved page path. Reopening reuses it and atomically replaces
+`<page>.watch.json` with the new source/range, including switching to an HTML
+or stdin snapshot with nothing to watch. The worker reloads that spec between
+one-second ticks. An in-flight update can finish before the new spec takes
+effect. Pending saves/actions keep their original receipt targets.
+
+Reopening a watch-only page inside herdr enables delivery in the same worker.
+Once delivery is configured for a page, an outside-herdr reopen preserves it
+rather than taking away its listener. Agents must not poll such a page themselves.
+Dead-PID locks are reclaimed on the next open. Failed or timed-out polls,
+browser disconnects, and `LISTENER_ACTIVE` retry with capped exponential backoff. The relay does
 not take over another listener and stops if another listener takes over its
 poll. Fatal `artifact_failures` stop it after delivery. Lavish `NOT_FOUND`
 means the session ended and stops it without reopening.
@@ -146,8 +161,7 @@ cannot redirect that pending work. Delivery and PR terminal placement follow
 the current target. Results and launch checkpoints are persisted before full
 inputs are replaced with short notices and replies, so an outbox-write retry
 does not redo finished work. A restarted relay finishes pending batches before
-polling. If a pending batch lacks a recorded handler target, it is not retried
-and the page says so. Retarget cannot flush unfinished work after a crash:
+polling. Retarget cannot flush unfinished work after a crash:
 open through lavish-kit to restart recovery, then retarget again if needed.
 
 An interrupted save that finds changed or unreadable disk contents replies
@@ -165,8 +179,8 @@ Cmd+S (Ctrl+S on Linux) sends the save with any queued feedback.
 
 Disk changes update a clean editor in place. Dirty editors retain edits and
 offer Reload (discard mine) or Keep mine. Keep mine bases the next Save on
-the new disk version. Watch errors go to stderr and retry, leaving the last
-disk version on the page. Browser data-load failures also retry.
+the new disk version. Watch errors go to the worker log and retry, leaving
+the last disk version on the page. Browser data-load failures also retry.
 
 A save carries the full text and SHA-256 of the disk version editing started
 from. The relay writes only to the recorded source, never a browser-supplied
@@ -277,7 +291,8 @@ Relay files beside the page:
 
 | File | Contents |
 | --- | --- |
-| `<page>.relay.json` | Target version, terminal, session label if present, space, page path/title, optional sourceFile, and PR `{repo,rev,head,commits}` |
+| `<page>.watch.json` | Worker version, delivery mode, and current source/range watch spec (also outside herdr) |
+| `<page>.relay.json` | Herdr target version, terminal, session label if present, space, page path/title, optional sourceFile, and PR `{repo,rev,head,commits}` |
 | `<page>.outbox.json` | Undelivered feedback; unfinished actions also retain full input, receipt target, and progress |
 | `<page>.relay.lock/pid` | Worker PID |
 | `<page>.relay-state.lock/pid` | Short-lived delivery/retarget/outbox lock |
@@ -305,6 +320,8 @@ moves a fake session label to verify delivery follows it, and checks exact
 saved bytes, page updates, and short agent notices. Create PR uses an absolute
 stub command configured through temporary `XDG_CONFIG_HOME`, with real
 `tab.new` placement in the recorded space/repository. No PR command or GitHub
-access runs. The script ends its pages and removes only its own watchers,
-relays, logs, space, terminals, and temporary files. It does not send to the
+access runs. It checks that opening commands return before edits, and that
+watch-only Markdown updates in the browser and stops on session end without
+polling. The script ends its pages and removes only its own workers, logs,
+space, terminals, and temporary files. It does not send to the
 terminal you run it from.

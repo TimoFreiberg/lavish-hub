@@ -9,7 +9,8 @@ import { encodeSave, decodeSave, saveTag } from '../src/save-message.mjs';
 import { handleSave, textHash } from '../src/save.mjs';
 import { deliverFeedback, recoverFeedback, relayPaths } from '../src/relay.mjs';
 import { atomicWrite } from '../src/files.mjs';
-import { publishDocument, watchDocument } from '../src/document-page.mjs';
+import { publishDocument } from '../src/document-page.mjs';
+import { watchTick } from '../src/watch.mjs';
 import { parseArgs } from '../src/cli.mjs';
 const odd = ('Quotes " \\ \n\nContext data:\n{\"text\":\"bogus\"}\n</script>\u0000\u2028\u2029 雪 🦊\r\n').repeat(24000);
 async function setup(t) {
@@ -58,8 +59,8 @@ test('result or completion persistence failure caches the save and restart recov
   for (const failAt of ['result', 'completion']) for (const restart of [false, true]) {
     const x = await setup(t), calls = [], text = '# Mine\n';
     const feedback = { prompts: [{ tag: saveTag, prompt: encodeSave(textHash('# Original\n'), text) }] };
-    let saves = 0, fail = true;
-    const run = async (name, args) => { calls.push([name, ...args]); return { stdout: args[0] === 'ls' ? JSON.stringify([{ address: 'scratch', state: 'live', labels: {}, created_ms: 1 }]) : '' }; };
+    let saves = 0, fail = true, available = false;
+    const run = async (name, args) => { calls.push([name, ...args]); return { stdout: args[0] === 'ls' ? JSON.stringify(available ? [{ address: 'scratch', state: 'live', labels: {}, created_ms: 1 }] : []) : '' }; };
     const handlers = { [saveTag]: async (...args) => { saves++; return handleSave(...args); } };
     const write = async (file, content) => {
       if (fail && saves && (failAt === 'result' || JSON.parse(content)[0]?.pending === false)) { fail = false; throw new Error('outbox unavailable after rename'); }
@@ -71,6 +72,13 @@ test('result or completion persistence failure caches the save and restart recov
     if (restart) await recoverFeedback(x.page, { run, handlers });
     else await deliverFeedback(x.page, feedback, { run, handlers, write });
     assert.equal(saves, restart && failAt === 'result' ? 2 : 1);
+    const retained = await readFile(relayPaths(x.page).outbox, 'utf8');
+    const completed = JSON.parse(retained)[0];
+    assert.equal(completed.pending, false);
+    for (const key of ['target', 'results', 'states']) assert.ok(!(key in completed), key);
+    assert.ok(!retained.includes('# Mine') && !retained.includes('# Original'), 'completed feedback must not retain source text');
+    available = true;
+    await recoverFeedback(x.page, { run, handlers });
     assert.match(calls.find(call => call[1] === 'send').at(-1), /The user edited/);
     assert.match(calls.at(-1).at(-1), /^Saved\nDelivered/);
     assert.deepEqual(JSON.parse(await readFile(relayPaths(x.page).outbox)), []);
@@ -81,6 +89,12 @@ test('pending save keeps its receipt source when the sidecar and delivery sessio
   await writeFile(other, '# Original\n');
   const feedback = { prompts: [{ tag: saveTag, prompt: encodeSave(textHash('# Original\n'), '# Mine\n') }] };
   await assert.rejects(deliverFeedback(x.page, feedback, { handlers: { [saveTag]: async () => { throw new Error('interrupted before save'); } } }), /interrupted/);
+  const receipt = JSON.parse(await readFile(relayPaths(x.page).outbox));
+  const withoutTarget = structuredClone(receipt); delete withoutTarget[0].target;
+  await writeFile(relayPaths(x.page).outbox, JSON.stringify(withoutTarget));
+  await assert.rejects(recoverFeedback(x.page, { run: async () => assert.fail('missing receipt must not deliver'), handlers: { [saveTag]: () => assert.fail('missing receipt must not save') } }), /missing its receipt target/);
+  assert.deepEqual(JSON.parse(await readFile(relayPaths(x.page).outbox)), withoutTarget, 'recovery error leaves input pending');
+  await writeFile(relayPaths(x.page).outbox, JSON.stringify(receipt));
   await writeFile(relayPaths(x.page).target, JSON.stringify({ ...x.target, sourceFile: other, terminal: 'new-terminal', session: 'new-session' }));
   const run = async (name, args) => {
     calls.push([name, ...args]);
@@ -92,14 +106,6 @@ test('pending save keeps its receipt source when the sidecar and delivery sessio
   const send = calls.find(call => call[1] === 'send');
   assert.equal(send[2], 'moved-terminal'); assert.ok(send[3].includes(`The user edited ${x.sourceFile}.`));
   assert.ok(!send[3].includes(`The user edited ${other}.`));
-});
-test('legacy pending handler without a receipt target is refused visibly', async t => {
-  const x = await setup(t), replies = [];
-  await writeFile(relayPaths(x.page).outbox, JSON.stringify([{ pending: true, results: [], states: [], feedback: { prompts: [{ tag: saveTag, prompt: encodeSave(textHash('# Original\n'), '# Mine\n') }] } }]));
-  await recoverFeedback(x.page, { handlers: { [saveTag]: () => assert.fail('unsafe legacy handler must not run') }, run: async (name, args) => { replies.push(args.at(-1)); return { stdout: '' }; } });
-  assert.equal(await readFile(x.sourceFile, 'utf8'), '# Original\n');
-  assert.match(replies.join('\n'), /no recorded handler target.*No file or action was changed during recovery/);
-  assert.deepEqual(JSON.parse(await readFile(relayPaths(x.page).outbox)), []);
 });
 test('worker crash after replacement recovers from a fresh process', async t => {
   const x = await setup(t), feedback = { prompts: [{ tag: saveTag, prompt: encodeSave(textHash('# Original\n'), '# Mine\n') }] };
@@ -133,16 +139,9 @@ test('save retries recognize their completed replacement', async t => {
 test('task arguments accept only markdown/options and watch publishes source changes', async t => {
   assert.deepEqual(parseArgs(['task', 'file.md', '--title', 'T']), { target: 'file.md', diff: false, task: true, title: 'T' });
   for (const args of [['task'], ['task', 'file.md', '--watch'], ['task', 'file.md', '-r', '@']]) assert.throws(() => parseArgs(args));
-  const x = await setup(t), controller = new AbortController();
-  const initial = await publishDocument(x.page, x.sourceFile);
-  const watching = watchDocument(x.page, x.sourceFile, initial, { interval: 10, signal: controller.signal });
-  try {
-    await writeFile(x.sourceFile, '# External\n');
-    const deadline = Date.now() + 5000;
-    while (!(await readFile(path.join(x.dir, 'latest.js'), 'utf8')).includes(textHash('# External\n'))) {
-      if (Date.now() > deadline) assert.fail('watch timeout');
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    assert.equal(await readFile(x.page, 'utf8'), '<title>Task</title>');
-  } finally { controller.abort(); await watching; }
+  const x = await setup(t), initial = await publishDocument(x.page, x.sourceFile);
+  await writeFile(x.sourceFile, '# External\n');
+  await watchTick(x.page, { kind: 'document', source: x.sourceFile }, {}, { hash: initial });
+  assert.ok((await readFile(path.join(x.dir, 'latest.js'), 'utf8')).includes(textHash('# External\n')));
+  assert.equal(await readFile(x.page, 'utf8'), '<title>Task</title>');
 });

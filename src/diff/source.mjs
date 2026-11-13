@@ -23,7 +23,7 @@ const jjTemplate = 'change_id.short() ++ " " ++ commit_id.short() ++ " " ++ desc
 
 export async function prepareDiff(options, cwd = process.cwd()) {
   if (options.stdin) {
-    if (options.watch || options.git || options.rev || options.from || options.to) throw new DiffUsageError('a patch on stdin conflicts with --watch, --git, -r, --from, and --to');
+    if (options.git || options.rev || options.from || options.to) throw new DiffUsageError('a patch on stdin conflicts with --git, -r, --from, and --to');
     return { kind: 'stdin', root: path.resolve(options.repoRoot || cwd), range: 'stdin', rangeSource: 'stdin', rangeSpec: 'stdin', revision: null };
   }
   if (options.repoRoot) throw new DiffUsageError('--repo-root requires a patch on stdin (lavish-kit diff -)');

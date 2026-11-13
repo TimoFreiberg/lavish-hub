@@ -28,13 +28,3 @@ export async function writeTaskPage(source, dist, { out, title } = {}) {
   const hash = await publishDocument(file, source);
   return { file, source, title, hash };
 }
-export async function watchDocument(file, source, initialHash, { interval = 1000, signal, log = console.error } = {}) {
-  let hash = initialHash;
-  while (!signal?.aborted) {
-    await new Promise(resolve => setTimeout(resolve, interval));
-    if (signal?.aborted) break;
-    try {
-      if (textHash(await readFile(source)) !== hash) hash = await publishDocument(file, source);
-    } catch (error) { log(`lavish-kit document: ${error.message} (still watching; last disk version remains on the page)`); }
-  }
-}

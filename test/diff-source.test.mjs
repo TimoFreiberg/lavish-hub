@@ -18,7 +18,7 @@ test('git default, explicit ranges, stdin and errors', async t => {
   run(root,'git','branch','master',first); source=await prepareDiff({},root); assert.match(source.rangeSource,/master/);
   for (const options of [{rev:`${first}..${second}`},{from:first,to:second}]) { source=await prepareDiff(options,root); result=await readDiff(source); assert.match(result.patch,/\+two/); assert.equal(result.revision,second); }
   source=await prepareDiff({stdin:true,repoRoot:root},root); result=await readDiff(source,Readable.from(['hello'])); assert.equal(result.patch,'hello'); assert.equal(result.root,root);
-  for (const options of [{repoRoot:root},{stdin:true,watch:true},{rev:'HEAD'},{from:'a'},{rev:'a..b',from:'a',to:'b'}]) await assert.rejects(prepareDiff(options,root),DiffUsageError);
+  for (const options of [{repoRoot:root},{stdin:true,git:true},{rev:'HEAD'},{from:'a'},{rev:'a..b',from:'a',to:'b'}]) await assert.rejects(prepareDiff(options,root),DiffUsageError);
 });
 test('streams a patch larger than five megabytes without a subprocess buffer limit', async t => {
   const root=await mkdtemp(path.join(os.tmpdir(),'diff-large-')); t.after(()=>rm(root,{recursive:true,force:true}));

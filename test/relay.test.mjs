@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
-import { claimLock, deliverFeedback, dispatchPrompts, formatMessage, liveTerminals, pollLoop, recordTarget, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
+import { claimLock, deliverFeedback, dispatchPrompts, formatMessage, liveTerminals, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
 import { parseArgs } from '../src/cli.mjs';
 const exec = promisify(execFile);
 const terminal = (address, session = 'session-a', space = 'space-a', created_ms = 1) => ({ address, state: 'live', created_ms, labels: { 'polytoken.session': session, 'herdr.space': space } });
@@ -182,7 +182,7 @@ test('hc/lavish subprocess stubs record metadata and deliver without a shell', a
   assert.equal(calls.find(c => c[1] === 'send')[2], 't2'); assert.match(calls.at(-1).at(-1), /Delivered to session-a/);
 });
 test('detached relay starts once, survives its caller, exits on stub session end', async t => {
-  const x = await setup(t); const bin = path.join(x.dir, 'bin'); await mkdir(bin);
+  const x = await setup(t); await recordWatch(x.file, null, true); const bin = path.join(x.dir, 'bin'); await mkdir(bin);
   const stop = path.join(x.dir, 'stop'), calls = path.join(x.dir, 'polls');
   await writeFile(path.join(bin, 'hc'), `#!${process.execPath}\nconsole.log('[]');\n`); await chmod(path.join(bin, 'hc'), 0o755);
   await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconst fs=require('node:fs'); fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(' ')+'\\n'); const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(stop)})){clearInterval(timer); console.log('session:\\n  status: ended');}},20);\n`); await chmod(path.join(bin, 'lavish-axi'), 0o755);

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
-import { ensureRelay, recordTarget } from './relay.mjs';
+import { ensureRelay, recordTarget, recordWatch } from './relay.mjs';
 
 const exec = promisify(execFile);
 
@@ -30,7 +30,7 @@ async function registerArtifact(payload) {
   return false;
 }
 
-export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr } = {}) {
+export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr, watch } = {}) {
   file = path.resolve(file);
   let result;
   try { result = await exec('lavish-axi', [file, '--no-open', ...(reopen ? ['--reopen'] : [])]); }
@@ -47,8 +47,11 @@ export async function openReview(file, { title, open = false, reopen = false, so
   }
   let registered = false;
   if (process.env.HC_TERMINAL_ID) {
-    const target = await recordTarget(file, { title, sourceFile, pr });
-    await ensureRelay(target.page);
+    await recordTarget(file, { title, sourceFile, pr });
+  }
+  const page = await recordWatch(file, watch, Boolean(process.env.HC_TERMINAL_ID));
+  await ensureRelay(page);
+  if (process.env.HC_TERMINAL_ID) {
     registered = await registerArtifact({ terminal: process.env.HC_TERMINAL_ID, path: file, title });
   }
   if (open && !registered) {

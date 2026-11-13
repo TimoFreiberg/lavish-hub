@@ -16,16 +16,17 @@ const init = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(depsMod
 assert.equal(init.status, 0, init.stderr);
 test.after(() => rm(shared, { recursive: true, force: true }));
 async function setup(t) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-cli-')), cleanups = [];
+  t.after(async () => { for (const cleanup of cleanups) await cleanup(); await rm(dir, { recursive: true, force: true }); });
   const bin = path.join(dir, 'bin'); await mkdir(bin);
-  const fake = async (name, body) => { const p = path.join(bin, name); const prefix = name === 'lavish-axi' ? 'if [ "$1" = poll ]; then printf "session:\\n  status: ended\\n"; exit; fi\n' : ''; await writeFile(p, `#!/bin/sh\n${prefix}${body}\n`); await chmod(p, 0o755); };
+  const fake = async (name, body) => { const p = path.join(bin, name); const prefix = name === 'lavish-axi' ? 'if [ "$#" = 0 ]; then printf "sessions[0]:\\n"; exit; fi\nif [ "$1" = poll ]; then printf "session:\\n  status: ended\\n"; exit; fi\n' : ''; await writeFile(p, `#!/bin/sh\n${prefix}${body}\n`); await chmod(p, 0o755); };
   await fake('hc', 'if [ "$1" = get ]; then printf \'{"address":"%s","state":"live","labels":{}}\\n\' "$2"; else printf \'[]\\n\'; fi');
   await fake('lavish-axi', 'printf "  url: http://localhost:123/review\\n"');
   const env = { ...process.env, PATH: `${bin}:/usr/bin:/bin`, XDG_DATA_HOME: shared, XDG_STATE_HOME: path.join(dir, 'state'), HC_TERMINAL_ID: '', LOG: path.join(dir, 'log') };
   const run = (args, extra = {}) => spawnSync(process.execPath, [cli, ...args], { cwd: dir, env: { ...env, ...extra }, encoding: 'utf8' });
   const file = path.join(dir, 'page.html'); await writeFile(file, '<title>Page title</title>');
   const fakeJS = async (name, body) => { const p = path.join(bin, name); await writeFile(p, `#!${process.execPath}\n${body}\n`); await chmod(p, 0o755); };
-  return { dir, bin, fake, fakeJS, run, file, env };
+  return { dir, bin, fake, fakeJS, run, file, env, cleanups };
 }
 
 const acknowledge = `const fs = require('node:fs');
@@ -148,23 +149,26 @@ test('executable works through a deployed symlink', async t => {
   const r = spawnSync(link, [x.file], { cwd: x.dir, env: { ...x.env, PATH: `${x.bin}:${path.dirname(process.execPath)}:/usr/bin:/bin` }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /http:\/\/localhost:123\/review/);
 });
-test('git watch updates data silently without rewriting shell', async t => {
+test('git command returns promptly while its watch-only worker updates data', async t => {
   const x = await setup(t); const repo=path.join(x.dir,'repo'); await mkdir(repo);
   assert.equal(spawnSync('git',['init','-q','-b','main',repo]).status,0);
   const env={...x.env,GIT_AUTHOR_NAME:'Test',GIT_AUTHOR_EMAIL:'test@example.invalid',GIT_COMMITTER_NAME:'Test',GIT_COMMITTER_EMAIL:'test@example.invalid'};
   await writeFile(path.join(repo,'x'),'one\n'); assert.equal(spawnSync('git',['add','x'],{cwd:repo,env}).status,0); assert.equal(spawnSync('git',['commit','-qm','first'],{cwd:repo,env}).status,0);
-  await writeFile(path.join(repo,'x'),'two\n'); const out=path.join(x.dir,'out','index.html');
-  const child=spawn(process.execPath,[cli,'diff','--git','--watch','--out',out],{cwd:repo,env,stdio:['ignore','pipe','pipe']}); t.after(()=>child.kill());
-  let stdout='',stderr=''; child.stdout.on('data',data=>stdout+=data); child.stderr.on('data',data=>stderr+=data);
-  const until=async fn=>{ const deadline=Date.now()+15000; while(Date.now()<deadline) { if(await fn()) return; await new Promise(resolve=>setTimeout(resolve,100)); } throw new Error(`watch timeout: ${stderr}`); };
-  const latest=path.join(path.dirname(out),'latest.js'); await until(async()=>{try{return Boolean(await readFile(latest,'utf8'));}catch{return false;}});
-  const before=await readFile(latest,'utf8'); const shellTime=(await import('node:fs/promises')).stat; const mtime=(await shellTime(out)).mtimeMs;
+  await writeFile(path.join(repo,'x'),'two\n'); const out=path.join(await (await import('node:fs/promises')).realpath(x.dir),'out','index.html'), ended=path.join(x.dir,'ended');
+  await x.fakeJS('lavish-axi', `const fs=require('node:fs'); const args=process.argv.slice(2); if(!args.length) console.log(fs.existsSync(${JSON.stringify(ended)}) ? 'sessions[0]:' : 'sessions[1]{file,status}:\\n  '+JSON.stringify(${JSON.stringify(out)})+',open'); else if(args[0]==='poll') { fs.writeFileSync(${JSON.stringify(path.join(x.dir,'unexpected-poll'))},'poll'); process.exit(1); } else console.log('url: http://localhost:123/review');`);
+  const until=async fn=>{ const deadline=Date.now()+15000; while(Date.now()<deadline) { if(await fn()) return; await new Promise(resolve=>setTimeout(resolve,100)); } throw new Error('watch timeout'); };
+  x.cleanups.push(async()=>{ await writeFile(ended,'end'); await until(async()=>{try{await access(`${out}.relay.lock`);return false;}catch{return true;}}); });
+  const start=Date.now(), r=spawnSync(process.execPath,[cli,'diff','--git','--out',out],{cwd:repo,env,encoding:'utf8',timeout:10000});
+  assert.equal(r.status,0,r.stderr); assert.ok(Date.now()-start<10000,'command returns before review ends');
+  const latest=path.join(path.dirname(out),'latest.js'), before=await readFile(latest,'utf8');
+  const shellTime=(await import('node:fs/promises')).stat, mtime=(await shellTime(out)).mtimeMs;
   await writeFile(path.join(repo,'x'),'three\n'); await until(async()=>await readFile(latest,'utf8')!==before);
-  assert.equal((await shellTime(out)).mtimeMs,mtime); assert.equal(stdout.trim().split('\n').length,1); assert.equal(stderr,'');
+  assert.equal((await shellTime(out)).mtimeMs,mtime); assert.equal(r.stdout.trim().split('\n').length,1); assert.equal(r.stderr,'');
+  await assert.rejects(access(path.join(x.dir,'unexpected-poll')));
 });
 test('diff argument errors name the conflicting or missing option', async t => {
   const x = await setup(t);
-  for (const [args, message] of [[['diff','-r'], /-r requires/], [['diff','--repo-root','x'], /--repo-root requires/], [['diff','-','--watch'], /stdin conflicts/], [['diff','-r','a','--from','b','--to','c'], /-r conflicts/]]) {
+  for (const [args, message] of [[['diff','-r'], /-r requires/], [['diff','--repo-root','x'], /--repo-root requires/], [['diff','-','--watch'], /unknown argument --watch/], [['diff','-r','a','--from','b','--to','c'], /-r conflicts/]]) {
     const result=x.run(args); assert.equal(result.status,2); assert.match(result.stderr,message);
   }
 });
