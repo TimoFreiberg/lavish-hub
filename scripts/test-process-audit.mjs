@@ -6,6 +6,7 @@ export function markedProcesses(marker) {
   for (const pid of pids) {
     if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
     try {
+      // The exact token may be in the environment or in a worker's arguments.
       // Never print process environments, which can contain credentials.
       const details = execFileSync('ps', ['eww', '-p', pid, '-o', 'command='], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
       if (details.split(/\s+/).includes(`LAVISH_KIT_TEST_RUN=${marker}`)) leaked.push(Number(pid));

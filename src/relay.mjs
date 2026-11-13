@@ -312,7 +312,9 @@ export async function ensureRelay(file) {
   await mkdir(path.dirname(log), { recursive: true });
   const output = await open(log, 'a', 0o600);
   try {
-    const child = spawn(process.execPath, [worker, file], { detached: true, stdio: ['ignore', output.fd, output.fd, 'ipc'] });
+    const marker = process.env.LAVISH_KIT_TEST_RUN;
+    const args = [worker, file, ...(marker ? [`LAVISH_KIT_TEST_RUN=${marker}`] : [])];
+    const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', output.fd, output.fd, 'ipc'] });
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => { child.kill(); reject(new Error(`relay startup timed out; see ${log}`)); }, 10000);
       const done = (error, result) => { clearTimeout(timer); child.removeAllListeners('exit'); if (child.connected) child.disconnect(); child.unref(); error ? reject(error) : resolve(result); };
