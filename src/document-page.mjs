@@ -23,7 +23,7 @@ export async function writeDocumentShell(file, dist, title, app, pr) {
 export async function writeTaskPage(source, dist, { out, title, deps } = {}) {
   source = await realpath(source);
   const file = documentOutputPath(source, out);
-  if (!title && deps) title = (await (await import('./markdown.mjs')).renderMarkdown(await readFile(source, 'utf8'), deps)).title;
+  if (!title && deps) title = await (await import('./markdown.mjs')).markdownTitle(await readFile(source, 'utf8'), deps);
   title ||= path.basename(source);
   await writeDocumentShell(file, dist, title, 'task');
   const hash = await publishDocument(file, source);

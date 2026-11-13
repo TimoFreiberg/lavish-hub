@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { renderMarkdown, writeMarkdown } from '../src/markdown.mjs';
+import { markdownTitle, renderMarkdown, writeMarkdown } from '../src/markdown.mjs';
 
 const require = createRequire(import.meta.url);
 const deps = { resolve: name => require.resolve(name) };
@@ -50,6 +50,13 @@ test('invalid yaml is escaped and heading supplies title', async () => {
   assert.equal(page.title, 'First heading & more');
   assert.match(page.body, /&#x3C;code>/);
   assert.doesNotMatch(page.body, /<code><code>/);
+});
+
+test('lightweight title extraction matches rendering without loading Shiki', async () => {
+  const titleDeps = { resolve(name) { assert.notEqual(name, '@shikijs/markdown-it'); return deps.resolve(name); } };
+  for (const source of [fixture, '---\ntitle: [broken\n---\n# First *heading* `code`', '---\ntitle: "  "\n---\n# Fallback', '# ![image](x) and **bold**', 'No heading']) {
+    assert.equal(await markdownTitle(source, titleDeps), (await renderMarkdown(source, deps)).title);
+  }
 });
 
 test('stable output path, atomic replacement, and title precedence', async t => {

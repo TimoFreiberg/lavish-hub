@@ -16,6 +16,24 @@ function headingText(token) {
   }).join('').trim();
 }
 
+async function parseTitleSource(source, deps) {
+  const [{ default: MarkdownIt }, { default: frontMatter }, yaml] = await Promise.all([
+    load(deps, 'markdown-it'), load(deps, 'markdown-it-front-matter'), load(deps, 'yaml'),
+  ]);
+  let raw;
+  const md = new MarkdownIt({ html: true, linkify: true }).use(frontMatter, value => { raw = value; });
+  const tokens = md.parse(source, {});
+  const firstHeading = tokens.findIndex(token => token.type === 'heading_open' && token.tag === 'h1');
+  const heading = firstHeading < 0 ? '' : headingText(tokens[firstHeading + 1]);
+  try {
+    const data = raw === undefined ? null : yaml.parse(raw);
+    if (data && typeof data === 'object' && !Array.isArray(data) && typeof data.title === 'string' && data.title.trim()) return data.title.trim();
+  } catch {}
+  return heading;
+}
+
+export { parseTitleSource as markdownTitle };
+
 export async function renderMarkdown(source, deps) {
   const [{ default: MarkdownIt }, { default: taskLists }, { default: anchor },
     { default: frontMatter }, { default: shiki }, yaml] = await Promise.all([
