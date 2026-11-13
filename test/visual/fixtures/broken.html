@@ -1,0 +1,4 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Broken layout</title>
+<style>body{font:18px system-ui;margin:24px;color:#111;background:#fff}#overflow{width:2200px}#clip{width:80px;height:20px;overflow:hidden;white-space:nowrap}#covered{position:absolute;left:24px;top:220px;width:160px;height:40px}#cover{position:absolute;left:24px;top:220px;width:160px;height:40px;background:#333;z-index:2}#zero{width:0;height:0;padding:0;border:0;overflow:hidden}#offscreen{position:fixed;left:-300px;top:100px}</style></head>
+<body><main><h1>Broken layout</h1><p id="overflow">An overflowing element</p><p id="clip">Visible text clipped without an ellipsis</p><input id="unlabelled"><button id="covered">Covered button</button><div id="cover"></div><button id="zero">Zero size</button><button id="offscreen">Off screen</button></main></body></html>

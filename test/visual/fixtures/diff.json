@@ -1,0 +1,14 @@
+{
+  "before": {
+    "modified.js": "export const mode = 'old';\nconsole.log(mode);\n",
+    "deleted.txt": "This file will be deleted.\n",
+    "rename-before.txt": "This file keeps its contents when renamed.\n"
+  },
+  "after": {
+    "modified.js": "export const mode = 'new';\nconsole.log(mode.toUpperCase());\n",
+    "added.js": "export const added = true;\n",
+    "rename-after.txt": "This file keeps its contents when renamed.\n"
+  },
+  "largeFile": { "name": "large.js", "lines": 180 },
+  "longLine": { "name": "long.txt", "text": "LongIdentifierWithoutSpaces", "repeat": 16 }
+}

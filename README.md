@@ -357,6 +357,70 @@ never to a path supplied by the browser.
 Create PR is tagged `lavish-kit-action`. Its prompt is `lavish-kit-action/v1`,
 a newline, and JSON `{action:"create-pr",save:{baseHash,text}}`.
 
+## Screenshots and layout checks
+
+```sh
+npm ci                    # install development dependencies once
+just shots
+lavish-kit shots/index.html
+```
+
+`just shots` runs `scripts/shots.mjs` with headless Chromium and real Lavish
+sessions. It replaces the gitignored `shots/` directory with viewport PNGs,
+`report.json`, and an offline gallery grouped by page kind. Open a PNG at its
+original size when reviewing a UI change. Scrolling pages also get a full-page
+browser capture and successive viewport captures of their scrollable panes
+(the browser's full-page capture doesn't expand iframe scroll areas).
+
+The 60 shots use 1440×900 and 480×900 viewports in both light and dark color
+schemes. Fixed fixtures cover HTML, Markdown with highlighted code and
+frontmatter, a scratch jj diff with additions/deletions/renames/long lines and
+180 added lines, an empty diff, short/long/empty task files in Edit and Rendered
+views, a task's unsaved-edit/disk-change banner, and PR drafts in both views with
+and without `createPr`. Git uses the same diff renderer and patch parser, so
+there's no separate equivalent git matrix. Diff and PR metadata use fixed
+example values so temporary paths and commit IDs don't change their layout.
+
+Each shot records:
+
+- Lavish's active Layout issues, after a fresh complete audit has been recorded.
+- Page and console errors from the artifact and surrounding chrome.
+- Horizontal overflow of the artifact document, visible text clipped by
+  `overflow: hidden` or `clip` without an ellipsis, and zero-size, clipped,
+  off-screen fixed, or center-overlapped controls (including open shadow roots).
+- Serious and critical axe-core accessibility violations in the artifact and
+  chrome. Axe uses computed styles without auxiliary asset preloading, which
+  would make CORS-blocked stylesheet requests from Lavish's sandboxed iframe.
+  Each document is scanned separately rather than through axe's iframe recursion.
+
+The command prints failing shot paths and exits nonzero if a check or cleanup
+fails. It doesn't compare pixels or fix page CSS. Geometry checks allow one
+pixel of rounding error. Normal below-fold content and content in scrollable
+panes remain reachable and aren't failures just for being outside the first
+viewport. Axe doesn't replace keyboard or screen-reader testing.
+
+The inbox reader uses Lavish 0.1.96's `GET /api/:key/layout-warnings` endpoint
+(`dist/cli.mjs:11065–11075`). It first sends `lavish:requestLayoutDiagnostics`
+(`dist/cli.mjs:5892–5903`) and waits for a complete, recorded
+`POST /api/:key/layout-diagnostics` response
+(`dist/chrome-client.js:2521–2536`, `dist/cli.mjs:11046–11064`). Lavish waits for
+fonts, animations, and stable geometry before publishing the audit
+(`dist/cli.mjs:6699–6718`). An unreadable inbox or an incomplete audit fails the
+shot rather than silently substituting another check.
+
+Install dependencies before running offline. The runner serves the production
+Markdown renderer's exact pinned DaisyUI/Tailwind CDN URLs from local development
+dependencies and blocks other external browser requests. It uses temporary
+Lavish state/config/data directories and its own port, unsets `HC_TERMINAL_ID`,
+starts no workers, and ends its sessions before deleting temporary files.
+The report records the cleanup checks. Don't run two `just shots` commands
+at once, or run one while `just test` replaces `node_modules`.
+
+Allow a few minutes for the full matrix. `just test` also runs a small real-Lavish
+self-test proving that the checks catch overflow, clipping, an overlapped
+button, a zero-size/off-screen control, a missing label, and a Lavish-detected
+issue, while a clean artifact passes.
+
 ## Tests
 
 ```sh

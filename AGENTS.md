@@ -7,6 +7,7 @@ checkout. They need `lavish-axi` and Playwright's cached Chromium. Run
 `just test-e2e` separately, inside herdr, to check real delivery and terminal
 placement. It creates and cleans up its own scratch terminals and space. Do not
 send to, relabel, close, or kill other terminals.
+Run `just shots` after UI work and inspect the changed PNGs in `shots/`.
 
 Use jj. Start with an empty change, review `jj diff --git`, and commit only
 files you changed. Use imperative commit messages of at most 72 characters,
