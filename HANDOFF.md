@@ -203,6 +203,13 @@ Approved decisions:
      other registered HTML). Update the herdr-app tests.
    - Keep: consumed feedback is never dropped.
 
+When Markdown editing, save on Send, or resume land, update the docs:
+`README.md` (Markdown and task document paragraphs), `docs/README.md`, `docs/markdown.md`,
+`docs/task-documents.md` (merge into one Markdown doc), `docs/pr-drafts.md`,
+`docs/feedback-routing.md` (worker lifetime, resume, Not live banner),
+`docs/files-and-logs.md`, `docs/cli.md`, and the `--help` text in
+`src/cli.mjs`.
+
 UI issues seen in the screenshots that this step should fix: every heading
 shows a large blue underlined `#` permalink; the editor preview uses a
 different code font with no highlighting.
@@ -215,6 +222,8 @@ diff file headers. Lavish's own page shell fails two accessibility checks
 in every shot (upstream).
 
 ### 5. Docs rewrite (last)
+
+Done: `README.md`, `docs/` (index at `docs/README.md`), and `TESTING.md`.
 
 The operator wants it written by a docs-focused writer, for the operator and
 agents, not as a product. No marketing, no filler.

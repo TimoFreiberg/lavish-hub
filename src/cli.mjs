@@ -82,7 +82,7 @@ Options:
   --open            open a browser if the page isn't listed under Artifacts
   --reopen          reopen a review the user ended in the browser
 
-See README.md for the save and action formats, worker files, logs, and recovery.`;
+See docs/README.md for the save and action formats, worker files, logs, and recovery.`;
 class UsageError extends Error {}
 
 export function parseArgs(args) {
