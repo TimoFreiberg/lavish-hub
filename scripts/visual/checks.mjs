@@ -43,9 +43,8 @@ export function inspectGeometry() {
         // Scrolling can reveal the text inside a pane, not enlarge the pane's
         // visible region through an outer clipping ancestor.
         for (const t of visible) {
-          if (scrollX) { t.left = r.left; t.right = r.right; }
-          else if (x && ellipsis) { t.left = Math.max(t.left, r.left); t.right = Math.min(t.right, r.right); }
-          if (scrollY) { t.top = r.top; t.bottom = r.bottom; }
+          if (scrollX || (x && ellipsis)) { t.left = Math.max(t.left, r.left); t.right = Math.min(t.right, r.right); }
+          if (scrollY) { t.top = Math.max(t.top, r.top); t.bottom = Math.min(t.bottom, r.bottom); }
         }
       }
       if (clipping) clippedText.push({ target: label(el), container: clipping, text: text.textContent.trim().slice(0, 100) });

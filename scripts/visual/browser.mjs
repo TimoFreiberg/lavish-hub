@@ -29,7 +29,6 @@ export async function isolatedLavish({ tempRoot = os.tmpdir(), portAllocator = a
   const command = (name, args, options = {}) => exec(name, args, { encoding: 'utf8', timeout: 30000, ...options });
   const run = args => command('lavish-axi', args, { env });
   const serverCommand = new RegExp(`lavish-axi[^\\n]*server --port ${port}(?:\\s|$)`);
-  const startTime = pid => command('ps', ['-p', String(pid), '-o', 'lstart=']).trim();
   const owned = pid => {
     // Inspect locally, never log process environments: they may contain secrets.
     const args = command('ps', ['eww', '-p', String(pid), '-o', 'command=']);
@@ -40,7 +39,7 @@ export async function isolatedLavish({ tempRoot = os.tmpdir(), portAllocator = a
     const processes = command('ps', ['-A', '-o', 'pid=,args=']);
     for (const line of processes.split('\n').filter(line => serverCommand.test(line))) {
       const pid = Number(line.trim().split(/\s+/)[0]);
-      if (owned(pid)) { serverProcess = { pid, started: startTime(pid) }; return; }
+      if (owned(pid)) { serverProcess = { pid }; return; }
     }
   };
   const alive = () => {
@@ -61,12 +60,6 @@ export async function isolatedLavish({ tempRoot = os.tmpdir(), portAllocator = a
       await new Promise(resolve => setTimeout(resolve, 50));
     } while (Date.now() < deadline);
     return false;
-  };
-  const terminate = signal => {
-    if (!alive()) return;
-    if (startTime(serverProcess.pid) !== serverProcess.started || !owned(serverProcess.pid)) throw new Error('Refusing to terminate an unverified server process');
-    try { process.kill(serverProcess.pid, signal); }
-    catch (error) { if (error.code !== 'ESRCH') throw error; }
   };
   return {
     dir, env,
@@ -91,11 +84,7 @@ export async function isolatedLavish({ tempRoot = os.tmpdir(), portAllocator = a
         await attempt(async () => {
           cleanup.serverStopped = await waitStopped(shutdownTimeoutMs);
           if (!cleanup.serverStopped) {
-            errors.push(new Error('Isolated Lavish server did not stop normally'));
-            // Only signal the server with the private environment and original start time.
-            terminate('SIGTERM'); cleanup.serverStopped = await waitStopped(1000);
-            if (!cleanup.serverStopped) { terminate('SIGKILL'); cleanup.serverStopped = await waitStopped(1000); }
-            if (!cleanup.serverStopped) throw new Error('Isolated Lavish server is still running');
+            throw new Error('Isolated Lavish server did not stop normally; cleanup incomplete');
           }
         });
         if (files.size) await attempt(async () => {

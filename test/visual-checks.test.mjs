@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { cp, readFile, mkdtemp, readdir, rm, access, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
+import net from 'node:net';
 import path from 'node:path';
 import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues, closeVisualResources } from '../scripts/visual/browser.mjs';
 import { scanDocument } from '../scripts/visual/checks.mjs';
@@ -28,6 +29,7 @@ test('visual checker catches clipped ellipses, negative controls, and outer-clip
     assert.ok(geometry.clippedText.some(issue => issue.target === target), `${target} must be reported`);
   }
   assert.ok(geometry.clippedText.some(issue => issue.target === 'p#pane-text' && issue.container === 'div#clipped-wrapper'));
+  assert.ok(!geometry.clippedText.some(issue => issue.target === 'p#pane-clean'), 'visible text in a clipped pane is not clipped');
   for (const target of ['button#negative-top', 'button#negative-left']) {
     assert.ok(geometry.controls.some(issue => issue.target === target && issue.problem === 'off-screen-or-clipped'), `${target} must be unreachable`);
   }
@@ -42,6 +44,19 @@ test('isolated Lavish removes its directory after port allocation fails', async 
   t.after(() => rm(tempRoot, { recursive: true, force: true }));
   await assert.rejects(isolatedLavish({ tempRoot, portAllocator: async () => { throw new Error('Injected port failure'); } }), /Injected port failure/);
   assert.deepEqual(await readdir(tempRoot), []);
+});
+
+test('incomplete server cleanup is reported without signaling a discovered PID', async t => {
+  const server = net.createServer(socket => socket.destroy());
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const lavish = await isolatedLavish({ portAllocator: async () => server.address().port, shutdownTimeoutMs: 10, exec: () => '' });
+  await assert.rejects(lavish.close(), error => {
+    assert.match(error.message, /cleanup incomplete/);
+    assert.equal(error.cleanup.serverStopped, false);
+    return true;
+  });
+  assert.equal(server.listening, true);
 });
 
 test('browser-close failure still runs Lavish teardown and aggregates errors', async () => {
@@ -59,8 +74,9 @@ test('browser-close failure still runs Lavish teardown and aggregates errors', a
 for (const failure of ['end', 'state', 'partial-open']) {
   test(`isolated Lavish cleans up after ${failure} failure`, { timeout: 60000 }, async t => {
     const exec = (name, args, options) => {
-      if (failure === 'end' && name === 'lavish-axi' && args[0] === 'end') throw new Error('Injected end failure');
       const output = execFileSync(name, args, options);
+      if (failure === 'state' && name === 'lavish-axi' && args[0] === 'end') execFileSync(process.execPath, ['-e', `require('node:fs').writeFileSync(${JSON.stringify(path.join(options.env.LAVISH_AXI_STATE_DIR, 'state.json'))}, 'unreadable JSON')`]);
+      if (failure === 'end' && name === 'lavish-axi' && args[0] === 'end') throw new Error('Injected end failure');
       if (failure === 'partial-open' && name === 'lavish-axi' && args.includes('--no-open')) throw new Error('Injected failure after server startup');
       return output;
     };
@@ -71,7 +87,6 @@ for (const failure of ['end', 'state', 'partial-open']) {
     assert.equal(lavish.env.HC_TERMINAL_ID, undefined);
     if (failure === 'partial-open') assert.throws(() => lavish.open(file), /failure after server startup/);
     else lavish.open(file);
-    if (failure === 'state') await writeFile(path.join(lavish.env.LAVISH_AXI_STATE_DIR, 'state.json'), 'unreadable JSON');
     const browser = failure === 'end' ? { close: async () => { throw new Error('Injected browser-close failure'); } } : undefined;
     teardown = await closeVisualResources(browser, lavish);
     assert.equal(teardown.cleanup.serverStopped, true); assert.equal(teardown.cleanup.tempRemoved, true);

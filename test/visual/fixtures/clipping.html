@@ -12,7 +12,7 @@ body{font:18px/24px system-ui;background:#fff;color:#111;margin:20px}
 <p id="multiline">Multiple lines of text clipped by a short box with an ellipsis declaration</p>
 <p id="short-ellipsis">An ellipsis cannot excuse vertical clipping</p>
 <div id="ellipsis-wrapper"><p id="nested-ellipsis">An ellipsis cannot excuse clipping by another box</p></div>
-<div id="clipped-wrapper"><div id="scroll-pane"><p id="pane-text">Visible text in a pane clipped by its outer wrapper</p><p id="pane-end">End of scrolling text</p></div></div>
+<div id="clipped-wrapper"><div id="scroll-pane"><p id="pane-clean" style="margin:0">Visible line</p><p id="pane-text">Text clipped by its outer wrapper</p><p id="pane-end">End of scrolling text</p></div></div>
 <button id="negative-top">Above the document</button><button id="negative-left">Negative center</button>
 <button id="below-fold">Reachable below the fold</button>
 </main></body></html>
