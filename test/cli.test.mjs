@@ -20,7 +20,16 @@ assert.equal(init.status, 0, init.stderr);
 test.after(() => rm(shared, { recursive: true, force: true }));
 async function setup(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-cli-')), cleanups = [];
-  t.after(async () => { for (const cleanup of cleanups) await cleanup(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    for (const cleanup of cleanups) await cleanup();
+    const entries = await readdir(dir, { recursive: true });
+    for (const entry of entries.filter(name => name.endsWith('.relay.lock/pid'))) {
+      const lock = path.join(dir, path.dirname(entry));
+      try { process.kill(Number(await readFile(path.join(dir, entry), 'utf8')), 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH' && error.code !== 'ENOENT') throw error; }
+      await until(async () => !await exists(lock));
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
   const bin = path.join(dir, 'bin'); await mkdir(bin);
   const fake = async (name, body) => { const p = path.join(bin, name); const prefix = name === 'lavish-axi' ? 'if [ "$#" = 0 ]; then printf "sessions[0]:\\n"; exit; fi\nif [ "$1" = poll ]; then printf "session:\\n  status: ended\\n"; exit; fi\n' : ''; await writeFile(p, `#!/bin/sh\n${prefix}${body}\n`); await chmod(p, 0o755); };
   await fake('hc', 'if [ "$1" = get ]; then printf \'{"address":"%s","state":"live","labels":{}}\\n\' "$2"; else printf \'[]\\n\'; fi');

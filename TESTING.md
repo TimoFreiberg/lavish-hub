@@ -9,7 +9,9 @@ Besides the runtime requirements in the [README](README.md), the tests need
 
 Never run two of these at once in one checkout. `just test` runs `npm ci`,
 which replaces `node_modules` while the other run reads it, and the browser
-tests share the Lavish server and Chromium.
+tests use Chromium. Each full run uses private Lavish and XDG directories and
+checks for remaining sessions and processes referring to its temporary directory.
+On failure, the directory is retained for inspection.
 
 ## `just test`
 
