@@ -32,4 +32,6 @@ The launch prompt instructs the worker to propose a goal and wait for acceptance
 it does not install a goal itself or infer that one exists. If the session's
 existing settings require approval, an operator must approve it in the visible
 terminal before work begins. The watcher does not change those settings or grant
-permissions. This interaction has not been verified with a real worker session.
+permissions. A local smoke test launched the default `herdr-polytoken`, proposed
+and completed a goal after automatic acceptance, and verified it was active.
+Manual approval and other configurations were not verified.
