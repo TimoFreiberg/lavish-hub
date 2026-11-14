@@ -34,8 +34,8 @@ test('browser launch and visual cleanup failures propagate through the pipeline'
     process.env.LAVISH_KIT_SHOTS_DIR = path.join(root, 'shots');
     process.env.LAVISH_KIT_CHROMIUM = path.join(root, 'missing-chromium');
     const { runShots } = await import('../scripts/shots.mjs');
-    for (const cleanupFailure of [false, true]) {
-      if (cleanupFailure) {
+    for (const scenario of ['launch-failure', 'skipped', 'cleanup-failure']) {
+      if (scenario !== 'launch-failure') {
         if (previousBrowser === undefined) delete process.env.LAVISH_KIT_CHROMIUM;
         else process.env.LAVISH_KIT_CHROMIUM = previousBrowser;
       }
@@ -45,17 +45,23 @@ test('browser launch and visual cleanup failures propagate through the pipeline'
         publish: async (name, value) => snapshots.set(name, structuredClone(value)),
         execute: async name => {
           assert.equal(name, 'shots');
-          return runShots(cleanupFailure ? { afterLaunch: () => false, close: (browser, lavish) => closeVisualResources({ close: async () => { await browser.close(); throw new Error('injected browser cleanup failure'); } }, lavish) } : {});
+          return runShots(scenario === 'launch-failure' ? {} : {
+            afterLaunch: () => false,
+            ...(scenario === 'cleanup-failure' && { close: (browser, lavish) => closeVisualResources({ close: async () => { await browser.close(); throw new Error('injected browser cleanup failure'); } }, lavish) }),
+          });
         },
       });
       const report = JSON.parse(await readFile(path.join(root, 'shots/report.json'), 'utf8'));
       assert.equal(report.version, 2);
-      if (cleanupFailure) {
-        assert.equal(report.runnerErrors, undefined);
+      if (scenario === 'launch-failure') {
+        assert.match(report.runnerErrors.join(' '), /browserType\.launch|executable/i);
+      } else {
+        assert.match(report.runnerErrors.join(' '), /Screenshot checks were skipped/);
         assert.equal(report.shots.length, 0);
+      }
+      if (scenario === 'cleanup-failure') {
         assert.match(report.cleanupErrors.join(' '), /injected browser cleanup failure/);
       } else {
-        assert.match(report.runnerErrors.join(' '), /browserType\.launch|executable/i);
         assert.equal(report.cleanupErrors, undefined);
       }
       assert.equal(report.cleanup.tempRemoved, true);

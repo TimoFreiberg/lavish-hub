@@ -103,7 +103,7 @@ try {
   execFileSync(process.execPath, [path.join(root, 'build.mjs'), root, dist]);
   const diff = await scratchDiff(lavish.dir);
   browser = await launch();
-  if (await afterLaunch(browser) !== false) {
+  if (await afterLaunch(browser) === false) throw new Error('Screenshot checks were skipped');
   const jobs = [];
   // PR fixtures change the shared config, so prepare all pages before concurrent captures.
   for (const variant of variants) for (const viewport of report.matrix.viewports) for (const colorScheme of report.matrix.colorSchemes) {
@@ -163,7 +163,6 @@ try {
   report.shots.sort((a, b) => a.id.localeCompare(b.id));
   const reportErrors = validateReport(report, variants, manifest);
   if (reportErrors.length) throw new Error(reportErrors.join('; '));
-  }
 } catch (error) {
   report.runnerErrors = [error.message]; console.error(error.message);
 } finally {
