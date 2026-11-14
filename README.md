@@ -10,16 +10,19 @@ You need Node.js 22 or newer (Lavish requires it), npm, and `lavish-axi` on
 Inside herdr, feedback routing needs herdr's `hc` on `PATH`, and the Artifacts
 listing and Create PR use `herdr-app`. macOS and Linux are supported.
 
-With mise, pin a commit on `main` (there are no releases, so change `version`
-to upgrade):
+There are no releases; install `main`. With mise:
 
 ```toml
 [tools]
 "npm:lavish-axi" = "0.1.96"
-"http:lavish-kit" = { version = "896611ac6879f6f5113df8866da92f86e77627c2", url = "https://github.com/TimoFreiberg/lavish-kit/archive/{{ version }}.tar.gz", strip_components = 1, bin_path = "bin" }
+"http:lavish-kit" = { version = "main", url = "https://github.com/TimoFreiberg/lavish-kit/archive/refs/heads/{{ version }}.tar.gz", strip_components = 1, bin_path = "bin" }
 ```
 
-Or run it from a checkout. The entry point works through a symlink:
+`mise install` fetches `main` once; `mise install -f http:lavish-kit` fetches
+it again (`mise up` doesn't, since `main` isn't a version number).
+
+Or run it from a checkout and update with `git pull`. The entry point works
+through a symlink:
 
 ```sh
 git clone https://github.com/TimoFreiberg/lavish-kit "$HOME/src/lavish-kit"
@@ -28,7 +31,9 @@ ln -s "$HOME/src/lavish-kit/bin/lavish-kit" "$HOME/.local/bin/lavish-kit"
 ```
 
 The first run installs the pinned npm dependencies and builds the browser
-bundles, so it needs network access.
+bundles, so it needs network access. After an update, they're rebuilt on the
+next run. A background process that's already running keeps the old code until
+its last open page stops.
 
 ## Features
 
