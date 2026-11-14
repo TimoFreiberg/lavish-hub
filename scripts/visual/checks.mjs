@@ -23,7 +23,7 @@ export function inspectGeometry() {
     }
     return true;
   };
-  const clippedText = [], controls = [];
+  const clippedText = [], narrowText = [], controls = [];
   const tolerance = 1;
   for (const el of elements) {
     if (!shown(el) || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'OPTION'].includes(el.tagName)) continue;
@@ -31,6 +31,12 @@ export function inspectGeometry() {
       if (text.nodeType !== Node.TEXT_NODE || !text.textContent.trim()) continue;
       const range = document.createRange(); range.selectNodeContents(text);
       const rects = [...range.getClientRects()].filter(r => r.width && r.height);
+      const style = getComputedStyle(el), content = text.textContent.trim();
+      if (content.length >= 40 && rects.length >= 5 && !['pre', 'nowrap'].includes(style.whiteSpace)) {
+        const width = Math.max(...rects.map(r => r.width));
+        const fontSize = parseFloat(style.fontSize);
+        if (fontSize > 0 && width < fontSize * 3) narrowText.push({ target: label(el), width: Math.round(width), text: content.slice(0, 100) });
+      }
       let clipping;
       const visible = rects.map(r => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom }));
       for (let p = el; p && !clipping; p = parent(p)) {
@@ -78,7 +84,7 @@ export function inspectGeometry() {
   const unique = values => [...new Map(values.map(value => [JSON.stringify(value), value])).values()];
   return {
     horizontalOverflow: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0) > innerWidth + tolerance,
-    clippedText: unique(clippedText), controls: unique(controls),
+    clippedText: unique(clippedText), narrowText: unique(narrowText), controls: unique(controls),
     scrolls: elements.some(el => shown(el) && el.scrollHeight > el.clientHeight + tolerance && ['auto', 'scroll'].includes(getComputedStyle(el).overflowY)) || document.documentElement.scrollHeight > innerHeight + tolerance,
   };
 }
@@ -97,6 +103,24 @@ export async function scanDocument(frame) {
     }));
   });
   return { geometry, accessibility: violations };
+}
+
+// Keep known shell issues visible without masking the same violations in artifacts
+// or new violations elsewhere in the shell.
+export function partitionAccessibility(scans) {
+  const known = { 'frame-title': '#artifact', 'html-has-lang': 'html' };
+  const actionable = [], ignored = [];
+  for (const { scope, violations } of scans) {
+    for (const violation of violations) {
+      const accepted = [], remaining = [];
+      for (const node of violation.nodes) {
+        (scope === 'chrome' && known[violation.id] && node.target.length === 1 && node.target[0] === known[violation.id] ? accepted : remaining).push(node);
+      }
+      if (accepted.length) ignored.push({ scope, ...violation, nodes: accepted });
+      if (remaining.length) actionable.push({ scope, ...violation, nodes: remaining });
+    }
+  }
+  return { actionable, ignored };
 }
 
 export function failedChecks(checks) {

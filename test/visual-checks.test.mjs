@@ -6,7 +6,27 @@ import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues, closeVisualResources } from '../scripts/visual/browser.mjs';
-import { scanDocument } from '../scripts/visual/checks.mjs';
+import { scanDocument, partitionAccessibility } from '../scripts/visual/checks.mjs';
+
+test('only known Lavish shell accessibility findings are ignored', () => {
+  const node = target => ({ target: [target], summary: 'missing' });
+  const violation = (id, ...targets) => ({ id, impact: 'serious', nodes: targets.map(node) });
+  const result = partitionAccessibility([
+    { scope: 'chrome', violations: [violation('frame-title', '#artifact', '#other'), violation('html-has-lang', 'html'), violation('color-contrast', '#artifact')] },
+    { scope: 'artifact', violations: [violation('frame-title', '#artifact'), violation('html-has-lang', 'html')] },
+  ]);
+  assert.deepEqual(result.ignored.map(v => [v.id, v.nodes[0].target[0]]), [['frame-title', '#artifact'], ['html-has-lang', 'html']]);
+  assert.deepEqual(result.actionable.map(v => [v.scope, v.id, v.nodes[0].target[0]]), [['chrome', 'frame-title', '#other'], ['chrome', 'color-contrast', '#artifact'], ['artifact', 'frame-title', '#artifact'], ['artifact', 'html-has-lang', 'html']]);
+});
+
+test('visual checker detects severely narrow wrapped paragraphs', async t => {
+  const browser = await launchBrowser(); t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 480, height: 900 } });
+  await page.setContent('<html lang="en"><title>Width test</title><p id="narrow" style="width: 18px; overflow-wrap: anywhere">A long paragraph that should not be forced into a column only two characters wide.</p><p id="normal" style="width: 200px">A long paragraph that has enough space to be read comfortably at a normal width.</p></html>');
+  const { geometry } = await scanDocument(page.mainFrame());
+  assert.ok(geometry.narrowText.some(issue => issue.target === 'p#narrow'));
+  assert.ok(!geometry.narrowText.some(issue => issue.target === 'p#normal'));
+});
 
 test('visual checker allows reachable scroll panes, ellipses, and shadow controls', async t => {
   const browser = await launchBrowser(); t.after(() => browser.close());

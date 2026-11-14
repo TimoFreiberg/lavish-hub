@@ -32,6 +32,7 @@ function fallback() {
 try { worker = makeWorker(); worker.initialize().catch(fallback); } catch { fallback(); }
 function options() { return {
   theme: 'github-dark', themeType: 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
+  unsafeCSS: ':host { --diffs-bg-addition-override: #172c22; --diffs-bg-addition-emphasis-override: #244432; }',
   itemMetrics: { diffHeaderHeight: HEADER_HEIGHT }, stickyHeaders: true, pointerEventsOnScroll: true,
   renderCustomHeader: (_metadata, context) => fileHeader(Number(context.item.id)),
   enableGutterUtility: true,

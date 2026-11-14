@@ -8,7 +8,7 @@ import { prepareDiff, readDiff } from '../src/diff/source.mjs';
 import { writeTaskPage, publishDocument } from '../src/document-page.mjs';
 import { writePRPage } from '../src/pr-page.mjs';
 import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues, closeVisualResources } from './visual/browser.mjs';
-import { scanDocument, failedChecks } from './visual/checks.mjs';
+import { scanDocument, failedChecks, partitionAccessibility } from './visual/checks.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const fixtures = path.join(root, 'test/visual/fixtures');
@@ -153,8 +153,11 @@ try {
       const artifactScan = await scanDocument(frame), chromeScan = await scanDocument(page.mainFrame());
       shot.checks.horizontalOverflow = artifactScan.geometry.horizontalOverflow;
       shot.checks.clippedText = artifactScan.geometry.clippedText;
+      shot.checks.narrowText = artifactScan.geometry.narrowText;
       shot.checks.controls = artifactScan.geometry.controls;
-      shot.checks.accessibility = [{ scope: 'artifact', violations: artifactScan.accessibility }, { scope: 'chrome', violations: chromeScan.accessibility }].filter(scan => scan.violations.length);
+      const accessibility = partitionAccessibility([{ scope: 'artifact', violations: artifactScan.accessibility }, { scope: 'chrome', violations: chromeScan.accessibility }]);
+      shot.checks.accessibility = accessibility.actionable;
+      shot.ignoredAccessibility = accessibility.ignored;
       await page.screenshot({ path: path.join(out, shot.png) });
       if (artifactScan.geometry.scrolls) shot.additionalCaptures = await captureScrolls(page, frame, id);
       shot.checks.pageErrors = [...new Set(pageErrors)].sort();

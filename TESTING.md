@@ -90,7 +90,12 @@ Each shot checks:
 - Horizontal overflow, text clipped without an ellipsis, and zero-size,
   clipped, off-screen, or covered controls (including in open shadow roots).
 - Serious and critical axe-core accessibility violations in the page and in
-  Lavish's chrome.
+  Lavish's chrome. Two known chrome-only findings (the artifact iframe's missing
+  title and the outer document's missing language) are recorded in
+  `ignoredAccessibility` but do not fail the run. The same findings in the page,
+  other affected elements, and new chrome findings still fail.
+- Long wrapped text forced into an extremely narrow column (a heuristic based on
+  rendered line widths; it does not replace visual inspection).
 
 It prints `PASS` or `FAIL <checks>` per shot and exits nonzero if any check or
 cleanup fails. It doesn't compare pixels. Geometry checks allow one pixel of

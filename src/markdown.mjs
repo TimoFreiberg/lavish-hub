@@ -103,7 +103,7 @@ export async function writeMarkdown(file, deps, { out } = {}) {
   .document h1 { font-size: 2em; } .document h2 { font-size: 1.5em; } .document h3 { font-size: 1.25em; }
   .document :is(p,ul,ol,table,pre,blockquote) { margin: 1em 0; }
   .document :is(ul,ol) { padding-left: 1.5em; } .document ul { list-style: disc; } .document ol { list-style: decimal; }
-  .document a { color: var(--color-primary); text-decoration: underline; }
+  .document a { color: #79b8ff; text-decoration: underline; }
   .document table { border-collapse: collapse; display: block; overflow-x: auto; }
   .document :is(th,td) { border: 1px solid var(--color-base-300); padding: .35em .65em; text-align: left; vertical-align: top; white-space: pre-wrap; }
   .document pre { overflow-x: auto; padding: 1em; border-radius: .5em; }
