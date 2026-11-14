@@ -1,7 +1,7 @@
 # Testing lavish-kit
 
-This describes the three test commands, what they need, and which failures are
-known to be flaky.
+This describes `just check`, the standalone test commands, their requirements,
+and known flaky tests.
 
 Besides the runtime requirements in the [README](README.md), the tests need
 `just`, fish, ripgrep, and Playwright's cached Chromium. Set
@@ -159,9 +159,9 @@ each standalone command, one command at a time:
 | `just shots` | 340.79 s | 160.84 s | 53% less wall time |
 
 These are single-run comparisons, not thresholds. The base had 162 passing
-tests and one opt-in registry skip. All original tests remain, with seven new
-pipeline/audit regression tests. Screenshots retain all 60 viewport cases and
-additional full-page/scroll captures, real Lavish diagnostics, accessibility,
+tests and one opt-in registry skip. All original tests remain, with added
+pipeline and process-audit regression tests. Screenshots retain all 60 viewport
+cases and additional full-page/scroll captures, real Lavish diagnostics, accessibility,
 and geometry checks. The e2e suite still exercises real `hc`, browser save/watch,
 moved-session delivery, and Create PR's persisted launch checkpoint. The main
 gains come from overlapping independent real browser/subprocess work and taking
