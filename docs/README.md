@@ -13,6 +13,7 @@ This index lists one doc per feature or topic. Start with the
 | [lavish-http.md](lavish-http.md) | Pinned Lavish HTTP contracts, CLI compatibility mode, transport memory measurements |
 | [files-and-logs.md](files-and-logs.md) | Pages, worker files, locks, logs, config, and message formats |
 | [maintenance.md](maintenance.md) | Manual maintenance watcher and worker sessions |
+| [interactive-preview.md](interactive-preview.md) | Local interactive fixture preview and hosting limits |
 
 HTML pages have no doc of their own. `lavish-kit page.html` opens the file
 where it is (or copies it to `--out`), keeps Lavish's native Annotate mode and

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { isSelected } from './visual/selection.mjs';
+import { validateReport } from './visual/report-validation.mjs';
 import path from 'node:path';
 import { publishDocument } from '../src/document-page.mjs';
 import { variants, scratchDiff, makePage } from './visual/fixtures.mjs';
@@ -160,6 +161,8 @@ try {
   if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '));
   timings.checksSeconds = (performance.now() - checksStarted) / 1000;
   report.shots.sort((a, b) => a.id.localeCompare(b.id));
+  const reportErrors = validateReport(report, variants, manifest);
+  if (reportErrors.length) throw new Error(reportErrors.join('; '));
 } catch (error) {
   report.runnerErrors = [error.message]; console.error(error.message);
 } finally {

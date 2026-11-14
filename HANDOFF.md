@@ -4,6 +4,15 @@ Updated 2026-11-13, from latest main `7158a154187477428923bfe6746ede7f5aa11d3b`.
 Keep this file until the remaining verification and proposals below are resolved.
 The README rewrite remains owned by the user and was not changed.
 
+## Interactive preview follow-up
+
+The interactive fixture preview and representative captures are implemented on
+the task branch. See [the preview guide](docs/interactive-preview.md) and
+[testing instructions](TESTING.md). Publication is not configured or authorized.
+The earlier verification below describes a different revision and environment;
+it is not evidence that the preview has passed exact-tip integration checks,
+original-size image review, physical-phone testing, or desktop-app testing.
+
 ## Completed in this change
 
 - Background Lavish polling and replies now use direct loopback HTTP, with

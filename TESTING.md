@@ -14,10 +14,11 @@ ignored `preview/` directory, or `just preview /path/to/empty-directory` to
 choose an empty output directory. Serve that directory with a static HTTP server;
 `file://` is not supported. The index and manifest record the actual working
 revision and build time, not a published main revision. `SOURCE_DATE_EPOCH` sets
-the timestamp for reproducible tests. This initial generator does not simulate
-saves or actions, and edit/rendered and conflict entries do not yet select their
-named state. It does not publish anything. Do not overlap `just preview` with
-other commands that install dependencies in this checkout.
+the timestamp for reproducible tests. Saves, comments and Create PR are simulated
+in disposable page memory; reload or navigation discards changes. See the
+[preview guide](docs/interactive-preview.md) for controls and hosting limits.
+Nothing is published. Do not overlap `just preview` with other commands that
+install dependencies in this checkout.
 
 ## Complete correctness run
 
@@ -81,6 +82,11 @@ Chromium. Fake-executable suites explicitly select CLI transport; real server
 tests use the default HTTP transport.
 
 To run a single file: `node --test --test-concurrency=1 test/cli.test.mjs`.
+
+Temporary tests are useful during implementation. Before pushing, consider
+whether the behavior is likely to regress and whether existing checks would catch
+that regression. Keep inexpensive, valuable regression coverage; remove redundant
+exploration only when required behavioral coverage remains.
 
 ## `just test-e2e`
 

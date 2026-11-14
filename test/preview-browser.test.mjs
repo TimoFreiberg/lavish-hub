@@ -49,9 +49,15 @@ test('preview simulates saves and conflicts without external requests', async ()
       assert.equal(await link.count(), 1, entry.id);
       await link.click();
       assert.equal(new URL(page.url()).pathname, new URL(entry.url, base).pathname, entry.id);
-      await page.locator('body').waitFor();
-      if (entry.kind === 'diff' && entry.id !== 'diff-empty') await page.locator('.file-link').first().waitFor();
-      if (entry.kind === 'task' || entry.kind === 'pr') await page.locator('#edit').waitFor();
+      if (entry.kind === 'diff') {
+        await page.locator('.sidebar').waitFor();
+        if (entry.id !== 'diff-empty') await page.locator('[data-content] [data-line-type="change-addition"] span[style]').first().waitFor();
+      } else if (entry.kind === 'task' || entry.kind === 'pr') {
+        if (entry.id.includes('changed-on-disk')) await page.getByRole('button', { name: 'Keep mine' }).waitFor();
+        else await page.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
+        if (entry.id.endsWith('-edit')) await page.locator('#editor').waitFor({ state: 'visible' });
+        else await page.locator('#preview').waitFor({ state: 'visible' });
+      } else await page.locator('h1').first().waitFor();
     }
     await page.goto(`${base}task-short-edit/page/index.html`);
     await page.locator('#editor').waitFor({ state: 'visible' });
@@ -119,8 +125,8 @@ test('preview simulates saves and conflicts without external requests', async ()
       const control = page.locator(selector);
       const box = await control.boundingBox();
       assert.ok(box.width >= 44 && box.height >= 44, `${selector} touch target: ${JSON.stringify(box)}`);
-      const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('button,select')?.outerHTML, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
-      assert.ok(hit, `${selector} must be reachable`);
+      const hit = await control.evaluate((element, { x, y }) => element.contains(document.elementFromPoint(x, y)), { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+      assert.ok(hit, `${selector} must be the reachable control`);
     }
     assert.deepEqual(forbidden, []);
     assert.deepEqual(missing, []);

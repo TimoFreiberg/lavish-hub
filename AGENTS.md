@@ -2,8 +2,8 @@
 
 Last verified: 2026-11-14
 
-Testing is in [TESTING.md](TESTING.md). User and agent docs are in
-[docs/](docs/README.md). Update them when behavior changes.
+Testing and test-retention guidance are in [TESTING.md](TESTING.md). User and
+agent docs are in [docs/](docs/README.md). Update them when behavior changes.
 
 Use jj. Start with an empty change, review `jj diff --git`, and commit only
 files you changed. Use imperative commit messages of at most 72 characters,
@@ -45,7 +45,9 @@ local and outside the reviewed repository.
   generates and audits the full screenshot matrix first, then runs the full test
   and real-`hc` e2e suites with separate temporary state and ports. Once it prints
   `Screenshots ready`, visually inspect the PNGs in the announced artifact
-  directory at original size while the remaining checks run. Wait for exit zero
+  directory at original size while the remaining checks run. Eight primary
+  wide/dark images represent the larger static and real-Lavish diagnostic
+  matrices; selected pages can have additional scroll captures. Wait for exit zero
   and inspect `status.json`; screenshot readiness alone is not a pass. Record
   visual inspection separately: automated checks cannot sign it off.
   The runner's bounded concurrency is allowed; do not overlap independent test
