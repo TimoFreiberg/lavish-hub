@@ -1,7 +1,12 @@
 # Maintenance watcher
 
-**Incomplete: automatic worker launches are disabled.** The per-issue claim and
-resumption protocol is not implemented. Do not use this draft for autonomous work.
+**Incomplete: automatic worker launches are disabled.** Goal installation and
+polling still need verification. Do not use this draft for autonomous work.
+Workers must claim their job before working or resuming and report an outcome with
+the claim token; blocked outcomes release the slot. Issue workers must use
+`check-activity ID TOKEN` to verify current operator activity before acting.
+Only failed jobs can be explicitly retried. An uncertain launch must be reconciled
+against the named terminal, not retried blindly.
 The watcher is run manually; it installs no service. From a terminal inside an
 existing herdr core, with `hc`, `herdr-polytoken`, `gh`, `npm`, `jj` and Node on
 PATH and authenticated GitHub access, run:

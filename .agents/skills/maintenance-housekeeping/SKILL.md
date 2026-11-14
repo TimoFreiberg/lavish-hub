@@ -5,7 +5,9 @@ description: Review assigned dependency updates and perform a small maintenance 
 
 Before work, use `propose_goal` and wait for acceptance; if approval is needed,
 leave the session blocked. Never assume a goal exists. Read the assignment with
-`node scripts/maintenance.mjs job ID`. Review dependencies before cleanup.
+`node scripts/maintenance.mjs job ID`. Before working or resuming, run
+`node scripts/maintenance.mjs claim ID` and retain the returned TOKEN. If claiming
+fails, stop; do not report an outcome without a claim. Review dependencies before cleanup.
 Research release provenance, advisories, supply-chain evidence and install scripts
 before installing any candidate. No research can guarantee safety; never install a
 suspicious release. All version upgrades, including pinned versions, are eligible
@@ -20,6 +22,6 @@ worthwhile small behavior-preserving cleanup; avoid cosmetic churn. If the best
 improvement is medium, large or risky, propose it in this visible session and
 block for the operator. Local questions are appropriate for that decision.
 Follow AGENTS.md for all QA and integration. On completion run
-`node scripts/maintenance.mjs outcome ID completed`, then `complete_goal`.
-On a blocker record `outcome ID blocked 'reason'` and call `block_goal`; on
-failure record `outcome ID failed 'reason'` and block the goal.
+`node scripts/maintenance.mjs outcome ID TOKEN completed`, then `complete_goal`.
+On a blocker record `outcome ID TOKEN blocked 'reason'` and call `block_goal`; on
+failure record `outcome ID TOKEN failed 'reason'` and block the goal.
