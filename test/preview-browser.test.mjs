@@ -30,8 +30,29 @@ test('preview simulates saves and conflicts without external requests', async ()
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${server.address().port}/nested/`;
     browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
-    const page = await browser.newPage(); const forbidden = [];
-    page.on('request', request => { if ((!request.url().startsWith(base) && !request.url().startsWith(`blob:${new URL(base).origin}/`)) || request.method() !== 'GET') forbidden.push(request.url()); });
+    const context = await browser.newContext({ hasTouch: true });
+    const forbidden = [], missing = [];
+    await context.route('**/*', route => {
+      const request = route.request();
+      if (!request.url().startsWith(base) || request.method() !== 'GET') {
+        forbidden.push(`${request.method()} ${request.url()}`);
+        return route.abort();
+      }
+      return route.continue();
+    });
+    context.on('response', response => { if (!response.ok()) missing.push(`${response.status()} ${response.url()}`); });
+    const page = await context.newPage();
+    const manifest = JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8'));
+    for (const entry of manifest.pages) {
+      await page.goto(`${base}index.html`);
+      const link = page.locator(`a[href="${entry.url}"]`);
+      assert.equal(await link.count(), 1, entry.id);
+      await link.click();
+      assert.equal(new URL(page.url()).pathname, new URL(entry.url, base).pathname, entry.id);
+      await page.locator('body').waitFor();
+      if (entry.kind === 'diff' && entry.id !== 'diff-empty') await page.locator('.file-link').first().waitFor();
+      if (entry.kind === 'task' || entry.kind === 'pr') await page.locator('#edit').waitFor();
+    }
     await page.goto(`${base}task-short-edit/page/index.html`);
     await page.locator('#editor').waitFor({ state: 'visible' });
     await page.locator('#editor').fill('First edit'); await page.locator('#save').click();
@@ -56,6 +77,30 @@ test('preview simulates saves and conflicts without external requests', async ()
     await page.locator('#pr-title').fill('Preview PR'); await page.locator('#create-pr').click();
     await page.getByText('Simulated Create PR acknowledged; no PR was created.').waitFor();
     await page.getByText('Saved — up to date with disk').waitFor();
+    await page.goto(`${base}diff-jj/page/index.html`);
+    await page.locator('[data-content] [data-line-type="change-addition"] span[style]').first().waitFor();
+    const addComment = async text => {
+      await page.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
+      await page.getByRole('button', { name: 'Add comment' }).click();
+      await page.getByPlaceholder('Write a comment').fill(text);
+      await page.getByRole('button', { name: 'Queue comment' }).click();
+    };
+    await addComment('First comment');
+    assert.equal(await page.locator('#preview-queue li').count(), 1);
+    await page.locator('#preview-queue button').click();
+    assert.equal(await page.locator('#preview-queue li').count(), 0);
+    await addComment('Second comment');
+    await page.locator('#preview-send').click();
+    await page.getByText('Simulated comments sent; no action was run.').waitFor();
+    assert.equal(await page.locator('#preview-queue li').count(), 0);
+    const codeColors = [];
+    for (const theme of ['dark', 'light']) {
+      await page.goto(`${base}diff-jj/page/index.html?theme=${theme}`);
+      const code = page.locator('[data-content] [data-line-type="change-addition"] span[style]').first();
+      await code.waitFor();
+      codeColors.push(await code.evaluate(el => getComputedStyle(el).color));
+    }
+    assert.notEqual(codeColors[0], codeColors[1], 'highlighted code uses theme colors');
     for (const id of ['html-document', 'diff-jj']) {
       const colors = [];
       for (const theme of ['dark', 'light']) {
@@ -70,7 +115,15 @@ test('preview simulates saves and conflicts without external requests', async ()
     await page.locator('.file-link').first().waitFor();
     await page.keyboard.press('s'); await page.getByRole('button', { name: 'Unified' }).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    for (const selector of ['#preview-reset', '#preview-send', '[aria-label="Theme"]']) {
+      const control = page.locator(selector);
+      const box = await control.boundingBox();
+      assert.ok(box.width >= 44 && box.height >= 44, `${selector} touch target: ${JSON.stringify(box)}`);
+      const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('button,select')?.outerHTML, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+      assert.ok(hit, `${selector} must be reachable`);
+    }
     assert.deepEqual(forbidden, []);
+    assert.deepEqual(missing, []);
     assert.equal(await fixtureHash(), before);
   } finally {
     await browser?.close(); if (server) await new Promise(resolve => server.close(resolve)); await rm(dir, { recursive: true, force: true });

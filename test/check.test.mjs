@@ -1,11 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runChecks } from '../scripts/check.mjs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+
+test('test worker count rejects invalid bounds before starting work', () => {
+  for (const count of ['0', '9', '1.5', 'invalid']) {
+    const result = spawnSync(process.execPath, ['scripts/test-run.mjs', 'test'], { env: { ...process.env, LAVISH_KIT_TEST_JOBS: count }, encoding: 'utf8' });
+    assert.notEqual(result.status, 0, count);
+    assert.match(result.stderr, /LAVISH_KIT_TEST_JOBS must be an integer from 1 to 8/);
+  }
+});
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 10000;
@@ -51,6 +59,12 @@ await appendFile('events', name + ':ready\\n');
           const text = await events();
           return text.includes(`${interrupted}:ready`) && (interrupted !== 'test' || text.includes('e2e:ready'));
         });
+        const contender = spawn(process.execPath, ['scripts/check.mjs'], { cwd: root, env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}` }, stdio: ['ignore', 'pipe', 'pipe'] });
+        let contention = '';
+        contender.stderr.on('data', data => { contention += data; });
+        const contenderExit = await new Promise((resolve, reject) => { contender.once('error', reject); contender.once('exit', code => resolve(code)); });
+        assert.equal(contenderExit, 1);
+        assert.match(contention, /Another correctness command owns/);
         child.kill(signal);
         const exit = await exited;
         assert.equal(exit.signal, null, output);
@@ -84,8 +98,9 @@ for (const failing of [undefined, 'install', 'shots', 'test', 'e2e']) {
     const result = await runChecks({
       directory: '<artifacts>',
       publish: async (name, value) => { snapshots.set(name, structuredClone(value)); events.push(name); },
-      execute: async name => {
+      execute: async (name, directory) => {
         events.push(name);
+        assert.equal(directory, '<artifacts>');
         if (['test', 'e2e'].includes(name)) {
           assert.ok(snapshots.has('screenshots-ready.json'));
           active++; maximum = Math.max(maximum, active);
