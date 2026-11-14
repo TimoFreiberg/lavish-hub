@@ -79,7 +79,7 @@ h1 { font-size: 16px; margin: 0; flex: none; }
 :root[data-theme="light"] .sidebar, :root[data-theme="light"] .file-header, :root[data-theme="light"] .draft { background: #f6f8fa; color: #1f2328; }
 :root[data-theme="light"] .file-link { background: transparent; }
 :root[data-theme="light"] .file-link[aria-current] { background: #ddf4ff; border-color: #0969da; }
-:root[data-theme="light"] .counts .add, :root[data-theme="light"] .file-link .check { color: #1a7f37; }
+:root[data-theme="light"] .counts .add, :root[data-theme="light"] .file-link .check { color: #146c2e; }
 :root[data-theme="light"] .counts .del { color: #cf222e; }
 :root[data-theme="light"] .notice:not(:empty) { background: #fff8c5; }
 :root[data-theme="light"] .draft textarea, :root[data-theme="light"] .help { background: #fff; color: #1f2328; border-color: #d0d7de; }

@@ -104,6 +104,7 @@ export async function writeMarkdown(file, deps, { out, assetBase, bootstrap } = 
   .document :is(p,ul,ol,table,pre,blockquote) { margin: 1em 0; }
   .document :is(ul,ol) { padding-left: 1.5em; } .document ul { list-style: disc; } .document ol { list-style: decimal; }
   .document a { color: #79b8ff; text-decoration: underline; }
+  [data-theme="light"] .document a { color: #0759a8; }
   .document table { border-collapse: collapse; display: block; overflow-x: auto; }
   .document :is(th,td) { border: 1px solid var(--color-base-300); padding: .35em .65em; text-align: left; vertical-align: top; white-space: pre-wrap; }
   .document pre { overflow-x: auto; padding: 1em; border-radius: .5em; }

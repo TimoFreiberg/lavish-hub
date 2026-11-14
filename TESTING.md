@@ -118,10 +118,11 @@ real Lavish sessions on a private Lavish server (temporary state, config, and
 data directories, its own port, no workers). It replaces the gitignored
 `shots/` directory with:
 
-- 60 viewport PNGs: every page kind at 1440×900 and 480×900, light and dark,
-- full-page and scrolled-pane captures for pages that scroll,
-- `report.json` with each shot's checks and the cleanup result,
-- `index.html`, an offline gallery grouped by page kind.
+- eight wide (1440×900), dark viewport PNGs: static HTML, Markdown, populated diff, long task edit, and configured PR rendered; real-Lavish populated diff, changed-on-disk task edit, and configured PR edit,
+- full-page and scrolled-pane captures for selected pages that scroll,
+- `preview/`, the generated interactive static artifact used for static checks,
+- `report.json` with static and integration check records, timings, and cleanup result,
+- `index.html`, a gallery linking the preview and distinguishing check-only records from captures.
 
 Fixtures cover HTML, Markdown with highlighted code and frontmatter, a jj diff
 (additions, deletions, renames, long lines, 180 added lines), an empty diff,
@@ -130,7 +131,7 @@ banner, and PR drafts in both views with and without `createPr`. Git diffs use
 the same renderer, so there is no git matrix. Diff and PR metadata use fixed
 values so temporary paths don't change the layout.
 
-Each shot checks:
+Every fixture is checked at both viewport sizes and themes, separately for the static artifact and real Lavish. Only the selected cases produce primary PNGs. Each case checks:
 
 - Lavish's own layout issues, from a fresh complete audit (Lavish 0.1.96's
   layout-diagnostics and layout-warnings endpoints). An incomplete audit fails
@@ -172,7 +173,7 @@ each standalone command, one command at a time:
 
 These are single-run comparisons, not thresholds. The base had 162 passing
 tests and one opt-in registry skip. All original tests remain, with added
-pipeline and process-audit regression tests. Screenshots retain all 60 viewport
+pipeline and process-audit regression tests. The earlier baseline retained all 60 viewport
 cases and additional full-page/scroll captures, real Lavish diagnostics, accessibility,
 and geometry checks. The e2e suite still exercises real `hc`, browser save/watch,
 moved-session delivery, and Create PR's persisted launch checkpoint. The main

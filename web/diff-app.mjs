@@ -33,7 +33,7 @@ function fallback() {
 try { worker = makeWorker(); worker.initialize().catch(fallback); } catch { fallback(); }
 function options() { return {
   theme: document.documentElement.dataset.theme === 'light' ? 'github-light' : 'github-dark', themeType: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
-  unsafeCSS: document.documentElement.dataset.theme === 'light' ? '' : ':host { --diffs-bg-addition-override: #172c22; --diffs-bg-addition-emphasis-override: #244432; }',
+  unsafeCSS: document.documentElement.dataset.theme === 'light' ? '[data-line-number-content] { color: #24292f !important; } [data-line] span[style*="#d73a49" i] { color: #b32130 !important; }' : ':host { --diffs-bg-addition-override: #172c22; --diffs-bg-addition-emphasis-override: #244432; }',
   itemMetrics: { diffHeaderHeight: HEADER_HEIGHT }, stickyHeaders: true, pointerEventsOnScroll: true,
   renderCustomHeader: (_metadata, context) => fileHeader(Number(context.item.id)),
   enableGutterUtility: true,
