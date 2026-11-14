@@ -79,7 +79,7 @@ export function markdownOutputPath(source, out) {
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-kit/pages/markdown', `${basename}-${hash}`, 'index.html');
 }
 
-export async function writeMarkdown(file, deps, { out } = {}) {
+export async function writeMarkdown(file, deps, { out, assetBase } = {}) {
   const source = await realpath(file);
   const output = markdownOutputPath(source, out);
   const bytes = await readFile(source);
@@ -93,9 +93,9 @@ export async function writeMarkdown(file, deps, { out } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escape(title)}</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
-<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<link rel="stylesheet" href="${assetBase ? `${escape(assetBase)}/daisyui.css` : 'https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css'}">
+<link rel="stylesheet" href="${assetBase ? `${escape(assetBase)}/themes.css` : 'https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css'}">
+<script src="${assetBase ? `${escape(assetBase)}/tailwind.js` : 'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js'}"></script>
 <style>
   body { background: var(--color-base-100); color: var(--color-base-content); }
   .document { max-width: 80ch; margin: auto; padding: 2rem; overflow-wrap: anywhere; line-height: 1.65; }

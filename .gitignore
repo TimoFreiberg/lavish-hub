@@ -1,4 +1,5 @@
 node_modules/
 shots/
+preview/
 .checks/
 .workspaces/

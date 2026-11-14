@@ -13,11 +13,12 @@ export function pagePath(source, out) {
   const id = hash(`${source.root}\0${source.rangeSpec}`).slice(0, 10);
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-kit/pages/diff', `${base}-${id}`, 'index.html');
 }
-export async function writeDiffPage(source, dist, out) {
+export async function writeDiffPage(source, dist, out, { bootstrap } = {}) {
   const file = pagePath(source, out), dir = path.dirname(file), patchHash = hash(source.patch);
   await mkdir(dir, { recursive: true });
   await cp(dist, path.join(dir, 'assets'), { recursive: true, force: true });
-  await writeIfChanged(file, shell);
+  const html = bootstrap ? shell.replace('<script src="./assets/diff-app.js">', `<script src="${bootstrap.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}"></script><script src="./assets/diff-app.js">`) : shell;
+  await writeIfChanged(file, html);
   const data = { root: source.root, range: source.range, rangeSource: source.rangeSource, revision: source.revision, commits: source.commits, generated: source.generated, patch: source.patch, kind: source.kind, to: source.to || null };
   await publishPageData(dir, patchHash, data);
   return { file, patchHash };

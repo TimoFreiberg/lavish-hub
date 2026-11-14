@@ -13,13 +13,16 @@ export async function preparePR(rev = '@-', cwd = process.cwd()) {
   const commits = (await exec('jj', ['log', '-r', `(trunk()..(${rev})) | (${rev})`, '--no-graph', '-T', 'commit_id.short() ++ " " ++ description.first_line() ++ "\\n"'], { cwd: repo })).stdout.trim().split('\n').filter(Boolean);
   return { repo, rev, head: ids[0], commits };
 }
-export async function writePRPage(source, dist, pr, { out, title } = {}) {
+export async function writePRPage(source, dist, pr, { out, title, createPr, sourceName, bootstrap } = {}) {
   source = await realpath(source);
   const draft = parsePR(await readFile(source, 'utf8'));
   const file = documentOutputPath(source, out, 'pr');
   title ||= `PR: ${draft.title}`;
-  const command = await readCreatePr();
-  await writeDocumentShell(file, dist, title, 'pr', { ...pr, createPr: command.argv ? { enabled: true } : { enabled: false, reason: command.reason } });
-  const hash = await publishDocument(file, source);
+  if (!createPr) {
+    const command = await readCreatePr();
+    createPr = command.argv ? { enabled: true } : { enabled: false, reason: command.reason };
+  }
+  await writeDocumentShell(file, dist, title, 'pr', { ...pr, createPr }, { bootstrap });
+  const hash = await publishDocument(file, source, { sourceName });
   return { file, source, title, hash };
 }

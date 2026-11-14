@@ -1,73 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { createRequire } from 'node:module';
-import { writeMarkdown } from '../src/markdown.mjs';
-import { writeDiffPage } from '../src/diff/page.mjs';
-import { prepareDiff, readDiff } from '../src/diff/source.mjs';
-import { writeTaskPage, publishDocument } from '../src/document-page.mjs';
-import { writePRPage } from '../src/pr-page.mjs';
+import { publishDocument } from '../src/document-page.mjs';
+import { variants, scratchDiff, makePage } from './visual/fixtures.mjs';
 import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues, closeVisualResources } from './visual/browser.mjs';
 import { scanDocument, failedChecks, partitionAccessibility } from './visual/checks.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
-const fixtures = path.join(root, 'test/visual/fixtures');
 const out = process.env.LAVISH_KIT_SHOTS_DIR ? path.resolve(process.env.LAVISH_KIT_SHOTS_DIR) : path.join(root, 'shots');
-const deps = createRequire(import.meta.url);
 const escape = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
-const variants = [
-  { kind: 'html', name: 'document' }, { kind: 'markdown', name: 'document' },
-  { kind: 'diff', name: 'jj' }, { kind: 'diff', name: 'empty' },
-  ...['short', 'long', 'empty'].flatMap(name => ['edit', 'rendered'].map(view => ({ kind: 'task', name, view }))),
-  { kind: 'task', name: 'changed-on-disk', view: 'edit' },
-  ...['configured', 'unconfigured'].flatMap(name => ['edit', 'rendered'].map(view => ({ kind: 'pr', name, view }))),
-];
-
-async function scratchDiff(dir) {
-  const repo = path.join(dir, 'repo'); await mkdir(repo);
-  const jj = args => execFileSync('jj', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  jj(['git', 'init']);
-  const fixture = JSON.parse(await readFile(path.join(fixtures, 'diff.json'), 'utf8'));
-  for (const [name, text] of Object.entries(fixture.before)) await writeFile(path.join(repo, name), text);
-  jj(['new', '-m', 'Screenshot fixture base']);
-  for (const name of Object.keys(fixture.before)) await rm(path.join(repo, name));
-  for (const [name, text] of Object.entries(fixture.after)) await writeFile(path.join(repo, name), text);
-  await writeFile(path.join(repo, fixture.largeFile.name), Array.from({ length: fixture.largeFile.lines }, (_, i) => `export const item${i} = ${i};\n`).join(''));
-  await writeFile(path.join(repo, fixture.longLine.name), `${fixture.longLine.text.repeat(fixture.longLine.repeat)}\n`);
-  const source = await readDiff(await prepareDiff({ rev: '@' }, repo));
-  // Both git and jj feed the same renderer and patch parser. git's metadata
-  // differs, not its layout, so an equivalent git matrix is unnecessary.
-  for (const expected of ['new file mode', 'deleted file mode', 'rename from', '-export const mode', '+export const mode']) {
-    if (!source.patch.includes(expected)) throw new Error(`Scratch jj diff lacks ${expected}`);
-  }
-  return { ...source, root: '/example/repo', revision: 'a'.repeat(40), commits: ['aaaaaaa Screenshot changes'], generated: '2026-01-01T00:00:00.000Z' };
-}
-
-async function makePage(variant, dir, dist, diff, env) {
-  const file = path.join(dir, 'page', 'index.html'); await mkdir(path.dirname(file), { recursive: true });
-  if (variant.kind === 'html') {
-    await cp(path.join(fixtures, 'clean.html'), file);
-  } else if (variant.kind === 'markdown') {
-    const source = path.join(dir, 'document.md'); await cp(path.join(fixtures, 'document.md'), source);
-    await writeMarkdown(source, deps, { out: file });
-  } else if (variant.kind === 'diff') {
-    await writeDiffPage({ ...diff, patch: variant.name === 'empty' ? '' : diff.patch }, dist, file);
-  } else {
-    const source = path.join(dir, `${variant.kind}.md`);
-    if (variant.name === 'empty') await writeFile(source, '');
-    else await cp(path.join(fixtures, variant.kind === 'pr' ? 'pr.md' : variant.name === 'long' ? 'task-long.md' : 'task-short.md'), source);
-    if (variant.kind === 'task') await writeTaskPage(source, dist, { out: file, title: `Task: ${variant.name}` });
-    else {
-      const config = path.join(env.XDG_CONFIG_HOME, 'lavish-kit', 'config.json');
-      await mkdir(path.dirname(config), { recursive: true });
-      if (variant.name === 'configured') await writeFile(config, JSON.stringify({ createPr: ['stub-pr-not-launched'] }));
-      else await rm(config, { force: true });
-      await writePRPage(source, dist, { repo: '/example/repo', rev: '@-', head: 'a'.repeat(40), commits: ['aaaaaaa Add the document editor'] }, { out: file });
-    }
-    return { file, source };
-  }
-  return { file };
-}
 
 async function ready(page, variant, artifact) {
   const frame = page.frames().find(f => f.parentFrame() === page.mainFrame());

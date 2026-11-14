@@ -7,6 +7,18 @@ Besides the runtime requirements in the [README](README.md), the tests need
 `just`, fish, ripgrep, and Playwright's cached Chromium. Set
 `LAVISH_KIT_CHROMIUM` to use another Chromium executable.
 
+## Fixture preview
+
+Run `just preview` to generate a local, read-only development preview in the
+ignored `preview/` directory, or `just preview /path/to/empty-directory` to
+choose an empty output directory. Serve that directory with a static HTTP server;
+`file://` is not supported. The index and manifest record the actual working
+revision and build time, not a published main revision. `SOURCE_DATE_EPOCH` sets
+the timestamp for reproducible tests. This initial generator does not simulate
+saves or actions, and edit/rendered and conflict entries do not yet select their
+named state. It does not publish anything. Do not overlap `just preview` with
+other commands that install dependencies in this checkout.
+
 ## Complete correctness run
 
 Run `just check` (or `node scripts/check.mjs all`) for the entire pipeline.
@@ -32,8 +44,8 @@ this guard. The actual unsafe resources are dependency replacement and shared
 standalone `shots/` output, not Chromium itself. Bounded concurrency inside the
 runner is supported: each test group and e2e run has private Lavish/XDG state,
 a distinct port, and its own leak marker; each screenshot uses a separate
-browser context and output filename. Screenshot preparation remains serial
-because PR fixtures change the private configuration. Set
+browser context and output filename. Screenshot fixture preparation remains serial.
+Set
 `LAVISH_KIT_TEST_JOBS=1 LAVISH_KIT_SHOT_JOBS=1` for serial diagnosis; each accepts
 1–8 (default 3). More workers may hurt latency-sensitive browser tests on busy
 machines. No test or screenshot cases are removed by scheduling.

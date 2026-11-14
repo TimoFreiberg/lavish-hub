@@ -1,3 +1,8 @@
+# Generate a local, read-only fixture preview in an empty directory.
+preview out="preview":
+    npm ci
+    node scripts/preview.mjs "{{out}}"
+
 # One install, screenshots first, then isolated correctness suites.
 check:
     node scripts/check.mjs all
