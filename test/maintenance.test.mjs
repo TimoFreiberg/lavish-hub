@@ -13,6 +13,7 @@ test('status, retry and launch preconditions use local state', () => {
   delete env.HC_TERMINAL_ID;
   const run = (...args) => spawnSync(process.execPath, [script, ...args], { env, encoding: 'utf8' });
   try {
+    assert.equal(run('--help').status, 0);
     assert.equal(run('status').status, 0);
     assert.match(run('once').stderr, /HC_TERMINAL_ID is missing/);
     const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project');

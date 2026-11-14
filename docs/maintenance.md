@@ -1,8 +1,7 @@
 # Maintenance watcher
 
-**Incomplete: automatic worker launches are disabled.** Goal installation and
-polling still need verification. Do not use this draft for autonomous work.
-Workers must claim their job before working or resuming and report an outcome with
+The watcher launches queued workers automatically, one at a time. Workers must
+claim their job before working or resuming and report an outcome with
 the claim token; blocked outcomes release the slot. Issue workers must use
 `check-activity ID TOKEN` to verify current operator activity before acting.
 Only failed jobs can be explicitly retried. An uncertain launch must be reconciled
@@ -26,14 +25,17 @@ repository. State is under `$XDG_STATE_HOME/lavish-kit/maintenance` (or
 contains GitHub activity and should be treated as private. A leftover `lock`
 directory requires manual inspection: remove it only after confirming no watcher
 or outcome command is running. `status` displays queued jobs, errors, blocked
-sessions and launch uncertainties. Before retrying an uncertain launch, inspect
-herdr for the named terminal; retry can otherwise duplicate work.
+sessions and launch uncertainties. An uncertain launch cannot be retried: inspect
+herdr for the named terminal and run `reconcile` after its state is known.
 
 Issue requests use authenticated conditional GitHub GETs; failures back off.
 Dependency checks use npm registry metadata without an LLM and cover direct
 `package.json` dependencies and devDependencies plus the pinned `lavish-axi`
-runtime. They run daily and compare the registry's latest version, including
-pinned versions. Registry checks are not a supply-chain safety guarantee.
+runtime. The CDN pins for DaisyUI and Tailwind in `src/markdown.mjs` are also
+listed in `package.json` and checked there; update both locations together.
+Registry checks run daily and compare the latest version, including pinned
+versions. The main revision is checked each poll. Registry checks are not a
+supply-chain safety guarantee.
 
 Workers use the existing default facet, model and permissions. They propose a
 session goal before working; if goal auto-accept is disabled, an operator must

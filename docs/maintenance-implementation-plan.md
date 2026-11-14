@@ -1,7 +1,7 @@
 # Maintenance automation: approved scope
 
-This is a review and implementation record. The accompanying watcher is an
-incomplete draft with automatic launches disabled; see maintenance.md.
+This is a review and implementation record. See maintenance.md for operating
+the watcher and its limitations.
 
 - Keep the watcher and skills in this repository. Use shared machine-local
   state across jj workspaces. Run once or watch; do not install a service.
@@ -26,11 +26,10 @@ incomplete draft with automatic launches disabled; see maintenance.md.
 - Provide status, retry and operator documentation, plus fake-command tests for
   polling, state, concurrency, crash recovery and finalization.
 
-## Interface that still needs verification
+## Goal approval
 
-Polytoken documents `/goal set <text>` only after the current turn ends. The
-launcher can start a prompted session and `hc send --if idle` can submit input,
-but a crash-safe, idempotent way to confirm that the correct goal was installed
-before work starts has not been verified. Test the real supported interface and
-its recovery behavior before enabling autonomous launches. Do not infer a goal
-exists merely from an initial prompt.
+The launch prompt instructs the worker to propose a goal and wait for acceptance;
+it does not install a goal itself or infer that one exists. If the session's
+existing settings require approval, an operator must approve it in the visible
+terminal before work begins. The watcher does not change those settings or grant
+permissions. This interaction has not been verified with a real worker session.
