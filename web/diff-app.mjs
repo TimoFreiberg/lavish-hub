@@ -7,7 +7,7 @@ const app = document.querySelector('#app');
 const el = (tag, text, cls) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; };
 const button = (text, action) => { const node = el('button', text); node.type = 'button'; node.addEventListener('click', action); return node; };
 const state = { data: null, files: [], hash: null, latest: null, pending: null, split: false, viewed: new Set(), collapsed: new Set(), current: 0, hunk: -1, draft: null, storageFailed: false };
-try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-kit-viewed') || '[]')); } catch { state.storageFailed = true; }
+if (!window.lavishPreview) try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-kit-viewed') || '[]')); } catch { state.storageFailed = true; }
 const header = el('header', null, 'page-header'), toolbar = el('div', null, 'toolbar'), sidebar = el('nav', null, 'sidebar'), viewport = el('div', null, 'viewport'), notice = el('div', null, 'notice');
 // Lavish sees the shadow host, not the clicked diff line. Let CodeView handle
 // this surface even when Lavish's annotation mode is active.
@@ -18,10 +18,11 @@ let view, worker, workerUrl, fallingBack = false;
 // CodeView lays items out from itemMetrics without measuring headers, so the
 // header must render at exactly this height or every later file drifts.
 const HEADER_HEIGHT = 64;
-function persist() { try { localStorage.setItem('lavish-kit-viewed', JSON.stringify([...state.viewed])); } catch { state.storageFailed = true; renderToolbar(); } }
+function persist() { if (window.lavishPreview) return; try { localStorage.setItem('lavish-kit-viewed', JSON.stringify([...state.viewed])); } catch { state.storageFailed = true; renderToolbar(); } }
 function makeWorker() {
   workerUrl = URL.createObjectURL(new Blob([LAVISH_KIT_WORKER_SOURCE], { type: 'text/javascript' }));
-  return new WorkerPoolManager({ poolSize: 1, workerFactory: () => new Worker(workerUrl), onWorkerError: event => { event.preventDefault?.(); fallback(); } }, { theme: 'github-dark', themeType: 'dark', langs: [] });
+  const light = document.documentElement.dataset.theme === 'light';
+  return new WorkerPoolManager({ poolSize: 1, workerFactory: () => new Worker(workerUrl), onWorkerError: event => { event.preventDefault?.(); fallback(); } }, { theme: light ? 'github-light' : 'github-dark', themeType: light ? 'light' : 'dark', langs: [] });
 }
 function fallback() {
   if (fallingBack) return; fallingBack = true;
@@ -31,8 +32,8 @@ function fallback() {
 }
 try { worker = makeWorker(); worker.initialize().catch(fallback); } catch { fallback(); }
 function options() { return {
-  theme: 'github-dark', themeType: 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
-  unsafeCSS: ':host { --diffs-bg-addition-override: #172c22; --diffs-bg-addition-emphasis-override: #244432; }',
+  theme: document.documentElement.dataset.theme === 'light' ? 'github-light' : 'github-dark', themeType: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
+  unsafeCSS: document.documentElement.dataset.theme === 'light' ? '' : ':host { --diffs-bg-addition-override: #172c22; --diffs-bg-addition-emphasis-override: #244432; }',
   itemMetrics: { diffHeaderHeight: HEADER_HEIGHT }, stickyHeaders: true, pointerEventsOnScroll: true,
   renderCustomHeader: (_metadata, context) => fileHeader(Number(context.item.id)),
   enableGutterUtility: true,
@@ -106,7 +107,7 @@ function fileHeader(index) {
     const links = el('span', null, 'zed-links'); links.append(el('span', 'Open in Zed', 'hint'));
     for (const hunk of hunks) {
       const lineNumber = Math.max(1, side === 'deletions' ? hunk.deletionStart : hunk.additionStart);
-      const link = el('a', `:${lineNumber}`); link.href = zedUrl(state.data.root, path, lineNumber); link.target = '_blank'; link.rel = 'noopener'; link.setAttribute('aria-label', `Open in Zed :${lineNumber}`);
+      const link = el('a', `:${lineNumber}`); link.href = window.lavishPreview ? '#' : zedUrl(state.data.root, path, lineNumber); if (window.lavishPreview) link.onclick = event => { event.preventDefault(); notice.textContent = 'Opening an editor is unavailable in the demo.'; }; link.target = '_blank'; link.rel = 'noopener'; link.setAttribute('aria-label', `Open in Zed :${lineNumber}`);
       const copy = button('⧉', () => copyText(zedCommand(state.data.root, path, lineNumber))); copy.className = 'icon small'; copy.title = `Copy Zed command :${lineNumber}`; copy.setAttribute('aria-label', copy.title);
       const group = el('span', null, 'zed-link'); group.append(link, copy); links.append(group);
     }
@@ -217,4 +218,4 @@ function script(src, onerror) { const node = document.createElement('script'); n
 function loadData(hash) { if (loadingHash) return; loadingHash = hash; script(`./data-${encodeURIComponent(hash)}.js?t=${Date.now()}`, () => { loadingHash = null; notice.textContent = 'Could not load diff data; waiting for the next update.'; }); }
 globalThis.lavishViewData = data => { state.hash = loadingHash; loadingHash = null; state.pending = state.latest !== state.hash ? state.latest : null; render(data); };
 globalThis.lavishViewLatest = hash => { state.latest = hash; if (!state.hash && !loadingHash) loadData(hash); else if (state.hash) { state.pending = hash !== state.hash ? hash : null; updateNotice(); } };
-function poll() { script(`./latest.js?t=${Date.now()}`); } poll(); setInterval(poll, 2000);
+function poll() { script(`./latest.js?t=${Date.now()}`); } poll(); if (!window.lavishPreview) setInterval(poll, 2000);

@@ -47,6 +47,7 @@ export function createDocumentEditor({ getText, setText, changed, status, normal
 
 // Like the diff page, use scripts so this also works in Lavish's file-backed iframe.
 export function watchDocumentData(update, status) {
+  if (window.lavishPreview) return window.lavishPreview.subscribe(update);
   let latest, loaded, loading;
   function script(src, done, fail) {
     const node = document.createElement('script'); node.src = src;

@@ -79,7 +79,7 @@ export function markdownOutputPath(source, out) {
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-kit/pages/markdown', `${basename}-${hash}`, 'index.html');
 }
 
-export async function writeMarkdown(file, deps, { out, assetBase } = {}) {
+export async function writeMarkdown(file, deps, { out, assetBase, bootstrap } = {}) {
   const source = await realpath(file);
   const output = markdownOutputPath(source, out);
   const bytes = await readFile(source);
@@ -110,9 +110,10 @@ export async function writeMarkdown(file, deps, { out, assetBase } = {}) {
   .document blockquote { border-left: .25em solid var(--color-base-300); padding-left: 1em; }
   .document img { max-width: 100%; } .document .task-list-item { list-style: none; }
   .shiki, .shiki span { color: var(--shiki-dark) !important; background-color: var(--shiki-dark-bg) !important; }
+  [data-theme="light"] .shiki, [data-theme="light"] .shiki span { color: var(--shiki-light) !important; background-color: var(--shiki-light-bg) !important; }
 </style>
 </head>
-<body><main class="document prose">${metadata}\n${body}</main></body>
+<body><main class="document prose">${metadata}\n${body}</main>${bootstrap ? `<script src="${escape(bootstrap)}"></script>` : ''}</body>
 </html>\n`;
   await atomicWrite(output, html);
   return { file: output, title, source, hash };

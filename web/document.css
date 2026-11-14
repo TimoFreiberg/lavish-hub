@@ -1,4 +1,6 @@
 :root { color-scheme: dark; font-family: system-ui, sans-serif; background: light-dark(#fff, #17191c); color: light-dark(#24292f, #e6edf3); }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="light"] .document .shiki, :root[data-theme="light"] .document .shiki span { color: var(--shiki-light) !important; background-color: var(--shiki-light-bg) !important; }
 body { margin: 0; }
 [hidden] { display: none !important; }
 header { padding: 1rem 2rem; border-bottom: 1px solid light-dark(#d0d7de, #444c56); }

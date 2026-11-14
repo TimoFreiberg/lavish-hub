@@ -41,10 +41,13 @@ export async function scratchDiff(dir) {
 export async function makePage(variant, dir, dist, diff, { portable = false } = {}) {
   const file = path.join(dir, 'page', 'index.html'); await mkdir(path.dirname(file), { recursive: true });
   if (variant.kind === 'html') {
-    await cp(path.join(fixtures, 'clean.html'), file);
+    if (portable) {
+      const html = await readFile(path.join(fixtures, 'clean.html'), 'utf8');
+      await writeFile(file, html.replace('</body>', '<script src="../../assets/preview.js"></script></body>'));
+    } else await cp(path.join(fixtures, 'clean.html'), file);
   } else if (variant.kind === 'markdown') {
     const source = path.join(dir, 'document.md'); await cp(path.join(fixtures, 'document.md'), source);
-    await writeMarkdown(source, deps, { out: file, ...(portable && { assetBase: '../../assets' }) });
+    await writeMarkdown(source, deps, { out: file, ...(portable && { assetBase: '../../assets', bootstrap: '../../assets/preview.js' }) });
   } else if (variant.kind === 'diff') {
     await writeDiffPage({ ...diff, patch: variant.name === 'empty' ? '' : diff.patch }, dist, file, portable ? { bootstrap: '../../assets/preview.js' } : {});
   } else {
