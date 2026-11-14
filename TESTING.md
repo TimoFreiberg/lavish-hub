@@ -155,7 +155,7 @@ each standalone command, one command at a time:
 | Command | Base | Bounded concurrency | Change |
 | --- | ---: | ---: | ---: |
 | `just test` | 277.91 s | 96.51 s | 65% less wall time |
-| `just test-e2e` | 39.38 s | 40.71 s | private service adds 1.33 s |
+| `just test-e2e` | 39.38 s | 40.71 s | 1.33 s more wall time |
 | `just shots` | 340.79 s | 160.84 s | 53% less wall time |
 
 These are single-run comparisons, not thresholds. The base had 162 passing

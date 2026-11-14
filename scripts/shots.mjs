@@ -136,7 +136,7 @@ try {
   const diff = await scratchDiff(lavish.dir);
   browser = await launchBrowser();
   const jobs = [];
-  // Preparation uses the configured XDG directory; finish it before checking pages.
+  // PR fixtures change the shared config, so prepare all pages before concurrent captures.
   for (const variant of variants) for (const viewport of report.matrix.viewports) for (const colorScheme of report.matrix.colorSchemes) {
     if (interrupted) throw new Error('Screenshot run interrupted');
     const id = [variant.kind, variant.name, variant.view, viewport.width === 1440 ? 'wide' : 'narrow', colorScheme].filter(Boolean).join('-');

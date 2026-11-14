@@ -37,7 +37,7 @@ const port = await new Promise((resolve, reject) => {
 const marker = randomUUID();
 const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_KIT_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
 delete env.HC_TERMINAL_ID;
-// macOS Unix sockets cannot fit beneath its long default temporary directory.
+// Use a short directory to keep socket paths within macOS Unix socket limits.
 let hcRoot;
 if (mode === 'e2e') {
   hcRoot = await mkdtemp('/tmp/lk-hc-');
