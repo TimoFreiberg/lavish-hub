@@ -22,7 +22,7 @@ const file = path.join(dir, 'state.json'), lock = path.join(dir, 'lock');
 mkdirSync(dir, { recursive: true, mode: 0o700 });
 function load() { try { return parse(readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return { version: 1, jobs: [], etags: {}, cache: {}, reviewed: {}, backoff: 0 }; throw e; } }
 let state;
-function save() { const temp = `${file}.${process.pid}.tmp`; writeFileSync(temp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 }); renameSync(temp, file); }
+function save() { for (const job of state.jobs) if (job.claim && job.finalization) job.finalization.updated = now(); const temp = `${file}.${process.pid}.tmp`; writeFileSync(temp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 }); renameSync(temp, file); }
 function locked(fn) {
   try { mkdirSync(lock); } catch (e) { if (e.code === 'EEXIST') throw Error(`Maintenance state locked: ${lock}. Check for a running watcher before removing it.`); throw e; }
   try { state = load(); return fn(); } finally { rmSync(lock, { recursive: true, force: true }); }
@@ -46,7 +46,7 @@ function pages(endpoint) {
   for (let page = 1; ; page++) { const data = api(`${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100&page=${page}`); if (!Array.isArray(data)) throw Error('Expected GitHub list'); out.push(...data); if (data.length < 100) return out; }
 }
 function enqueue(kind, key, details) {
-  if (state.jobs.some(j => j.key === key)) return;
+  if (state.jobs.some(j => j.key === key && j.status !== 'superseded')) return;
   state.jobs.push({ id: randomUUID(), kind, key, details, status: 'queued', created: now() });
 }
 function issueFingerprint(issue, comments, operator) {
@@ -59,8 +59,14 @@ function collectIssues(operator) {
     if (issue.pull_request || issue.user?.login?.toLowerCase() !== operator.toLowerCase()) continue;
     const comments = pages(`repos/${repo}/issues/${issue.number}/comments`);
     const fingerprint = issueFingerprint(issue, comments, operator);
-    for (const job of state.jobs) if (job.kind === 'issue' && job.details.number === issue.number && job.details.fingerprint !== fingerprint && job.status === 'queued') { job.status = 'superseded'; job.message = 'Newer operator activity'; }
-    enqueue('issue', `issue:${issue.number}:${fingerprint}`, { number: issue.number, fingerprint });
+    state.currentIssues ||= {};
+    const previous = state.jobs.find(j => j.id === state.currentIssues[issue.number]) || [...state.jobs].reverse().find(j => j.kind === 'issue' && j.details.number === issue.number && j.status !== 'superseded');
+    if (previous?.details.fingerprint === fingerprint) { state.currentIssues[issue.number] = previous.id; continue; }
+    for (const job of state.jobs) if (job.kind === 'issue' && job.details.number === issue.number && job.status === 'queued') { job.status = 'superseded'; job.message = 'Newer operator activity'; }
+    const owner = [...state.jobs].reverse().find(j => j.kind === 'issue' && j.details.number === issue.number && j.finalization && !j.finalization.closeConfirmed);
+    const job = { id: randomUUID(), kind: 'issue', key: `issue:${issue.number}:${fingerprint}`, details: { number: issue.number, fingerprint }, status: 'queued', created: now() };
+    if (owner) job.finalization = { ...owner.finalization, markerJob: owner.finalization.markerJob || owner.id };
+    state.jobs.push(job); state.currentIssues[issue.number] = job.id;
   }
 }
 function collectMaintenance() {
@@ -87,7 +93,11 @@ function collectMaintenance() {
   });
   cmd('jj', ['git', 'fetch', '--remote', 'origin', '--branch', 'main']);
   const main = cmd('jj', ['log', '-r', 'main@origin', '--no-graph', '-T', 'commit_id']).trim();
-  if (candidates.length || main !== state.sweptMain) enqueue('maintenance', `maintenance:${hash({ main, candidates, retry: state.dependencyRetry || 0 })}`, { main, candidates });
+  const key = `maintenance:${hash({ main, candidates, retry: state.dependencyRetry || 0 })}`;
+  const needed = candidates.length || main !== state.sweptMain;
+  for (const job of state.jobs) if (job.kind === 'maintenance' && job.status === 'queued' && (!needed || job.key !== key)) { job.status = 'superseded'; job.message = 'Maintenance assignment changed'; }
+  if (needed) enqueue('maintenance', key, { main, candidates, sweep: candidates.length === 0 });
+  state.maintenanceSnapshot = key;
 }
 function terminal(name) {
   const list = parse(cmd('hc', ['ls', '--all', '--json']));
@@ -116,6 +126,7 @@ function startJob(id) {
   const job = locked(() => {
     const job = state.jobs.find(j => j.id === id);
     if (!job || job.status !== 'queued' || state.jobs.some(occupiesSlot)) return null;
+    if (job.kind === 'maintenance' && (state.error || state.backoff > now() || job.key !== state.maintenanceSnapshot)) return null;
     job.name = `maint-${job.id}`; job.status = 'launching'; save(); return { ...job };
   });
   if (!job) return;
@@ -149,6 +160,10 @@ function claim(id) {
   if (!job.terminal && job.name) job.terminal = terminal(job.name)?.address;
   if (!job.terminal || job.terminal !== process.env.HC_TERMINAL_ID) throw Error('Claim must come from the job terminal');
   if (state.jobs.some(j => j !== job && occupiesSlot(j))) throw Error('Worker slot is occupied');
+  if (job.kind === 'issue') {
+    const owner = state.jobs.filter(j => j.kind === 'issue' && j.details.number === job.details.number && j.finalization && !j.finalization.closeConfirmed).sort((a, b) => (b.finalization.updated || b.finalization.recorded) - (a.finalization.updated || a.finalization.recorded))[0];
+    if (owner && owner !== job) job.finalization = { ...owner.finalization, markerJob: owner.finalization.markerJob || owner.id };
+  }
   job.claim = { token: randomUUID(), terminal: process.env.HC_TERMINAL_ID }; job.status = 'running'; save();
   console.log(job.claim.token);
 }
@@ -170,6 +185,7 @@ function checkActivity(id, token, adopt = false) {
   const fingerprint = issueFingerprint(issue, comments, operator);
   if (adopt) {
     job.details.fingerprint = fingerprint;
+    state.currentIssues ||= {}; state.currentIssues[job.details.number] = job.id;
     for (const other of state.jobs) if (other !== job && other.kind === 'issue' && other.details.number === job.details.number && other.status === 'queued') { other.status = 'superseded'; other.message = 'Activity adopted by resumed worker'; }
     save();
     console.log('Current activity adopted');
@@ -227,7 +243,7 @@ function finalize(id, token) {
     if (!['ahead', 'identical'].includes(comparison.status)) throw Error('Fix commit is not reachable from origin main; push or reconcile it before finalizing');
     final.pushConfirmed = now(); save();
   }
-  const marker = `<!-- maintenance:${job.id}:final -->`;
+  const marker = `<!-- maintenance:${final.markerJob || job.id}:final -->`;
   if (!final.commentConfirmed) {
     final.commentIntent = true; save();
     const text = final.kind === 'fix' ? `🤖 Fixed in https://github.com/${repo}/commit/${final.value}` : `🤖 Closing: ${final.value}`;
@@ -250,6 +266,8 @@ function reviewResult(id, token, name, version, status, evidence) {
   const job = owned(id, token);
   if (job.kind !== 'maintenance' || !job.details.candidates.some(c => c.name === name && c.latest === version)) throw Error('Candidate not in job');
   if (!['reviewed', 'deferred', 'failed'].includes(status) || !evidence.trim()) throw Error('Disposition and evidence required');
+  job.reviews ||= {};
+  job.reviews[`${name}@${version}`] = { status, evidence, recorded: now() };
   state.reviewed[name] = { version, status, evidence, job: id, recorded: now() };
   save();
 }
@@ -262,6 +280,10 @@ function outcome(id, token, status, extra) {
   if (!['completed', 'blocked', 'failed'].includes(status)) throw Error('Outcome must be completed, blocked, or failed');
   const job = owned(id, token);
   if (status === 'completed' && job.kind === 'issue' && !job.finalization?.closeConfirmed) throw Error('Issue finalization must be confirmed before completion');
+  if (status === 'completed' && job.kind === 'maintenance') {
+    if (job.details.candidates.some(c => !job.reviews?.[`${c.name}@${c.latest}`])) throw Error('Every assigned candidate needs a disposition');
+    if ((job.details.sweep ?? job.details.candidates.length === 0) && !job.sweepCompleted) throw Error('Assigned sweep must be completed');
+  }
   job.status = status; job.claim = null; job.message = extra.join(' '); job.finished = now();
   save();
 }
@@ -279,5 +301,5 @@ else if (action === 'sweep-result') locked(() => sweepResult(args[0], args[1]));
 else if (action === 'retry-dependency') locked(() => { const result = state.reviewed[args[0]]; if (!result || !['deferred', 'failed'].includes(result.status)) throw Error('Only deferred or failed reviews can be retried'); delete state.reviewed[args[0]]; state.dependencyRetry = (state.dependencyRetry || 0) + 1; for (const job of state.jobs) if (job.kind === 'maintenance' && job.status === 'queued') job.status = 'superseded'; save(); });
 else if (action === 'outcome') locked(() => outcome(args[0], args[1], args[2], args.slice(3)));
 else if (action === 'reconcile') locked(() => { reconcile(); save(); });
-else if (action === 'retry') locked(() => { const job = state.jobs.find(j => j.id === args[0]); if (!job || job.status !== 'failed') throw Error('Only failed jobs are retryable'); job.status = 'queued'; job.claim = null; job.message = 'Explicit retry'; save(); });
+else if (action === 'retry') locked(() => { const job = state.jobs.find(j => j.id === args[0]); if (!job || job.status !== 'failed') throw Error('Only failed jobs are retryable'); if (job.kind === 'issue' && state.currentIssues?.[job.details.number] && state.currentIssues[job.details.number] !== job.id) throw Error('A newer issue assignment exists'); job.status = 'queued'; job.claim = null; job.message = 'Explicit retry'; save(); });
 else throw Error(usage);

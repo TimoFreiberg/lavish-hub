@@ -7,6 +7,28 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('../scripts/maintenance.mjs', import.meta.url));
+test('maintenance completion requires recorded dispositions and assigned sweep', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-results-'));
+  const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project'); mkdirSync(stateDir, {recursive:true});
+  const file = path.join(stateDir, 'state.json');
+  const env = {...process.env, XDG_STATE_HOME:dir, MAINTENANCE_REPO:'owner/project', HC_TERMINAL_ID:'worker'};
+  const run = (...args) => spawnSync(process.execPath,[script,...args],{env,encoding:'utf8'});
+  const state = () => JSON.parse(readFileSync(file));
+  try {
+    const candidates = ['a','b','c'].map(name=>({name,latest:'2'}));
+    writeFileSync(file,JSON.stringify({jobs:[{id:'m',kind:'maintenance',status:'running',terminal:'worker',claim:{token:'token',terminal:'worker'},details:{main:'main',candidates,sweep:false}}],reviewed:{},etags:{},cache:{}}));
+    assert.notEqual(run('outcome','m','token','completed').status,0);
+    for (const [i,status] of ['reviewed','deferred','failed'].entries()) {
+      assert.equal(run('review-result','m','token',candidates[i].name,'2',status,'evidence').status,0);
+      if (i<2) assert.notEqual(run('outcome','m','token','completed').status,0);
+    }
+    assert.equal(run('outcome','m','token','completed').status,0);
+    assert.deepEqual(Object.values(state().reviewed).map(x=>x.status),['reviewed','deferred','failed']);
+    assert.equal(run('retry-dependency','c').status,0); assert.equal(state().reviewed.c,undefined);
+    const s=state(); s.jobs.push({id:'s',kind:'maintenance',status:'running',claim:{token:'token',terminal:'worker'},details:{main:'main',candidates:[],sweep:true}}); writeFileSync(file,JSON.stringify(s));
+    assert.notEqual(run('outcome','s','token','completed').status,0); assert.equal(run('sweep-result','s','token').status,0); assert.equal(run('outcome','s','token','completed').status,0);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
 test('claims serialize workers, blocked workers must reclaim, and launches reconcile by name', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-life-'));
   const bin = path.join(dir, 'bin'); mkdirSync(bin);

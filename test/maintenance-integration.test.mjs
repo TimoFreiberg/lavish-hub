@@ -64,6 +64,28 @@ test('polls conditionally, starts one persisted worker without lock, and recover
  assert.equal(x.run('once').status,0); assert.equal(x.state().jobs.filter(j=>j.kind==='issue').length,1);
  x.put('github',{issue:{...x.issue,title:'Edited'},comments:[]}); assert.equal(x.run('once').status,0); assert.equal(x.state().jobs.filter(j=>j.kind==='issue').length,2);
 });
+test('adoption, reversion and explicit retry do not duplicate current activity', t => {
+ const x=fixture(t); assert.equal(x.run('once').status,0);
+ const worker=(...a)=>spawnSync(process.execPath,[script,...a],{env:{...x.env,HC_TERMINAL_ID:'worker'},encoding:'utf8'});
+ const id=x.state().jobs.find(j=>j.kind==='issue').id, claim=worker('claim',id), token=claim.stdout.trim(); assert.equal(claim.status,0,claim.stderr);
+ x.put('github',{issue:{...x.issue,title:'B'},comments:[]}); assert.equal(worker('adopt-activity',id,token).status,0); assert.equal(x.run('once').status,0);
+ assert.equal(x.state().jobs.filter(j=>j.kind==='issue').length,1);
+ x.put('github',{issue:{...x.issue,title:'C'},comments:[]}); assert.equal(x.run('once').status,0);
+ x.put('github',{issue:{...x.issue,title:'B'},comments:[]}); assert.equal(x.run('once').status,0);
+ assert.equal(x.state().jobs.filter(j=>j.kind==='issue' && j.status==='queued').length,1);
+ assert.equal(worker('adopt-activity',id,token).status,0); assert.equal(worker('outcome',id,token,'failed').status,0);
+ assert.equal(x.run('retry',id).status,0); assert.equal(x.run('once').status,0);
+ assert.equal(x.state().jobs.filter(j=>j.kind==='issue' && ['queued','running','launching'].includes(j.status)).length,1);
+});
+test('obsolete queued maintenance snapshots are replaced', t => {
+ const x=fixture(t); assert.equal(x.run('once').status,0);
+ x.put('main','main-b'); assert.equal(x.run('once').status,0);
+ x.put('main','main-c'); assert.equal(x.run('once').status,0);
+ const jobs=x.state().jobs.filter(j=>j.kind==='maintenance');
+ assert.equal(jobs.filter(j=>j.status==='queued').length,1);
+ assert.equal(jobs.find(j=>j.status==='queued').details.main,'main-c');
+ assert.equal(jobs.filter(j=>j.status==='superseded').length,2);
+});
 test('fresh activity, backoff, and changed main after reviewed candidates', t => {
  const x=fixture(t); assert.equal(x.run('once').status,0);
  const s=x.state(), issue=s.jobs.find(j=>j.kind==='issue'), maintenance=s.jobs.find(j=>j.kind==='maintenance');
