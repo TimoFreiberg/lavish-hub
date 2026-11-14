@@ -6,6 +6,70 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { runCaptureWorkers } from '../scripts/visual/workers.mjs';
+import { closeVisualResources } from '../scripts/visual/browser.mjs';
+
+test('capture workers enforce the configured concurrency on actual jobs', async () => {
+  for (const limit of [1, 3]) {
+    let active = 0, maximum = 0, completed = 0;
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const running = runCaptureWorkers(Array.from({ length: 7 }, (_, i) => i), limit, async () => {
+      active++; maximum = Math.max(maximum, active);
+      if (active === limit) release();
+      await gate;
+      active--; completed++;
+    });
+    await running;
+    assert.equal(maximum, limit);
+    assert.equal(completed, 7);
+  }
+});
+
+test('browser launch and visual cleanup failures propagate through the pipeline', { timeout: 600000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'lavish-pipeline-failure-'));
+  const previousShots = process.env.LAVISH_KIT_SHOTS_DIR;
+  const previousBrowser = process.env.LAVISH_KIT_CHROMIUM;
+  try {
+    process.env.LAVISH_KIT_SHOTS_DIR = path.join(root, 'shots');
+    process.env.LAVISH_KIT_CHROMIUM = path.join(root, 'missing-chromium');
+    const { runShots } = await import('../scripts/shots.mjs');
+    for (const cleanupFailure of [false, true]) {
+      if (cleanupFailure) {
+        if (previousBrowser === undefined) delete process.env.LAVISH_KIT_CHROMIUM;
+        else process.env.LAVISH_KIT_CHROMIUM = previousBrowser;
+      }
+      const snapshots = new Map();
+      const result = await runChecks({
+        mode: 'shots', directory: root,
+        publish: async (name, value) => snapshots.set(name, structuredClone(value)),
+        execute: async name => {
+          assert.equal(name, 'shots');
+          return runShots(cleanupFailure ? { close: (browser, lavish) => closeVisualResources({ close: async () => { await browser.close(); throw new Error('injected browser cleanup failure'); } }, lavish) } : {});
+        },
+      });
+      const report = JSON.parse(await readFile(path.join(root, 'shots/report.json'), 'utf8'));
+      if (cleanupFailure) {
+        assert.equal(report.runnerErrors, undefined);
+        assert.ok(report.shots.length > 0);
+        assert.ok(report.shots.every(shot => shot.failures.length === 0));
+        assert.match(report.cleanupErrors.join(' '), /injected browser cleanup failure/);
+      } else {
+        assert.match(report.runnerErrors.join(' '), /browserType\.launch|executable/i);
+        assert.equal(report.cleanupErrors, undefined);
+      }
+      assert.equal(report.cleanup.tempRemoved, true);
+      assert.equal(result.stages.shots.code, 1);
+      assert.equal(result.status, 'failed');
+      assert.equal(snapshots.get('screenshots-ready.json').status, 'failed');
+      assert.equal(snapshots.get('status.json').status, 'failed');
+    }
+  } finally {
+    if (previousShots === undefined) delete process.env.LAVISH_KIT_SHOTS_DIR; else process.env.LAVISH_KIT_SHOTS_DIR = previousShots;
+    if (previousBrowser === undefined) delete process.env.LAVISH_KIT_CHROMIUM; else process.env.LAVISH_KIT_CHROMIUM = previousBrowser;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('standalone readiness identifies the configured screenshot directory', async () => {
   const snapshots = new Map();

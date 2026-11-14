@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { isSelected } from './visual/selection.mjs';
 import { validateReport } from './visual/report-validation.mjs';
+import { runCaptureWorkers } from './visual/workers.mjs';
 import path from 'node:path';
 import { publishDocument } from '../src/document-page.mjs';
 import { variants, scratchDiff, makePage } from './visual/fixtures.mjs';
@@ -70,10 +71,12 @@ function gallery(report) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Screenshot and layout checks</title><style>body{font:16px system-ui;margin:2rem;background:#fafafa;color:#171717}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:1rem}h2{grid-column:1/-1}article{border:1px solid #aaa;padding:1rem;min-width:0}img{width:100%;height:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}a{overflow-wrap:anywhere}h3{overflow-wrap:anywhere}</style></head><body><h1>Screenshot and layout checks</h1><p>${report.shots.length} shots; ${report.shots.filter(shot => shot.failures.length).length} failed. <a href="report.json">JSON report</a></p><p><a href="preview/index.html">Interactive static preview</a>. Static images show the preview; integration images include Lavish chrome and its artifact iframe. Full-page and scroll captures are linked where content scrolls.</p>${groups}</body></html>\n`;
 }
 
+export async function runShots({ launch = launchBrowser, close = closeVisualResources } = {}) {
 const report = { version: 1, matrix: { viewports: [{ width: 1440, height: 900 }, { width: 480, height: 900 }], colorSchemes: ['light', 'dark'], gitDiff: 'Same renderer and parser as jj; equivalent git matrix omitted' }, shots: [] };
 let lavish, browser, server, interrupted = false;
 const timings = {}; const started = performance.now();
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { interrupted = true; browser?.close().catch(() => {}); });
+const interrupt = () => { interrupted = true; browser?.close().catch(() => {}); };
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, interrupt);
 const oldConfig = process.env.XDG_CONFIG_HOME;
 try {
   await rm(out, { recursive: true, force: true }); await mkdir(out);
@@ -99,7 +102,7 @@ try {
   const dist = path.join(lavish.dir, 'dist'); await mkdir(dist);
   execFileSync(process.execPath, [path.join(root, 'build.mjs'), root, dist]);
   const diff = await scratchDiff(lavish.dir);
-  browser = await launchBrowser();
+  browser = await launch();
   const jobs = [];
   // PR fixtures change the shared config, so prepare all pages before concurrent captures.
   for (const variant of variants) for (const viewport of report.matrix.viewports) for (const colorScheme of report.matrix.colorSchemes) {
@@ -154,11 +157,7 @@ try {
     shot.failures = failedChecks(shot.checks); report.shots.push(shot);
     console.log(`${shot.failures.length ? `FAIL ${shot.failures.join(', ')}` : 'PASS'} ${id}${shot.png ? ` shots/${shot.png}` : ''}`);
   }
-  const results = await Promise.allSettled(Array.from({ length: concurrency }, async () => {
-    while (jobs.length) await capture(jobs.shift());
-  }));
-  const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
-  if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '));
+  await runCaptureWorkers(jobs, concurrency, capture);
   timings.checksSeconds = (performance.now() - checksStarted) / 1000;
   report.shots.sort((a, b) => a.id.localeCompare(b.id));
   const reportErrors = validateReport(report, variants, manifest);
@@ -166,7 +165,8 @@ try {
 } catch (error) {
   report.runnerErrors = [error.message]; console.error(error.message);
 } finally {
-  const teardown = await closeVisualResources(browser, lavish);
+  for (const signal of ['SIGINT', 'SIGTERM']) process.off(signal, interrupt);
+  const teardown = await close(browser, lavish);
   if (server?.listening) await new Promise(resolve => server.close(error => { if (error) teardown.errors.push(`Static server cleanup: ${error.message}`); resolve(); }));
   timings.totalSeconds = (performance.now() - started) / 1000;
   report.timings = timings;
@@ -178,4 +178,7 @@ await writeFile(path.join(out, 'report.json'), `${JSON.stringify(report, null, 2
 await writeFile(path.join(out, 'index.html'), gallery(report));
 const failed = report.shots.filter(shot => shot.failures.length).length;
 console.log(`${report.shots.length} shots, ${failed} failed; shots/index.html; cleanup: ${JSON.stringify(report.cleanup || report.cleanupErrors)}`);
-process.exitCode = failed || report.runnerErrors || report.cleanupErrors ? 1 : 0;
+return failed || report.runnerErrors || report.cleanupErrors ? 1 : 0;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) process.exitCode = await runShots();
