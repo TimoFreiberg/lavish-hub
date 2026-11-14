@@ -1,101 +1,104 @@
-# Temporary handoff
+# Handoff status
 
-Delete this file when the remaining work is finished. The work started from
-`570c06bce61f`; the latest commit at handoff is `b05f2358`.
+Updated 2026-11-13, from latest main `7158a154187477428923bfe6746ede7f5aa11d3b`.
+Keep this file until the remaining verification and proposals below are resolved.
+The README rewrite remains owned by the user and was not changed.
 
-## Current state
+## Completed in this change
 
-- The screenshot cleanup and clipping review fixes and the relay promotion and
-  shutdown fixes are in. Test runs use private Lavish and XDG state and audit
-  sessions and processes started by the run. Recovery and concurrent daemon
-  registration have tests.
-- One shared relay daemon handles pages for a user and Lavish state directory.
-  Watched pages render in short-lived child processes. The daemon still invokes
-  the Lavish CLI for polling and other operations. It exits when its last page
-  stops; rerunning the opening command starts a stopped worker.
-- Markdown and PR drafts start in Rendered view and use the page's Send button,
-  labelled `(use this instead of sidebar send)`. Sidebar Send does not reliably
-  save edits. Page Send sends the edit and queued comments; Create PR is a
-  separate action that also sends queued comments. See `docs/markdown.md` and
-  `docs/pr-drafts.md` for conflicts and outside-herdr handling.
-- Consumed feedback goes to the outbox before saves, actions, or delivery. If
-  the outbox write fails repeatedly, the worker attempts emergency storage under
-  `${XDG_DATA_HOME:-$HOME/.local/share}/lavish-kit/recovery/`. Follow
-  `docs/feedback-routing.md` to recover it; don't manually replay an action as
-  well. A failed poll can have an unknown outcome before feedback reaches the
-  worker, and at-least-once delivery can duplicate a message.
-- The user authorizes loss only if both normal outbox storage and XDG emergency
-  recovery fail, with a loud warning. Don't silently discard consumed feedback.
-  Keep the receipt target for each save and action, and record Create PR's launch
-  attempt before calling herdr.
+- Background Lavish polling and replies now use direct loopback HTTP, with
+  explicit support for Lavish 0.1.96, server version/state checks, exclusive
+  listener ownership, cancellation, and no ambiguous consuming-poll retry.
+  Watch-only session checks read the same non-consuming store as the CLI.
+  Opening reviews still uses the CLI. Explicit CLI compatibility remains via
+  `LAVISH_KIT_LAVISH_TRANSPORT=cli`. See `docs/lavish-http.md`.
+- Real-server transport tests cover feedback, competing listeners, reply, end,
+  unsupported versions, wrong state, and truncated responses. Existing outbox,
+  handler, receipt-target, and Create PR launch-attempt guarantees are retained.
+- A reproducible transport RSS comparison covers 1, 5, and 20 pages. At 20,
+  summed RSS dropped from 1343.9 to 123.4 MiB (22 processes to 2). This includes
+  Lavish and polling processes, not herdr, a browser, or the full relay.
+- A separate 20-to-1-page check found no immediate Lavish RSS reduction
+  (64.1 to 66.1 MiB after one second). The final session end stopped the server.
+  Neither that fixture nor the transport comparison proves a whole-app memory
+  target or a long-lived retention problem.
+- Relay default state paths now match the installed Lavish default,
+  `$HOME/.lavish-axi`, rather than the previously assumed XDG state directory.
+- Generated Markdown, PR and diff pages default to dark mode, including syntax
+  highlighting and native controls (issue #1's generated-page portion).
+  Existing user-authored HTML preserves its appearance.
+- Task-list checkboxes have text labels. Code blocks are keyboard-focusable
+  scroll regions. Generated diff pages declare their language.
+- The test runner enumerates test files explicitly instead of passing a
+  directory to Node. Tests, screenshots and memory probes disable Lavish
+  telemetry with its supported `LAVISH_AXI_TELEMETRY=0` option.
+- The new shared renderer helper is included in bundle cache invalidation;
+  dependency fixtures copy the complete source tree.
 
-## Remaining work
+## Verification
 
-### Memory and Lavish integration
+Linux, Node 24.22.1, jj 0.47.1, fish 4.0.2, Lavish 0.1.96:
 
-Replace per-page Lavish CLI polling with direct HTTP only after inspecting the
-installed Lavish distribution. Endpoint discovery is private and version-specific;
-verify poll, reply, end, session listing, and exclusive listener behavior. Pin the
-supported Lavish version and fail loudly on unknown versions. Measure RSS before
-and after with 1, 5, and 20 pages, including Lavish and any child processes.
-The earlier 50–70 MB total target is not verified. Check separately whether the
-Lavish server releases memory after stale sessions end.
+- Final `just test`: 148 tests, 102 passed, 45 failed, 1 optional real-npm test
+  skipped. The 45 failing test names are identical to the unchanged-main
+  baseline (99 passed, 45 failed, 1 skipped). The three new HTTP tests pass.
+- The remaining failures include blocked Chromium startup and Unix socket
+  `EPERM` in relay registration. They are not a clean Linux support verdict.
+- The corrected dependency, diff-shell and HTTP targeted run: 8 passed,
+  1 optional test skipped, no failures. Browser bundles build successfully.
+- Final `just shots` failed before taking any screenshots: Chromium cannot
+  create its process-singleton Unix socket in this command environment.
+  No screenshot or visual inspection of the changed UI was possible.
+- Full-suite cleanup audits reported no private Lavish sessions and no
+  processes carrying the run marker. Screenshot cleanup also passed.
+- `just test-e2e` remains unavailable: no running herdr, `hc`, or `herdr-app`.
+- A cloud-browser attempt could not reach the command runtime's localhost.
+  Official Work docs describe connected desktop and browser-enabled cloud
+  routes, but no supported mobile switch that fixes this socket restriction.
+  See https://learn.chatgpt.com/docs/browser and
+  https://learn.chatgpt.com/docs/get-started-with-work.
 
-### Page lifetime and resume
+## Remaining work for review
 
-The current worker exits on ended sessions and certain missing files or state,
-but it doesn't implement tab-disconnect cleanup or automatic resume. No
-non-consuming tab-connection status has been verified. Don't use a consuming poll
-just to decide whether to clean up.
+See `docs/review-proposals.md` for concrete options and tradeoffs:
 
-The intended behavior is to retain a page inside herdr while its opening agent
-session is live, then remove it when no review tab is connected and the agent is
-gone. Outside herdr, remove it after ten minutes without a connected review tab.
-Keep undelivered feedback in the outbox. Add a Not live banner and a resume
-command or equivalent reopening path once detection and recovery are safe.
+1. Issue #2: unchanged-line expansion. The diff library supports lazy hydration,
+   but we must supply the exact old/new revision contents and verify line
+   coordinates, virtualized layout, split/unified rendering and stdin behavior.
+2. Unify page Send and sidebar Send, then decide Cmd/Ctrl+S semantics.
+3. Inspect narrow diff headers/sidebar in a working browser before redesigning.
+4. Implement lifetime/Not live/resume only with non-consuming browser presence.
+   Lavish 0.1.96 keeps browser counts internally; `/health` exposes listeners,
+   not browser counts. A consuming poll is not an adequate watch-only probe,
+   and observing through an event connection would count as a browser.
+5. Update the external herdr Artifacts/background opener to resume pages once
+   that contract exists. Those dotfiles and their tests are not in this repo.
+6. Run `just shots`, inspect the PNGs, and run `just test-e2e` inside herdr on
+   a machine with working Chromium and Unix sockets. Audit Lavish shell issues
+   separately from generated-page issues; do not claim visual fixes verified.
+7. Measure a complete realistic 1/5/20-page workflow, including renderers,
+   herdr, browser and aged sessions, on macOS and unrestricted Linux.
 
-External dotfiles integration remains: route lavish-kit pages opened from the
-herdr Artifacts modal and automatic background opening through the resume path,
-while leaving other HTML with Lavish. Update the corresponding herdr-app tests.
-The external integration has not been verified in this checkout.
+## Recovery constraints retained
 
-### Recovery and old rendering paths
+No recovery migration or deletion was performed. A consumed batch is written to
+its outbox before saves, actions or terminal delivery. If that persistently
+fails, try XDG emergency recovery; warn loudly and stop if both fail. A failed
+poll may have consumed feedback without returning a complete response, so stop
+and ask for inspection/resend instead of silently retrying it.
 
-Inspect pending outbox and emergency records before changing recovery. A pending
-item can have a generation but no receipt target; it can only acquire a matching
-target, and a mismatch stops processing rather than safely identifying the old
-source. Records without enough information require manual inspection. Preserve
-this constraint and test any migration; don't infer that every recovery record is
-automatically replayable.
+Each save/action keeps its receipt source and reviewed PR repository/revision.
+Create PR records its launch attempt before calling herdr. Pending recovery
+records without receipt targets may acquire only matching-generation targets;
+mismatches stop processing. Records without enough identifying information
+require manual inspection. Never replay a Create PR action manually as well.
+See `docs/feedback-routing.md` for the full procedure.
 
-`src/markdown.mjs` still contains the older read-only Markdown renderer. Check
-its remaining callers, tests, and generated pages before removing it. The CLI's
-Markdown path is already editable; don't describe the legacy renderer as removed.
+`src/markdown.mjs` remains used by the watch renderer, legacy Markdown fixtures,
+and tests. It was not removed. Recheck callers before attempting removal.
 
-### Visual and platform verification
+## Repository state
 
-`just shots` has reported accessibility and layout failures: unlabeled task-list
-checkboxes, light-mode syntax contrast, missing diff page language, keyboard
-access to scrolling code blocks, diff dark mode, and clipped narrow diff headers.
-Lavish's own shell also fails accessibility checks. Reproduce and distinguish
-current failures from fixed ones before changing them. The suite exits nonzero
-on failed checks, and its audit cannot see processes that discard the run marker.
-
-The herdr end-to-end run was unavailable in this session because `herdr-app`
-was not on PATH. Run `just test-e2e` inside a running herdr with `hc` and
-`herdr-app` available; it creates and cleans up its own space and terminals.
-Linux remains unverified. Test there before claiming platform support.
-
-## Working notes
-
-- Read `TESTING.md` before testing. Never run two test commands concurrently in
-  one checkout. After UI changes, run `just shots` and inspect changed PNGs.
-  The large-diff timing and offline browser smoke tests have known intermittent
-  failures.
-- Read `docs/feedback-routing.md` for delivery, retargeting, recovery and
-  worker lifetime. The worker uses the environment of the command that started
-  the shared daemon, including PATH and XDG settings.
-- The separate README rewrite is owned by the user. Don't request or undertake
-  it as part of this handoff. Update other relevant docs when behavior changes.
-- Keep generated pages and worker files outside the reviewed repository. Follow
-  `AGENTS.md` for the repository's privacy and version-control instructions.
+Changes are committed locally with jj. No remote push, bookmark movement,
+issue closure or PR publication was performed. The repository requires the
+operator's approval before pushing or moving bookmarks.

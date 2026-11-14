@@ -36,6 +36,8 @@ test('renders gfm, front matter, shiki, and raw html', async () => {
   assert.doesNotMatch(page.body, /Metadata &amp; title|---/);
   assert.match(page.body, /<table>/);
   assert.match(page.body, /<input\b(?=[^>]*type="checkbox")(?=[^>]*checked)[^>]*>/);
+  assert.match(page.body, /<label><input[^>]+> done<\/label>/);
+  assert.match(page.body, /<pre tabindex="0" role="region" aria-label="Code block"/);
   assert.match(page.body, /id="first-heading"/);
   assert.match(page.body, /href="#first-heading"/);
   assert.match(page.body, /class="shiki /);

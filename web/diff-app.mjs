@@ -21,7 +21,7 @@ const HEADER_HEIGHT = 64;
 function persist() { try { localStorage.setItem('lavish-kit-viewed', JSON.stringify([...state.viewed])); } catch { state.storageFailed = true; renderToolbar(); } }
 function makeWorker() {
   workerUrl = URL.createObjectURL(new Blob([LAVISH_KIT_WORKER_SOURCE], { type: 'text/javascript' }));
-  return new WorkerPoolManager({ poolSize: 1, workerFactory: () => new Worker(workerUrl), onWorkerError: event => { event.preventDefault?.(); fallback(); } }, { theme: 'github-light', langs: [] });
+  return new WorkerPoolManager({ poolSize: 1, workerFactory: () => new Worker(workerUrl), onWorkerError: event => { event.preventDefault?.(); fallback(); } }, { theme: 'github-dark', themeType: 'dark', langs: [] });
 }
 function fallback() {
   if (fallingBack) return; fallingBack = true;
@@ -31,7 +31,7 @@ function fallback() {
 }
 try { worker = makeWorker(); worker.initialize().catch(fallback); } catch { fallback(); }
 function options() { return {
-  theme: 'github-light', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
+  theme: 'github-dark', themeType: 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
   itemMetrics: { diffHeaderHeight: HEADER_HEIGHT }, stickyHeaders: true, pointerEventsOnScroll: true,
   renderCustomHeader: (_metadata, context) => fileHeader(Number(context.item.id)),
   enableGutterUtility: true,

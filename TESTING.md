@@ -28,6 +28,13 @@ catch overflow, clipping, an overlapped button, a zero-size or off-screen
 control, a missing label, and a Lavish-detected layout issue, and pass a clean
 page.
 
+The runner enumerates `*.test.mjs` files explicitly (passing the `test/`
+directory to Node is not portable across supported Node versions). It disables
+Lavish telemetry with `LAVISH_AXI_TELEMETRY=0` for tests and screenshots.
+`test/lavish-http.test.mjs` also checks the pinned real server without needing
+Chromium. Fake-executable suites explicitly select CLI transport; real server
+tests use the default HTTP transport.
+
 To run a single file: `node --test --test-concurrency=1 test/cli.test.mjs`.
 
 ## `just test-e2e`
@@ -92,6 +99,10 @@ External browser requests are blocked, except the Markdown CDN styles, which it
 serves from local development dependencies. A full run takes a few minutes.
 
 After UI work, open the changed PNGs at their original size.
+
+For a transport-only memory comparison at 1, 5, and 20 concurrent polls, run
+`node scripts/measure-lavish.mjs`. See [docs/lavish-http.md](docs/lavish-http.md)
+for what the RSS totals include and exclude.
 
 ## Known flaky tests
 

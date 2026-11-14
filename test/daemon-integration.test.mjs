@@ -1,3 +1,5 @@
+// Fixture executables model the CLI; real HTTP contracts have a separate suite.
+process.env.LAVISH_KIT_LAVISH_TRANSPORT = 'cli';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { access, chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';

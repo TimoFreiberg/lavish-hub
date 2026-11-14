@@ -1,4 +1,4 @@
-:root { color-scheme: light dark; font-family: system-ui, sans-serif; background: light-dark(#fff, #17191c); color: light-dark(#24292f, #e6edf3); }
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: light-dark(#fff, #17191c); color: light-dark(#24292f, #e6edf3); }
 body { margin: 0; }
 [hidden] { display: none !important; }
 header { padding: 1rem 2rem; border-bottom: 1px solid light-dark(#d0d7de, #444c56); }
@@ -19,7 +19,7 @@ button[aria-pressed="true"] { outline: 2px solid light-dark(#0969da, #58a6ff); }
 .document .header-anchor { color: inherit; text-decoration: none; font-size: .7em; opacity: .45; margin-right: .4em; }
 .document .header-anchor:hover, .document .header-anchor:focus { opacity: 1; }
 .document :is(pre, code) { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-@media (prefers-color-scheme: dark) { .document .shiki, .document .shiki span { color: var(--shiki-dark) !important; background-color: var(--shiki-dark-bg) !important; } }
+.document .shiki, .document .shiki span { color: var(--shiki-dark) !important; background-color: var(--shiki-dark-bg) !important; }
 .document table { border-collapse: collapse; display: block; overflow-x: auto; }
 .document :is(th,td) { border: 1px solid light-dark(#d0d7de, #444c56); padding: .35em .65em; text-align: left; vertical-align: top; white-space: pre-wrap; }
 .document pre { overflow-x: auto; padding: 1em; border-radius: .5em; background: light-dark(#f6f8fa, #22272e); }

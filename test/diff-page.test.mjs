@@ -20,7 +20,7 @@ test('data scripts round-trip hostile patch; shell stays fixed and only two data
   const dataTime = (await stat(dataFile)).mtimeMs;
   await writeDiffPage(source, dist, out);
   assert.equal((await stat(dataFile)).mtimeMs, dataTime, 'identical data scripts are not rewritten');
-  assert.match(await readFile(out, 'utf8'), /<html data-lavish-annotate="off">/);
+  assert.match(await readFile(out, 'utf8'), /<html lang="en" data-theme="dark" data-lavish-annotate="off">/);
   const before = (await stat(out)).mtimeMs;
   for (const patch of ['two','three']) { result=await writeDiffPage({...source,patch},dist,out); }
   assert.equal((await stat(out)).mtimeMs,before);

@@ -10,11 +10,16 @@ This index lists one doc per feature or topic. Start with the
 | [diffs.md](diffs.md) | Diff ranges, line comments, keyboard shortcuts, Refresh |
 | [pr-drafts.md](pr-drafts.md) | PR draft files, the PR page, and the `createPr` config for Create PR |
 | [feedback-routing.md](feedback-routing.md) | Delivery inside herdr, polling outside it, the outbox, retarget, worker lifetime |
+| [lavish-http.md](lavish-http.md) | Pinned Lavish HTTP contracts, CLI compatibility mode, transport memory measurements |
 | [files-and-logs.md](files-and-logs.md) | Pages, worker files, locks, logs, config, and message formats |
 
 HTML pages have no doc of their own. `lavish-kit page.html` opens the file
 where it is (or copies it to `--out`), keeps Lavish's native Annotate mode and
 live reload, and has nothing to watch. Everything else about them is in
 [cli.md](cli.md) and [feedback-routing.md](feedback-routing.md).
+
+Generated Markdown, PR, and diff pages use dark mode by default, including
+syntax highlighting and native controls, regardless of the operating system
+theme. Opening an existing HTML file preserves its authored appearance.
 
 Testing is described in [TESTING.md](../TESTING.md).

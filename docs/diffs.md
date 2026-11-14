@@ -3,6 +3,9 @@
 This covers `lavish-kit diff`, which shows a jj or git diff as a Lavish page
 with line comments.
 
+The page and syntax highlighting default to dark mode. Unchanged lines outside
+the supplied patch context are not yet expandable; see issue #2.
+
 ```sh
 lavish-kit diff                    # jj: fork_point(trunk() | @) to @
 lavish-kit diff -r @-

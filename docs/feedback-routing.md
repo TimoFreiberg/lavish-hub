@@ -16,9 +16,8 @@ lavish-kit treats a command as inside herdr when `HC_TERMINAL_ID` is set.
    terminal in `<page>.relay.json`: its address, its `polytoken.session` label
    (if any), and its `herdr.space` label. If `hc` is missing or the terminal
    isn't live, the command fails (Lavish may already have opened the page).
-2. The worker becomes the page's only Lavish listener with
-   `lavish-axi poll PAGE --owner lavish-kit:PAGE`. Don't poll these pages
-   yourself.
+2. The worker becomes the page's only Lavish listener with a direct HTTP long
+   poll, using the owner label `lavish-kit:PAGE`. Don't poll these pages yourself.
 3. For each batch of feedback, the worker writes it to the outbox, handles
    saves and Create PR, then sends one `hc send` message to the target terminal
    with the page title and path, the prompts with their quoted context, and the
@@ -130,8 +129,8 @@ The worker exits when:
   `NOT_FOUND`),
 - another listener replaces its poll (`LISTENER_REPLACED`),
 - it delivered fatal `artifact_failures`,
-- it is watch-only and the no-argument `lavish-axi` session listing succeeds
-  without this page,
+- it is watch-only and the non-consuming Lavish state listing succeeds without
+  this page,
 - the page and its watch and target sidecars are all gone, or a Lavish state
   file that existed at startup disappears.
 
@@ -139,6 +138,19 @@ Failed polls (including `LISTENER_ACTIVE`, when another listener owns the
 page) are logged and retried with backoff of up to 30 seconds, so the worker
 never takes over another listener. Failed listings are logged and retried every
 second.
+
+The default transport supports **Lavish 0.1.96**. Opening a review still uses
+the CLI for server startup and networking. Background polls and replies use
+loopback HTTP; session checks read the same state store as Lavish's listing.
+The adapter checks the server version and state identity before HTTP actions.
+Unknown versions or mismatched state fail with an explicit error; the adapter
+never takes over a listener or retries an ambiguous consuming poll. See
+[lavish-http.md](lavish-http.md) for the verified contracts and measurements.
+
+For explicit CLI compatibility or debugging, start a new worker with
+`LAVISH_KIT_LAVISH_TRANSPORT=cli`. Existing shared workers keep the transport
+and environment they started with. The fake-executable test fixtures use this
+mode; the HTTP tests run independently against a real pinned server.
 
 Nothing restarts a stopped or crashed worker. Rerun the command that opened
 the page to start a new one. Inside herdr, the new worker first finishes

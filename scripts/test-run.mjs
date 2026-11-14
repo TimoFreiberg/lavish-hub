@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -14,9 +14,10 @@ const port = await new Promise((resolve, reject) => {
   server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(error => error ? reject(error) : resolve(port)); });
 });
 const marker = randomUUID();
-const env = { ...process.env, LAVISH_KIT_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
+const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_KIT_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
 delete env.HC_TERMINAL_ID;
-const args = mode === 'test' ? ['--test', '--test-concurrency=1', 'test/'] : ['scripts/shots.mjs'];
+const tests = (await readdir('test')).filter(name => name.endsWith('.test.mjs')).sort().map(name => `test/${name}`);
+const args = mode === 'test' ? ['--test', '--test-concurrency=1', ...tests] : ['scripts/shots.mjs'];
 let status = await new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { env, stdio: 'inherit' });
   child.once('error', reject); child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));

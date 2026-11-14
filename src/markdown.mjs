@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { atomicWrite } from './files.mjs';
+import { accessibleCodeBlocks } from './markdown-accessibility.mjs';
 
 const load = async (deps, name) => import(pathToFileURL(deps.resolve(name)).href);
 
@@ -43,9 +44,10 @@ export async function renderMarkdown(source, deps) {
   ]);
   let rawFrontMatter;
   const md = new MarkdownIt({ html: true, linkify: true });
-  md.use(taskLists).use(anchor, { permalink: anchor.permalink.linkInsideHeader({ symbol: '#' }) });
+  md.use(taskLists, { label: true }).use(anchor, { permalink: anchor.permalink.linkInsideHeader({ symbol: '#' }) });
   md.use(frontMatter, raw => { rawFrontMatter = raw; });
   md.use(await shiki({ themes: { light: 'github-light', dark: 'github-dark' }, fallbackLanguage: 'text' }));
+  md.use(accessibleCodeBlocks);
   const tokens = md.parse(source, {});
   const firstHeading = tokens.findIndex(token => token.type === 'heading_open' && token.tag === 'h1');
   const heading = firstHeading < 0 ? '' : headingText(tokens[firstHeading + 1]);
@@ -86,7 +88,7 @@ export async function writeMarkdown(file, deps, { out } = {}) {
   const title = extracted || path.basename(source);
   const escape = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const html = `<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -107,7 +109,7 @@ export async function writeMarkdown(file, deps, { out } = {}) {
   .document pre { overflow-x: auto; padding: 1em; border-radius: .5em; }
   .document blockquote { border-left: .25em solid var(--color-base-300); padding-left: 1em; }
   .document img { max-width: 100%; } .document .task-list-item { list-style: none; }
-  @media (prefers-color-scheme: dark) { .shiki, .shiki span { color: var(--shiki-dark) !important; background-color: var(--shiki-dark-bg) !important; } }
+  .shiki, .shiki span { color: var(--shiki-dark) !important; background-color: var(--shiki-dark-bg) !important; }
 </style>
 </head>
 <body><main class="document prose">${metadata}\n${body}</main></body>

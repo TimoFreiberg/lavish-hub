@@ -11,6 +11,9 @@ markdown-it with links, tables, task lists, raw HTML, heading links and Shiki
 syntax highlighting. YAML frontmatter is shown as metadata. Both views support
 Lavish annotations.
 
+Generated pages default to dark mode. Task-list checkboxes have text labels,
+and code blocks can receive keyboard focus for horizontal scrolling.
+
 ## Sending edits
 
 Press the page's **Send** button, labelled `(use this instead of sidebar send)`.

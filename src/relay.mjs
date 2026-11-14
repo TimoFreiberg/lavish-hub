@@ -14,6 +14,7 @@ import { saveTag } from './save-message.mjs';
 import { actionTag } from './action-message.mjs';
 import { handleAction } from './pr-action.mjs';
 import { watchLoop } from './watch.mjs';
+import { lavishHttpRun } from './lavish-http.mjs';
 
 const exec = promisify(execFile);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -333,7 +334,7 @@ export async function withPublication(file, fn) {
 }
 // Keep the socket path short enough for macOS, even when XDG paths are long.
 async function daemonPaths() {
-  let state = path.resolve(process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.local/state/lavish-axi'));
+  let state = path.resolve(process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.lavish-axi'));
   // Resolve the existing ancestor, retaining missing components for first use.
   const missing = [];
   while (true) {
@@ -491,9 +492,9 @@ export async function relayPage(file, { write = atomicWrite, log = () => {}, lif
       return;
     }
     const deps = await ensureDeps();
-    const { decode } = await import(pathToFileURL(deps.resolve('@toon-format/toon')).href);
+    const { decode, encode } = await import(pathToFileURL(deps.resolve('@toon-format/toon')).href);
     log(`relay started for ${file} (pid ${process.pid})`);
-    const run = (name, args) => exec(name, args, { maxBuffer: 32 * 1024 * 1024, signal: controller.signal });
+    const run = lavishHttpRun({ encode, signal: controller.signal, run: (name, args) => exec(name, args, { maxBuffer: 32 * 1024 * 1024, signal: controller.signal }) });
     const sleep = async ms => { try { await delay(ms, undefined, { signal: controller.signal }); } catch (error) { if (error.name !== 'AbortError') throw error; } };
     const handlers = {
       [saveTag]: handleSave,
@@ -534,7 +535,7 @@ export async function relayPage(file, { write = atomicWrite, log = () => {}, lif
     if ((await readSpec()).delivery) await startDelivery();
     ready({ running: true, delivery: Boolean(deliveryTask) });
     const exists = async name => { try { await stat(name); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
-    const stateDir = process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.local', 'state', 'lavish-axi');
+    const stateDir = process.env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.lavish-axi');
     const stateFile = path.join(stateDir, 'state.json');
     const hadState = await exists(stateFile);
     await watch(file, { readSpec, deps, run, decode, log, sleep, signal: controller.signal,
