@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { relayPaths, relayLog } from '../src/relay.mjs';
+import { cleanupTerminals } from './relay-e2e-cleanup.mjs';
 const exec = promisify(execFile);
 const cli = path.resolve(import.meta.dirname, '../bin/lavish-kit');
 const session = `lavish-relay-e2e-${process.pid}`;
@@ -32,6 +33,7 @@ const until = async fn => {
   while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 50)); }
   throw new Error('E2E readiness timeout');
 };
+let primaryError;
 try {
   await mkdir(bin); await mkdir(path.join(config, 'lavish-kit'), { recursive: true });
   await executable('create-pr-stub', `const fs=require('node:fs'); const args=process.argv.slice(2); const source=args[args.indexOf('--body-file')+1]; fs.writeFileSync(${JSON.stringify(captureFile)},JSON.stringify({args,cwd:process.cwd(),terminal:process.env.HC_TERMINAL_ID,text:fs.readFileSync(source,'utf8')})); console.log('stub-create-pr: '+JSON.stringify(args)); console.log('No GitHub access');`);
@@ -177,9 +179,11 @@ const launch={space:${JSON.stringify(space)},tab:${JSON.stringify(tab)},terminal
   assert.ok(outsideTrace.every(args => !['poll', 'reply', 'end'].includes(args[0])));
   await assert.rejects(access(relayPaths(outsideFile).target));
   console.log('PASS: outside-herdr command returned, Markdown updated in the browser, watch-only worker never polled, and real session end stopped it.');
+} catch (error) {
+  primaryError = error;
 } finally {
-  let cleanupError;
-  try { if (browser) await browser.close(); } catch (error) { cleanupError ??= error; }
+  const errors = [];
+  try { if (browser) await browser.close(); } catch (error) { errors.push(error); }
   for (const page of [file, prFile, outsideFile]) {
     try {
     try { await exec('lavish-axi', ['end', page]); } catch {}
@@ -188,14 +192,12 @@ const launch={space:${JSON.stringify(space)},tab:${JSON.stringify(tab)},terminal
     await rm(relayPaths(page).watch, { force: true });
     await rm(relayPaths(page).target, { force: true });
     await until(async () => { try { await access(relayPaths(page).lock); return false; } catch { return true; } });
-    } catch (error) { cleanupError ??= error; }
+    } catch (error) { errors.push(error); }
   }
-  // The mock journals its terminal before returning, even if later assertions fail.
-  try { const terminal = JSON.parse(await readFile(journal)); if (terminal) terminals.push(terminal); } catch {}
-  for (const terminal of new Set(terminals)) {
-    try { await run('hc', ['kill', terminal]); } catch {}
-    try { await run('hc', ['rm', terminal]); } catch {}
+  try { await cleanupTerminals({ journal, terminals, dir, run, errors }); }
+  catch (error) {
+    if (primaryError) throw new AggregateError([primaryError, error], 'E2E and cleanup failed');
+    throw error;
   }
-  if (!cleanupError) await rm(dir, { recursive: true, force: true });
-  if (cleanupError) throw cleanupError;
 }
+if (primaryError) throw primaryError;
