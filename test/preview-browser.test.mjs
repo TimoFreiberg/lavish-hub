@@ -55,6 +55,8 @@ test('preview simulates saves and conflicts without external requests', async ()
       assert.equal(await link.count(), 1, entry.id);
       await link.click();
       assert.equal(new URL(page.url()).pathname, new URL(entry.url, base).pathname, entry.id);
+      await page.getByRole('complementary', { name: 'Preview controls' }).waitFor();
+      assert.equal(await page.evaluate(() => !!window.lavishPreview && window.lavish === window.lavishPreview), true, `${entry.id} uses the preview adapter`);
       if (entry.kind === 'diff') {
         await page.locator('.sidebar').waitFor();
         if (entry.id !== 'diff-empty') await page.locator('[data-content] [data-line-type="change-addition"] span[style]').first().waitFor();
@@ -170,7 +172,11 @@ test('preview simulates saves and conflicts without external requests', async ()
     await page.keyboard.press('s'); await page.getByRole('button', { name: 'Split', exact: true }).waitFor();
     await page.getByRole('link', { name: /Open in Zed/ }).first().click();
     await page.getByText('Opening an editor is unavailable in the demo.').waitFor();
-    await page.getByRole('button', { name: /Copy Zed command/ }).first().click();
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: text => { window.copiedCommand = text; return Promise.resolve(); } } }));
+    const copy = page.getByRole('button', { name: /Copy Zed command/ }).first();
+    const copyDetails = await copy.evaluate(button => ({ path: button.closest('.file-header').dataset.file, line: button.getAttribute('aria-label').match(/:(\d+)$/)[1] }));
+    await copy.click();
+    assert.equal(await page.evaluate(() => window.copiedCommand), `zed '/example/repo/${copyDetails.path}:${copyDetails.line}'`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     const touchTarget = async (selector) => {
       const control = page.locator(selector).first();
@@ -181,6 +187,19 @@ test('preview simulates saves and conflicts without external requests', async ()
       assert.ok(hit, `${selector} must be the reachable control`);
     };
     for (const selector of ['#preview-reset', '#preview-send', '[aria-label="Theme"]', '.file-link', '.toolbar button']) await touchTarget(selector);
+    await page.goto(`${base}markdown-document/page/index.html`);
+    const paragraph = page.locator('p').filter({ hasText: 'AReallyLongUnbrokenIdentifier' });
+    const wrapping = await paragraph.evaluate(element => {
+      const range = document.createRange(); range.selectNodeContents(element);
+      return { lines: range.getClientRects().length, right: element.getBoundingClientRect().right, width: document.documentElement.clientWidth };
+    });
+    assert.ok(wrapping.lines > 1 && wrapping.right <= wrapping.width, `long paragraph wraps within viewport: ${JSON.stringify(wrapping)}`);
+    const codeScroll = await page.locator('pre').filter({ hasText: 'AReallyLongUnbrokenCodeLine' }).evaluate(element => {
+      element.scrollLeft = element.scrollWidth;
+      return { scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, scrollLeft: element.scrollLeft };
+    });
+    assert.ok(codeScroll.scrollWidth > codeScroll.clientWidth && codeScroll.scrollLeft > 0, `long code line remains horizontally reachable: ${JSON.stringify(codeScroll)}`);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.goto(`${base}task-short-edit/page/index.html`);
     await page.locator('#editor').fill('Touch edit');
     await touchTarget('#save');
