@@ -1,6 +1,6 @@
 # Interactive fixture preview
 
-Run `just preview` to build the ignored `preview/` directory, or `just preview /path/to/empty-directory` to choose an empty output directory. If a generated preview is found, the command preserves the entire directory, including any personal files, in a uniquely named `preview-previous-*/preview` sibling and prints its location. Review and remove that backup yourself when no longer needed. Unrecognized nonempty directories are refused. Serve the output over HTTP with any static server, for example:
+Run `just preview` to build the ignored `preview/` directory, or `just preview /path/to/empty-directory` to choose an empty output directory. If a generated preview is found, the command preserves the entire directory, including any personal files, in a uniquely named sibling directory (for example, `preview-previous-*/preview` for the default output) and prints its location. Review and remove that backup yourself when no longer needed. Unrecognized nonempty directories are refused. Serve the output over HTTP with any static server, for example:
 
 ```sh
 just preview
