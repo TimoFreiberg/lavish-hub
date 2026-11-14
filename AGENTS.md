@@ -33,9 +33,14 @@ local and outside the reviewed repository.
   your agent session ID and workspace as owner, and wait if held. Clear a
   stale lock only after operator confirmation that its owner is no longer
   integrating. Never release another session's lock.
-- While holding the lock, fetch `origin` and rebase your task commits onto
-  `main@origin`. Stop if this would include unrelated unpublished work or
-  discard unrelated local `main` commits. Resolve conflicts before QA.
+- While holding the lock, fetch `origin` and default to rebasing all local
+  changes onto `main@origin` for linear history, including unpublished ancestor
+  commits and local `main` commits, not just the current task's commits. Their
+  presence alone is not a reason to stop. Preserve unrelated work; coordinate
+  before rewriting another session's active commits, and stop if preservation
+  is uncertain. This rebase default does not authorize publishing unrelated
+  work that is not approved for publication. Resolve conflicts before QA;
+  the lock, full QA, and no-force-push requirements still apply.
 - Run `just check` in that workspace. It installs dependencies exclusively,
   generates and audits the full screenshot matrix first, then runs the full test
   and real-`hc` e2e suites with separate temporary state and ports. Once it prints
