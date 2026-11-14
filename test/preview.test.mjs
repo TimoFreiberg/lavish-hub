@@ -1,10 +1,30 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { variants, variantId } from '../scripts/visual/fixtures.mjs';
+
+test('legacy preview is preserved and unrelated output is refused', async () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'preview-legacy-'));
+  const dir = path.join(parent, 'preview');
+  try {
+    await mkdir(dir);
+    await writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ version: 1, pages: [{ id: 'html-document', url: 'html-document/page/index.html' }] }));
+    await writeFile(path.join(dir, 'personal.txt'), 'preserve me');
+    execFileSync(process.execPath, ['scripts/preview.mjs', dir], { cwd: root, stdio: 'pipe' });
+    const backup = (await readdir(parent)).find(name => name.startsWith('preview-legacy-'));
+    assert.ok(backup);
+    assert.equal(await readFile(path.join(parent, backup, 'preview', 'personal.txt'), 'utf8'), 'preserve me');
+    assert.equal(JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8')).generator, 'lavish-kit-preview');
+    const unrelated = path.join(parent, 'unrelated'); await mkdir(unrelated);
+    await writeFile(path.join(unrelated, 'personal.txt'), 'untouched');
+    assert.throws(() => execFileSync(process.execPath, ['scripts/preview.mjs', unrelated], { cwd: root, stdio: 'pipe' }));
+    assert.equal(await readFile(path.join(unrelated, 'personal.txt'), 'utf8'), 'untouched');
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
 
 test('preview generator writes portable fixture pages and provenance', async () => {
   const root = path.resolve(import.meta.dirname, '..');

@@ -7,6 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
+test('standalone readiness identifies the configured screenshot directory', async () => {
+  const snapshots = new Map();
+  await runChecks({ mode: 'shots', directory: '<artifacts>', shotsDirectory: '/tmp/alternate-shots', execute: async () => 0, publish: async (name, value) => snapshots.set(name, structuredClone(value)) });
+  assert.equal(snapshots.get('screenshots-ready.json').directory, '/tmp/alternate-shots');
+});
+
 test('test worker count rejects invalid bounds before starting work', () => {
   for (const count of ['0', '9', '1.5', 'invalid']) {
     const result = spawnSync(process.execPath, ['scripts/test-run.mjs', 'test'], { env: { ...process.env, LAVISH_KIT_TEST_JOBS: count }, encoding: 'utf8' });

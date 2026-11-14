@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 const root = path.resolve(import.meta.dirname, '..');
 
-export async function runChecks({ mode = 'all', directory, execute, publish, signal } = {}) {
+export async function runChecks({ mode = 'all', directory, execute, publish, signal, shotsDirectory = '../../shots' } = {}) {
   if (!['all', 'test', 'e2e', 'shots'].includes(mode)) throw new Error('Expected all, test, e2e, or shots');
   const result = { version: 1, status: 'running', screenshotReviewRequired: mode === 'all' || mode === 'shots', stages: {} };
   const stage = async name => {
@@ -26,7 +26,7 @@ export async function runChecks({ mode = 'all', directory, execute, publish, sig
   if (mode === 'all' || mode === 'shots') {
     const code = await stage('shots');
     // Readiness means generation and cleanup finished, not that checks passed.
-    await publish('screenshots-ready.json', { version: 1, status: code === 0 ? 'passed' : 'failed', directory: mode === 'all' ? 'shots' : '../../shots', reviewRequired: true });
+    await publish('screenshots-ready.json', { version: 1, status: code === 0 ? 'passed' : 'failed', directory: mode === 'all' ? 'shots' : shotsDirectory, reviewRequired: true });
     console.log(`Screenshots ready: ${directory}/screenshots-ready.json (inspection required)`);
   }
   if (mode === 'all') await Promise.all([stage('test'), stage('e2e')]);
@@ -86,7 +86,8 @@ async function main() {
         });
       } finally { await log.close(); }
     };
-    const result = await runChecks({ mode, directory, execute, publish, signal: cancellation.signal });
+    const shotsDirectory = process.env.LAVISH_KIT_SHOTS_DIR ? path.resolve(process.env.LAVISH_KIT_SHOTS_DIR) : '../../shots';
+    const result = await runChecks({ mode, directory, execute, publish, signal: cancellation.signal, shotsDirectory });
     // Publication completes the result; later signals must not change only the exit code.
     finalized = true;
     console.log(`Correctness ${result.status}: ${directory}/status.json${result.screenshotReviewRequired ? '; screenshot inspection still required' : ''}`);
