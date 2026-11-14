@@ -88,6 +88,5 @@ h1 { font-size: 16px; margin: 0; flex: none; }
   .sidebar { flex-basis: 120px; }
   .toolbar { flex-wrap: wrap; }
   .heading, .titles { min-width: 0; }
-  button { min-height: 36px; }
-  .file-actions button, button.icon { min-height: 26px; }
+  .toolbar button, .file-link { min-height: 44px; min-width: 44px; }
 }

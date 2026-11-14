@@ -121,13 +121,22 @@ test('preview simulates saves and conflicts without external requests', async ()
     await page.locator('.file-link').first().waitFor();
     await page.keyboard.press('s'); await page.getByRole('button', { name: 'Unified' }).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    for (const selector of ['#preview-reset', '#preview-send', '[aria-label="Theme"]']) {
-      const control = page.locator(selector);
+    const touchTarget = async (selector) => {
+      const control = page.locator(selector).first();
+      await control.scrollIntoViewIfNeeded();
       const box = await control.boundingBox();
-      assert.ok(box.width >= 44 && box.height >= 44, `${selector} touch target: ${JSON.stringify(box)}`);
+      assert.ok(box && box.width >= 44 && box.height >= 44, `${selector} touch target: ${JSON.stringify(box)}`);
       const hit = await control.evaluate((element, { x, y }) => element.contains(document.elementFromPoint(x, y)), { x: box.x + box.width / 2, y: box.y + box.height / 2 });
       assert.ok(hit, `${selector} must be the reachable control`);
-    }
+    };
+    for (const selector of ['#preview-reset', '#preview-send', '[aria-label="Theme"]', '.file-link', '.toolbar button']) await touchTarget(selector);
+    await page.goto(`${base}task-short-edit/page/index.html`);
+    await page.locator('#editor').fill('Touch edit');
+    await touchTarget('#save');
+    await page.locator('#preview-external').click();
+    for (const selector of ['#keep', '#reload']) await touchTarget(selector);
+    await page.goto(`${base}pr-configured-edit/page/index.html`);
+    await touchTarget('#create-pr');
     assert.deepEqual(forbidden, []);
     assert.deepEqual(missing, []);
     assert.equal(await fixtureHash(), before);
