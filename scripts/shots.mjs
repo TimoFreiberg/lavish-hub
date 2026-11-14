@@ -12,7 +12,7 @@ import { scanDocument, failedChecks, partitionAccessibility } from './visual/che
 
 const root = path.resolve(import.meta.dirname, '..');
 const fixtures = path.join(root, 'test/visual/fixtures');
-const out = path.join(root, 'shots');
+const out = process.env.LAVISH_KIT_SHOTS_DIR ? path.resolve(process.env.LAVISH_KIT_SHOTS_DIR) : path.join(root, 'shots');
 const deps = createRequire(import.meta.url);
 const escape = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
 const variants = [
@@ -135,11 +135,19 @@ try {
   execFileSync(process.execPath, [path.join(root, 'build.mjs'), root, dist]);
   const diff = await scratchDiff(lavish.dir);
   browser = await launchBrowser();
+  const jobs = [];
+  // Preparation uses the configured XDG directory; finish it before checking pages.
   for (const variant of variants) for (const viewport of report.matrix.viewports) for (const colorScheme of report.matrix.colorSchemes) {
     if (interrupted) throw new Error('Screenshot run interrupted');
     const id = [variant.kind, variant.name, variant.view, viewport.width === 1440 ? 'wide' : 'narrow', colorScheme].filter(Boolean).join('-');
     const dir = path.join(lavish.dir, id); await mkdir(dir);
     const artifact = await makePage(variant, dir, dist, diff, lavish.env);
+    jobs.push({ variant, viewport, colorScheme, id, artifact });
+  }
+  const concurrency = Number(process.env.LAVISH_KIT_SHOT_JOBS || 3);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('LAVISH_KIT_SHOT_JOBS must be an integer from 1 to 8');
+  async function capture({ variant, viewport, colorScheme, id, artifact }) {
+    if (interrupted) throw new Error('Screenshot run interrupted');
     const context = await browser.newContext({ viewport, colorScheme }); const page = await context.newPage();
     const pageErrors = [], consoleErrors = [];
     const sanitize = text => text.replaceAll(lavish.dir, '<temp>').replace(/http:\/\/(?:localhost|127\.0\.0\.1):\d+/g, '<lavish>').replace(/\/(artifact|api|session)\/[a-f0-9]{16}/g, '/$1/<session>');
@@ -169,6 +177,12 @@ try {
     shot.failures = failedChecks(shot.checks); report.shots.push(shot);
     console.log(`${shot.failures.length ? `FAIL ${shot.failures.join(', ')}` : 'PASS'} shots/${shot.png}`);
   }
+  const results = await Promise.allSettled(Array.from({ length: concurrency }, async () => {
+    while (jobs.length) await capture(jobs.shift());
+  }));
+  const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+  if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '));
+  report.shots.sort((a, b) => a.id.localeCompare(b.id));
 } catch (error) {
   report.runnerErrors = [error.message]; console.error(error.message);
 } finally {

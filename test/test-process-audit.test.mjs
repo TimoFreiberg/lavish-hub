@@ -4,6 +4,13 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { markedProcesses } from '../scripts/test-process-audit.mjs';
 
+test('process audit does not report its own snapshot process', () => {
+  const previous = process.env.LAVISH_KIT_TEST_RUN;
+  const marker = randomUUID(); process.env.LAVISH_KIT_TEST_RUN = marker;
+  try { assert.deepEqual(markedProcesses(marker), []); }
+  finally { if (previous === undefined) delete process.env.LAVISH_KIT_TEST_RUN; else process.env.LAVISH_KIT_TEST_RUN = previous; }
+});
+
 test('process audit detects a detached child with the run marker in its arguments', async () => {
   const marker = randomUUID();
   const env = { ...process.env }; delete env.LAVISH_KIT_TEST_RUN;

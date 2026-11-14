@@ -7,11 +7,42 @@ Besides the runtime requirements in the [README](README.md), the tests need
 `just`, fish, ripgrep, and Playwright's cached Chromium. Set
 `LAVISH_KIT_CHROMIUM` to use another Chromium executable.
 
-Never run two of these at once in one checkout. `just test` runs `npm ci`,
-which replaces `node_modules` while the other run reads it, and the browser
-tests use Chromium. Each full run uses private Lavish and XDG directories and
+## Complete correctness run
+
+Run `just check` (or `node scripts/check.mjs all`) for the entire pipeline.
+It can run in the background: `just check > check.log 2>&1 &`. It installs with
+`npm ci` once, generates all screenshots first, then overlaps the full test and
+real-`hc` e2e suites. Every invocation announces a unique ignored
+`.checks/<run>/` directory containing stage logs and atomic `status.json` updates.
+After screenshot generation **and cleanup**, `screenshots-ready.json` appears
+and the CLI prints `Screenshots ready`. Open that run's `shots/index.html` and
+inspect PNGs at original size while the remaining suites run. The marker reports
+whether screenshot checks passed; readiness itself is not success. The final
+CLI exit status is nonzero for any failed stage, spawn failure, signal, or cleanup
+audit. `status.json` records each stage's code and elapsed seconds. Visual review
+is mandatory and separately recorded by the reviewer, never automatically
+claimed by the command. Runs retain their logs and screenshots on success and
+failure; remove old `.checks/<run>/` directories when no longer needed.
+
+Do not overlap independent correctness commands or `npm ci` in one checkout.
+The four public commands share `.checks/lock` and reject overlap. A crashed
+runner can leave a lock; inspect `owner.json` and confirm its owner has stopped
+before removing it. Direct `node --test` and `scripts/test-run.mjs` calls bypass
+this guard. The actual unsafe resources are dependency replacement and shared
+standalone `shots/` output, not Chromium itself. Bounded concurrency inside the
+runner is supported: each test group and e2e run has private Lavish/XDG state,
+a distinct port, and its own leak marker; each screenshot uses a separate
+browser context and output filename. Screenshot preparation remains serial
+because PR fixtures change the private configuration. Set
+`LAVISH_KIT_TEST_JOBS=1 LAVISH_KIT_SHOT_JOBS=1` for serial diagnosis; each accepts
+1–8 (default 3). More workers may hurt latency-sensitive browser tests on busy
+machines. No test or screenshot cases are removed by scheduling.
+
+Each full run uses private Lavish and XDG directories and
 checks the private Lavish session list and looks for processes inheriting a unique
-run marker, including detached children. Relay workers also carry the marker in
+run marker, including detached children. The final audit allows up to five
+seconds for normal detached shutdown before failing, without killing processes.
+Relay workers also carry the marker in
 their arguments. The screenshot helper checks its own separate private sessions
 before removing its state. Processes that discard the marker cannot be identified
 by this audit. On failure, the run directory is
@@ -19,8 +50,10 @@ retained for inspection.
 
 ## `just test`
 
-Runs `npm ci`, then every file in `test/` with `node --test
---test-concurrency=1` (one file at a time). Set `LAVISH_KIT_REAL_NPM=1` to add
+Runs `npm ci`, then every `*.test.mjs` file in `test/`, balanced across three
+isolated groups. Each group uses `node --test --test-concurrency=1`; tests within
+a file retain their original order and real subprocess/browser behavior. Set
+`LAVISH_KIT_REAL_NPM=1` to add
 a first-run test against the real npm registry.
 
 It includes a small real-Lavish self-test of the screenshot checks: they must
@@ -39,8 +72,11 @@ To run a single file: `node --test --test-concurrency=1 test/cli.test.mjs`.
 
 ## `just test-e2e`
 
-Runs `test/relay-e2e.mjs`. It requires a working `hc` service, but not the
-herdr desktop app. It creates a scratch jj repository and isolated terminals
+Runs `test/relay-e2e.mjs` through the isolated runner. It requires a working
+`hc` installation, but not the herdr desktop app. The runner starts and stops
+only its own private `HC_SESSION`, with a short private socket directory under
+`/tmp` to fit macOS socket-path limits. It never stops the user's service.
+It creates a scratch jj repository and isolated terminals
 (`hc run --bg --no-parent --no-notify`) with synthetic space labels, and checks:
 
 - delivery follows a moved session label,
@@ -109,6 +145,30 @@ After UI work, open the changed PNGs at their original size.
 For a transport-only memory comparison at 1, 5, and 20 concurrent polls, run
 `node scripts/measure-lavish.mjs`. See [docs/lavish-http.md](docs/lavish-http.md)
 for what the RSS totals include and exclude.
+
+## Timing comparison
+
+Measured on the same macOS checkout and installed tools, against base
+`ea94b395edd61f7273d0c331292998b8b38a36ee`, using `/usr/bin/time -p` around
+each standalone command, one command at a time:
+
+| Command | Base | Bounded concurrency | Change |
+| --- | ---: | ---: | ---: |
+| `just test` | 277.91 s | 96.51 s | 65% less wall time |
+| `just test-e2e` | 39.38 s | 40.71 s | private service adds 1.33 s |
+| `just shots` | 340.79 s | 160.84 s | 53% less wall time |
+
+These are single-run comparisons, not thresholds. The base had 162 passing
+tests and one opt-in registry skip. All original tests remain, with seven new
+pipeline/audit regression tests. Screenshots retain all 60 viewport cases and
+additional full-page/scroll captures, real Lavish diagnostics, accessibility,
+and geometry checks. The e2e suite still exercises real `hc`, browser save/watch,
+moved-session delivery, and Create PR's persisted launch checkpoint. The main
+gains come from overlapping independent real browser/subprocess work and taking
+one process snapshot instead of launching `ps` once per host process. Build
+and dependency tools are unchanged because their measured cost did not justify
+a rewrite. Parallel scheduling uses more peak CPU/memory and can expose timing
+flakiness under host load. Linux remains supported but was not benchmarked here.
 
 ## Known flaky tests
 

@@ -1,9 +1,12 @@
+# One install, screenshots first, then isolated correctness suites.
+check:
+    node scripts/check.mjs all
+
 test:
-    npm ci
-    node scripts/test-run.mjs test
+    node scripts/check.mjs test
 
 test-e2e:
-    node test/relay-e2e.mjs
+    node scripts/check.mjs e2e
 
 shots:
-    node scripts/test-run.mjs shots
+    node scripts/check.mjs shots

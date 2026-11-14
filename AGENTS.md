@@ -36,13 +36,21 @@ local and outside the reviewed repository.
 - While holding the lock, fetch `origin` and rebase your task commits onto
   `main@origin`. Stop if this would include unrelated unpublished work or
   discard unrelated local `main` commits. Resolve conflicts before QA.
-- Run `just test`, `just test-e2e`, and `just shots` sequentially in that
-  workspace, then visually inspect the resulting PNGs at original size.
-  Never run two test commands at once in one checkout. All checks are
-  mandatory, including for documentation changes; missing prerequisites
-  (including a working `hc` service) block integration. Automated tests mock
-  `herdr-app` and do not require its desktop application. Any fixes require fresh QA on the
-  exact commits to be pushed.
+- Run `just check` in that workspace. It installs dependencies exclusively,
+  generates and audits the full screenshot matrix first, then runs the full test
+  and real-`hc` e2e suites with separate temporary state and ports. Once it prints
+  `Screenshots ready`, visually inspect the PNGs in the announced artifact
+  directory at original size while the remaining checks run. Wait for exit zero
+  and inspect `status.json`; screenshot readiness alone is not a pass. Record
+  visual inspection separately: automated checks cannot sign it off.
+  The runner's bounded concurrency is allowed; do not overlap independent test
+  commands or `npm ci` in one checkout. The public commands enforce a shared
+  `.checks/lock` because dependency installation and standalone `shots/` output
+  are mutable. Direct test invocations bypass that lock and must not overlap.
+  All checks remain mandatory, including for documentation changes; missing
+  prerequisites (including a working `hc` service) block integration. Automated
+  tests mock `herdr-app` and do not require its desktop application. Any fixes
+  require fresh QA on the exact commits to be pushed.
 - After QA passes, move local `main` to the tested task tip and push only
   `main` to `origin`, never force-push. If remote `main` advances, fetch,
   rebase onto the new `main@origin`, and repeat all QA before moving local

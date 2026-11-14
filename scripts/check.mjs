@@ -1,0 +1,79 @@
+import { spawn } from 'node:child_process';
+import { mkdir, writeFile, rename, open, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+
+const root = path.resolve(import.meta.dirname, '..');
+
+export async function runChecks({ mode = 'all', directory, execute, publish } = {}) {
+  if (!['all', 'test', 'e2e', 'shots'].includes(mode)) throw new Error('Expected all, test, e2e, or shots');
+  const result = { version: 1, status: 'running', screenshotReviewRequired: mode === 'all' || mode === 'shots', stages: {} };
+  const stage = async name => {
+    const start = performance.now();
+    let code;
+    try { code = await execute(name, directory); }
+    catch (error) { result.stages[name] = { code: 1, error: error.message, seconds: (performance.now() - start) / 1000 }; await publish('status.json', result); return 1; }
+    result.stages[name] = { code, seconds: (performance.now() - start) / 1000 };
+    await publish('status.json', result);
+    return code;
+  };
+  await publish('status.json', result);
+  if (mode === 'all' || mode === 'test') {
+    if (await stage('install')) { result.status = 'failed'; await publish('status.json', result); return result; }
+  }
+  if (mode === 'all' || mode === 'shots') {
+    const code = await stage('shots');
+    // Readiness means generation and cleanup finished, not that checks passed.
+    await publish('screenshots-ready.json', { version: 1, status: code === 0 ? 'passed' : 'failed', directory: mode === 'all' ? 'shots' : '../../shots', reviewRequired: true });
+    console.log(`Screenshots ready: ${directory}/screenshots-ready.json (inspection required)`);
+  }
+  if (mode === 'all') await Promise.all([stage('test'), stage('e2e')]);
+  else if (mode !== 'shots') await stage(mode);
+  result.status = Object.values(result.stages).some(stage => stage.code !== 0) ? 'failed' : 'passed';
+  await publish('status.json', result);
+  return result;
+}
+
+async function main() {
+  const mode = process.argv[2] || 'all';
+  const lock = path.join(root, '.checks', 'lock');
+  await mkdir(path.dirname(lock), { recursive: true });
+  try { await mkdir(lock); }
+  catch (error) { if (error.code === 'EEXIST') throw new Error('Another correctness command owns .checks/lock; wait for it to finish (remove a stale lock only after confirming its owner stopped)'); throw error; }
+  const directory = path.join(root, '.checks', `${Date.now()}-${randomUUID().slice(0, 8)}`);
+  try {
+    await writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, directory }));
+    await mkdir(directory);
+    console.log(`Correctness artifacts: ${directory}`);
+    const publish = async (name, value) => {
+      const destination = path.join(directory, name), temporary = `${destination}.${randomUUID()}.tmp`;
+      await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`); await rename(temporary, destination);
+    };
+    const execute = async name => {
+      const log = await open(path.join(directory, `${name}.log`), 'w');
+      const args = name === 'install' ? ['ci'] : ['scripts/test-run.mjs', name];
+      const env = { ...process.env };
+      if (mode === 'all') env.LAVISH_KIT_SHOTS_DIR = path.join(directory, 'shots');
+      console.log(`Starting ${name}; log: ${directory}/${name}.log`);
+      try {
+        return await new Promise((resolve, reject) => {
+          const child = spawn(name === 'install' ? 'npm' : process.execPath, args, { cwd: root, env, stdio: ['ignore', log.fd, log.fd] });
+          const forward = signal => child.kill(signal);
+          const interrupt = () => forward('SIGINT'), terminate = () => forward('SIGTERM');
+          process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
+          const cleanup = () => { process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); };
+          child.once('error', error => { cleanup(); reject(error); });
+          child.once('exit', code => { cleanup(); console.log(`${name}: ${code === 0 ? 'PASS' : 'FAIL'}`); resolve(code ?? 1); });
+        });
+      } finally { await log.close(); }
+    };
+    const result = await runChecks({ mode, directory, execute, publish });
+    console.log(`Correctness ${result.status}: ${directory}/status.json${result.screenshotReviewRequired ? '; screenshot inspection still required' : ''}`);
+    process.exitCode = result.status === 'passed' ? 0 : 1;
+  } finally { await rm(lock, { recursive: true, force: true }); }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await main().catch(error => { console.error(error.message); process.exitCode = 1; });
+}

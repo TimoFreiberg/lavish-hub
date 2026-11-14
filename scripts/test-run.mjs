@@ -7,7 +7,28 @@ import { randomUUID } from 'node:crypto';
 import { markedProcesses } from './test-process-audit.mjs';
 
 const mode = process.argv[2];
-if (!['test', 'shots'].includes(mode)) throw new Error('Expected test or shots');
+if (!['test', 'test-worker', 'shots', 'e2e'].includes(mode)) throw new Error('Expected test, shots, or e2e');
+if (mode === 'test') {
+  const count = Number(process.env.LAVISH_KIT_TEST_JOBS || 3);
+  if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error('LAVISH_KIT_TEST_JOBS must be an integer from 1 to 8');
+  const files = (await readdir('test')).filter(name => name.endsWith('.test.mjs')).sort();
+  // Approximate baseline seconds, used only to balance groups, never to skip tests.
+  const weights = { browser: 83, cli: 28, 'daemon-integration': 16, deps: 7, 'maintenance-finalization': 3, 'maintenance-integration': 14, markdown: 19, 'pr-browser': 21, relay: 18, 'task-browser': 23, 'visual-checks': 17, watch: 23 };
+  const groups = Array.from({ length: Math.min(count, files.length) }, () => ({ files: [], weight: 0 }));
+  for (const file of files.sort((a, b) => (weights[b.replace('.test.mjs', '')] || 1) - (weights[a.replace('.test.mjs', '')] || 1))) {
+    const group = groups.reduce((a, b) => a.weight <= b.weight ? a : b);
+    group.files.push(`test/${file}`); group.weight += weights[file.replace('.test.mjs', '')] || 1;
+  }
+  const children = new Set();
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { for (const child of children) child.kill(signal); });
+  const statuses = await Promise.all(groups.map(group => new Promise(resolve => {
+    const child = spawn(process.execPath, [import.meta.filename, 'test-worker', ...group.files], { stdio: 'inherit' });
+    children.add(child);
+    child.once('error', error => { children.delete(child); console.error(error); resolve(1); });
+    child.once('exit', code => { children.delete(child); resolve(code ?? 1); });
+  })));
+  process.exit(statuses.some(code => code !== 0) ? 1 : 0);
+}
 const root = await mkdtemp(path.join(os.tmpdir(), 'lavish-kit-run-'));
 const port = await new Promise((resolve, reject) => {
   const server = net.createServer().once('error', reject);
@@ -16,12 +37,26 @@ const port = await new Promise((resolve, reject) => {
 const marker = randomUUID();
 const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_KIT_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
 delete env.HC_TERMINAL_ID;
-const tests = (await readdir('test')).filter(name => name.endsWith('.test.mjs')).sort().map(name => `test/${name}`);
-const args = mode === 'test' ? ['--test', '--test-concurrency=1', ...tests] : ['scripts/shots.mjs'];
+// macOS Unix sockets cannot fit beneath its long default temporary directory.
+let hcRoot;
+if (mode === 'e2e') {
+  hcRoot = await mkdtemp('/tmp/lk-hc-');
+  env.HC_SESSION = `lk-${marker.slice(0, 8)}`;
+  env.HC_SOCKET = path.join(hcRoot, 'core.sock');
+}
+const args = mode === 'test-worker' ? ['--test', '--test-concurrency=1', ...process.argv.slice(3)] : [mode === 'e2e' ? 'test/relay-e2e.mjs' : 'scripts/shots.mjs'];
 let status = await new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { env, stdio: 'inherit' });
-  child.once('error', reject); child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+  const interrupt = () => child.kill('SIGINT'), terminate = () => child.kill('SIGTERM');
+  process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
+  const cleanup = () => { process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); };
+  child.once('error', error => { cleanup(); reject(error); });
+  child.once('exit', (code, signal) => { cleanup(); resolve(code ?? (signal ? 1 : 0)); });
 });
+if (hcRoot) {
+  try { execFileSync('hc', ['server', 'stop'], { env, encoding: 'utf8', timeout: 15000 }); }
+  catch (error) { console.error(`Test audit: cannot stop private hc service: ${error.message}`); status = 1; }
+}
 try {
   const listing = execFileSync('lavish-axi', [], { env, encoding: 'utf8', timeout: 10000 });
   const { decode } = await import('@toon-format/toon');
@@ -30,10 +65,18 @@ try {
   else console.error('Test audit: no private Lavish sessions remain');
 } catch (error) { console.error(`Test audit: cannot list private Lavish sessions: ${error.message}`); status = 1; }
 try {
-  const leaked = markedProcesses(marker);
+  let leaked = markedProcesses(marker);
+  const deadline = Date.now() + 5000;
+  // Detached workers can still be completing normal shutdown after tests exit.
+  while (leaked.length && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+    leaked = markedProcesses(marker);
+  }
   if (leaked.length) { console.error(`Test audit: processes with the run marker remain (PIDs): ${leaked.join(', ')}`); status = 1; }
   else console.error('Test audit: no processes with the run marker remain');
 } catch (error) { console.error(`Test audit: cannot inspect processes: ${error.message}`); status = 1; }
-if (status === 0) await rm(root, { recursive: true, force: true });
-else console.error(`Test audit: retained ${root} for inspection`);
+if (status === 0) {
+  await rm(root, { recursive: true, force: true });
+  if (hcRoot) await rm(hcRoot, { recursive: true, force: true });
+} else console.error(`Test audit: retained ${root}${hcRoot ? ` and ${hcRoot}` : ''} for inspection`);
 process.exitCode = status;

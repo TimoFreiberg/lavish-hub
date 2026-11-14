@@ -1,19 +1,13 @@
 import { execFileSync } from 'node:child_process';
 
 export function markedProcesses(marker) {
-  const pids = execFileSync('ps', ['-A', '-o', 'pid='], { encoding: 'utf8' }).trim().split(/\s+/);
-  const leaked = [];
-  for (const pid of pids) {
-    if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
-    try {
-      // The exact token may be in the environment or in a worker's arguments.
-      // Never print process environments, which can contain credentials.
-      const details = execFileSync('ps', ['eww', '-p', pid, '-o', 'command='], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
-      if (details.split(/\s+/).includes(`LAVISH_KIT_TEST_RUN=${marker}`)) leaked.push(Number(pid));
-    } catch (error) {
-      // A process may disappear between snapshots; other failures are unsafe to ignore.
-      if (error.status !== 1) throw error;
-    }
-  }
-  return leaked;
+  // Take one snapshot rather than starting ps once for every process on the host.
+  // Never print this output: process environments can contain credentials.
+  const env = { ...process.env }; delete env.LAVISH_KIT_TEST_RUN;
+  const snapshot = execFileSync('ps', ['eww', '-A', '-o', 'pid=,command='], { env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const token = `LAVISH_KIT_TEST_RUN=${marker}`;
+  return snapshot.split('\n').flatMap(line => {
+    const match = line.match(/^\s*(\d+)\s+(.*)$/);
+    return match && Number(match[1]) !== process.pid && match[2].split(/\s+/).includes(token) ? [Number(match[1])] : [];
+  });
 }

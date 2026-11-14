@@ -40,6 +40,8 @@ test('PR browser: hierarchy, preview, Save/Create PR envelopes, clean/dirty watc
     const button = disabledFrame.getByRole('button', { name: 'Create PR', exact: true });
     await button.waitFor();
     assert.equal(await button.isDisabled(), true);
+    // Lavish can still hide the artifact while its initial layout audit finishes.
+    await disabledFrame.getByText(/Set createPr.*config.json/).waitFor({ state: 'visible' });
     assert.match(await disabledFrame.locator('body').innerText(), /Set createPr.*config.json/);
   }
   await writeFile(configFile, JSON.stringify({ createPr: ['stub-pr'] }));
