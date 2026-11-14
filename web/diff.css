@@ -70,4 +70,24 @@ h1 { font-size: 16px; margin: 0; flex: none; }
 .help dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 12px 0 16px; }
 .help dt { font-family: ui-monospace, monospace; font-weight: 600; }
 .help dd { margin: 0; }
-@media (max-width: 700px) { .sidebar { flex-basis: 160px; } }
+:root[data-theme="light"] { color-scheme: light; color: #1f2328; background: #fff; }
+:root[data-theme="light"] button { border-color: #d0d7de; background: #f6f8fa; }
+:root[data-theme="light"] button:hover, :root[data-theme="light"] .file-link:hover { background: #eaeef2; }
+:root[data-theme="light"] a { color: #0969da; }
+:root[data-theme="light"] .hint, :root[data-theme="light"] .file-link .dir, :root[data-theme="light"] .file-description, :root[data-theme="light"] .commits summary { color: #59636e; }
+:root[data-theme="light"] .page-header, :root[data-theme="light"] .sidebar, :root[data-theme="light"] .file-header, :root[data-theme="light"] .draft { border-color: #d0d7de; }
+:root[data-theme="light"] .sidebar, :root[data-theme="light"] .file-header, :root[data-theme="light"] .draft { background: #f6f8fa; color: #1f2328; }
+:root[data-theme="light"] .file-link { background: transparent; }
+:root[data-theme="light"] .file-link[aria-current] { background: #ddf4ff; border-color: #0969da; }
+:root[data-theme="light"] .counts .add, :root[data-theme="light"] .file-link .check { color: #1a7f37; }
+:root[data-theme="light"] .counts .del { color: #cf222e; }
+:root[data-theme="light"] .notice:not(:empty) { background: #fff8c5; }
+:root[data-theme="light"] .draft textarea, :root[data-theme="light"] .help { background: #fff; color: #1f2328; border-color: #d0d7de; }
+:root[data-theme="light"] .draft-actions button:first-child { background: #1f883d; color: #fff; }
+@media (max-width: 700px) {
+  .sidebar { flex-basis: 120px; }
+  .toolbar { flex-wrap: wrap; }
+  .heading, .titles { min-width: 0; }
+  button { min-height: 36px; }
+  .file-actions button, button.icon { min-height: 26px; }
+}

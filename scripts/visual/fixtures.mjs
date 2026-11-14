@@ -43,7 +43,7 @@ export async function makePage(variant, dir, dist, diff, { portable = false } = 
   if (variant.kind === 'html') {
     if (portable) {
       const html = await readFile(path.join(fixtures, 'clean.html'), 'utf8');
-      await writeFile(file, html.replace('</body>', '<script src="../../assets/preview.js"></script></body>'));
+      await writeFile(file, html.replace('</body>', '<style>:root[data-theme="dark"] body { color: #e6edf3; background: #0d1117; color-scheme: dark; }</style><script src="../../assets/preview.js"></script></body>'));
     } else await cp(path.join(fixtures, 'clean.html'), file);
   } else if (variant.kind === 'markdown') {
     const source = path.join(dir, 'document.md'); await cp(path.join(fixtures, 'document.md'), source);
