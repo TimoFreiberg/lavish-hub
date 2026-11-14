@@ -20,9 +20,16 @@ if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw Error('Invalid repository');
 const dir = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'lavish-kit', 'maintenance', repo.replace('/', '--'));
 const file = path.join(dir, 'state.json'), lock = path.join(dir, 'lock');
 mkdirSync(dir, { recursive: true, mode: 0o700 });
-function load() { try { return parse(readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return { version: 1, jobs: [], etags: {}, cache: {}, reviewed: {}, backoff: 0 }; throw e; } }
+function load() {
+  try {
+    const data = parse(readFileSync(file, 'utf8'));
+    if (data.jobs.some(job => job.finalization)) throw Error('Unsupported draft maintenance state with per-job finalization; back up and remove state.json before restarting');
+    data.finalizations ||= {};
+    return data;
+  } catch (e) { if (e.code === 'ENOENT') return { version: 2, jobs: [], finalizations: {}, etags: {}, cache: {}, reviewed: {}, backoff: 0 }; throw e; }
+}
 let state;
-function save() { for (const job of state.jobs) if (job.claim && job.finalization) job.finalization.updated = now(); const temp = `${file}.${process.pid}.tmp`; writeFileSync(temp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 }); renameSync(temp, file); }
+function save() { state.version = 2; const temp = `${file}.${process.pid}.tmp`; writeFileSync(temp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 }); renameSync(temp, file); }
 function locked(fn) {
   try { mkdirSync(lock); } catch (e) { if (e.code === 'EEXIST') throw Error(`Maintenance state locked: ${lock}. Check for a running watcher before removing it.`); throw e; }
   try { state = load(); return fn(); } finally { rmSync(lock, { recursive: true, force: true }); }
@@ -61,11 +68,10 @@ function collectIssues(operator) {
     const fingerprint = issueFingerprint(issue, comments, operator);
     state.currentIssues ||= {};
     const previous = state.jobs.find(j => j.id === state.currentIssues[issue.number]) || [...state.jobs].reverse().find(j => j.kind === 'issue' && j.details.number === issue.number && j.status !== 'superseded');
-    if (previous?.details.fingerprint === fingerprint) { state.currentIssues[issue.number] = previous.id; continue; }
+    const closedByPrevious = state.finalizations[issue.number]?.closeConfirmed && state.finalizations[issue.number].owner === previous?.id;
+    if (previous?.details.fingerprint === fingerprint && !closedByPrevious) { state.currentIssues[issue.number] = previous.id; continue; }
     for (const job of state.jobs) if (job.kind === 'issue' && job.details.number === issue.number && job.status === 'queued') { job.status = 'superseded'; job.message = 'Newer operator activity'; }
-    const owner = [...state.jobs].reverse().find(j => j.kind === 'issue' && j.details.number === issue.number && j.finalization && !j.finalization.closeConfirmed);
     const job = { id: randomUUID(), kind: 'issue', key: `issue:${issue.number}:${fingerprint}`, details: { number: issue.number, fingerprint }, status: 'queued', created: now() };
-    if (owner) job.finalization = { ...owner.finalization, markerJob: owner.finalization.markerJob || owner.id };
     state.jobs.push(job); state.currentIssues[issue.number] = job.id;
   }
 }
@@ -117,7 +123,8 @@ const occupiesSlot = j => Boolean(j.claim) || ['launching', 'running', 'uncertai
 function launch() {
   const id = locked(() => {
     if (state.jobs.some(occupiesSlot)) return null;
-    return state.jobs.find(j => j.status === 'queued')?.id;
+    const queued = state.jobs.filter(j => j.status === 'queued');
+    return (queued.find(j => j.kind === 'issue') || queued.find(j => j.kind === 'maintenance' && !state.error && !(state.backoff > now()) && j.key === state.maintenanceSnapshot))?.id;
   });
   if (id) startJob(id);
 }
@@ -161,8 +168,11 @@ function claim(id) {
   if (!job.terminal || job.terminal !== process.env.HC_TERMINAL_ID) throw Error('Claim must come from the job terminal');
   if (state.jobs.some(j => j !== job && occupiesSlot(j))) throw Error('Worker slot is occupied');
   if (job.kind === 'issue') {
-    const owner = state.jobs.filter(j => j.kind === 'issue' && j.details.number === job.details.number && j.finalization && !j.finalization.closeConfirmed).sort((a, b) => (b.finalization.updated || b.finalization.recorded) - (a.finalization.updated || a.finalization.recorded))[0];
-    if (owner && owner !== job) job.finalization = { ...owner.finalization, markerJob: owner.finalization.markerJob || owner.id };
+    const final = state.finalizations[job.details.number];
+    const current = state.currentIssues?.[job.details.number];
+    if (final && current && current !== job.id && (final.closeConfirmed || final.owner !== job.id)) throw Error('A newer issue assignment owns finalization');
+    if (final && final.owner !== job.id && current !== job.id) throw Error('A newer issue assignment owns finalization');
+    if (final && !final.closeConfirmed) final.owner = job.id;
   }
   job.claim = { token: randomUUID(), terminal: process.env.HC_TERMINAL_ID }; job.status = 'running'; save();
   console.log(job.claim.token);
@@ -181,8 +191,14 @@ function checkActivity(id, token, adopt = false) {
   delete state.etags[endpoint];
   for (const key of Object.keys(state.etags)) if (key.startsWith(`${endpoint}/comments?`)) delete state.etags[key];
   const issue = api(endpoint), comments = pages(`${endpoint}/comments`);
-  if (issue.state !== 'open' || issue.pull_request || issue.user?.login?.toLowerCase() !== operator.toLowerCase()) throw Error('Issue is no longer eligible');
+  if (issue.pull_request || issue.user?.login?.toLowerCase() !== operator.toLowerCase()) throw Error('Issue is no longer eligible');
   const fingerprint = issueFingerprint(issue, comments, operator);
+  const final = state.finalizations[job.details.number];
+  if (issue.state === 'closed' && !adopt && final?.owner === job.id && final.closeIntent && fingerprint === job.details.fingerprint) {
+    final.closeConfirmed ||= now(); save(); console.log('Recorded close confirmed'); return;
+  }
+  if (issue.state !== 'open') throw Error('Issue is no longer eligible');
+  if (final?.owner === job.id && final.closeConfirmed) throw Error('Issue reopened after finalization; wait for a new assignment');
   if (adopt) {
     job.details.fingerprint = fingerprint;
     state.currentIssues ||= {}; state.currentIssues[job.details.number] = job.id;
@@ -215,8 +231,14 @@ function finalizationIntent(id, token, kind, value) {
   if (!['fix', 'evidence'].includes(kind) || !value?.trim()) throw Error('Specify fix COMMIT or evidence REASON');
   if (kind === 'fix' && !/^[a-f0-9]{40}$/.test(value)) throw Error('Fix requires a full 40-character commit ID');
   const intent = { kind, value: value.trim() };
-  if (job.finalization && (job.finalization.kind !== intent.kind || job.finalization.value !== intent.value)) throw Error('Finalization intent already recorded');
-  if (!job.finalization) { freshIssue(job); job.finalization = { ...intent, recorded: now() }; save(); }
+  const existing = state.finalizations[job.details.number];
+  if (existing && existing.owner !== job.id && !existing.closeConfirmed) throw Error('Finalization belongs to another job');
+  if (existing?.owner === job.id && (existing.kind !== intent.kind || existing.value !== intent.value)) throw Error('Finalization intent already recorded');
+  if (!existing || (existing.closeConfirmed && existing.owner !== job.id)) {
+    const { issue } = freshIssue(job);
+    if (issue.state !== 'open') throw Error('Issue is no longer open');
+    state.finalizations[job.details.number] = { ...intent, id: randomUUID(), owner: job.id, recorded: now() }; save();
+  }
   console.log('Finalization intent recorded');
 }
 function ensureComment(job, body, marker) {
@@ -228,14 +250,16 @@ function ensureComment(job, body, marker) {
 }
 function issueComment(id, token, text) {
   const job = issueJob(id, token);
+  const final = state.finalizations[job.details.number];
+  if (final?.owner === job.id && !final.closeConfirmed) throw Error('Finalization is recorded; resume it before other public actions');
   if (!text?.trim()) throw Error('Comment text required');
   const marker = `<!-- maintenance:${job.id}:comment:${hash(text)} -->`;
   ensureComment(job, `🤖 ${text.trim()}`, marker);
   console.log('Comment confirmed');
 }
 function finalize(id, token) {
-  const job = issueJob(id, token), final = job.finalization;
-  if (!final) throw Error('Record finalization intent first');
+  const job = issueJob(id, token), final = state.finalizations[job.details.number];
+  if (!final || final.owner !== job.id) throw Error('Record finalization intent first');
   if (final.kind === 'fix' && !final.pushConfirmed) {
     const endpoint = `repos/${repo}/compare/${final.value}...main`;
     delete state.etags[endpoint];
@@ -243,7 +267,7 @@ function finalize(id, token) {
     if (!['ahead', 'identical'].includes(comparison.status)) throw Error('Fix commit is not reachable from origin main; push or reconcile it before finalizing');
     final.pushConfirmed = now(); save();
   }
-  const marker = `<!-- maintenance:${final.markerJob || job.id}:final -->`;
+  const marker = `<!-- maintenance:${final.id}:final -->`;
   if (!final.commentConfirmed) {
     final.commentIntent = true; save();
     const text = final.kind === 'fix' ? `🤖 Fixed in https://github.com/${repo}/commit/${final.value}` : `🤖 Closing: ${final.value}`;
@@ -279,7 +303,8 @@ function sweepResult(id, token) {
 function outcome(id, token, status, extra) {
   if (!['completed', 'blocked', 'failed'].includes(status)) throw Error('Outcome must be completed, blocked, or failed');
   const job = owned(id, token);
-  if (status === 'completed' && job.kind === 'issue' && !job.finalization?.closeConfirmed) throw Error('Issue finalization must be confirmed before completion');
+  const final = job.kind === 'issue' && state.finalizations[job.details.number];
+  if (status === 'completed' && job.kind === 'issue' && (!final?.closeConfirmed || final.owner !== job.id)) throw Error('Issue finalization must be confirmed before completion');
   if (status === 'completed' && job.kind === 'maintenance') {
     if (job.details.candidates.some(c => !job.reviews?.[`${c.name}@${c.latest}`])) throw Error('Every assigned candidate needs a disposition');
     if ((job.details.sweep ?? job.details.candidates.length === 0) && !job.sweepCompleted) throw Error('Assigned sweep must be completed');
@@ -290,7 +315,7 @@ function outcome(id, token, status, extra) {
 if (action === 'once' || action === 'watch') {
   do { tick(); if (action === 'watch') await new Promise(resolve => setTimeout(resolve, 60000)); } while (action === 'watch');
 } else if (action === 'status') locked(() => console.log(JSON.stringify(state, null, 2)));
-else if (action === 'job') locked(() => { const job = state.jobs.find(j => j.id === args[0]); if (!job) throw Error('Unknown job'); console.log(JSON.stringify(job, null, 2)); });
+else if (action === 'job') locked(() => { const job = state.jobs.find(j => j.id === args[0]); if (!job) throw Error('Unknown job'); const final = job.kind === 'issue' && state.finalizations[job.details.number]; console.log(JSON.stringify({ ...job, ...(final?.owner === job.id ? { finalization: final } : {}) }, null, 2)); });
 else if (action === 'claim') locked(() => claim(args[0]));
 else if (action === 'check-activity' || action === 'adopt-activity') locked(() => checkActivity(args[0], args[1], action === 'adopt-activity'));
 else if (action === 'finalization-intent') locked(() => finalizationIntent(args[0], args[1], args[2], args.slice(3).join(' ')));

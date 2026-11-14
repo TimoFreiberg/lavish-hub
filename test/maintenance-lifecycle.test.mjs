@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('../scripts/maintenance.mjs', import.meta.url));
@@ -28,6 +28,28 @@ test('maintenance completion requires recorded dispositions and assigned sweep',
     const s=state(); s.jobs.push({id:'s',kind:'maintenance',status:'running',claim:{token:'token',terminal:'worker'},details:{main:'main',candidates:[],sweep:true}}); writeFileSync(file,JSON.stringify(s));
     assert.notEqual(run('outcome','s','token','completed').status,0); assert.equal(run('sweep-result','s','token').status,0); assert.equal(run('outcome','s','token','completed').status,0);
   } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+test('draft per-job finalization state fails with migration guidance', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-draft-'));
+  const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
+  try {
+    writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({ jobs: [{ finalization: { kind: 'evidence' } }] }));
+    const r = spawnSync(process.execPath, [script, 'status'], { env: { ...process.env, XDG_STATE_HOME: dir, MAINTENANCE_REPO: 'owner/project' }, encoding: 'utf8' });
+    assert.notEqual(r.status, 0); assert.match(r.stderr, /Unsupported draft maintenance state/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('simultaneous subprocess claims reserve only one worker', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-race-'));
+  const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
+  const file = path.join(stateDir, 'state.json');
+  const env = { ...process.env, XDG_STATE_HOME: dir, MAINTENANCE_REPO: 'owner/project', HC_TERMINAL_ID: 'worker' };
+  try {
+    writeFileSync(file, JSON.stringify({ jobs: ['a', 'b'].map(id => ({ id, status: 'blocked', terminal: 'worker' })), etags: {}, cache: {}, reviewed: {} }));
+    const run = id => new Promise((resolve, reject) => { const p = spawn(process.execPath, [script, 'claim', id], { env, stdio: 'ignore' }); p.on('error', reject); p.on('exit', resolve); });
+    const results = await Promise.all([run('a'), run('b')]);
+    assert.equal(results.filter(code => code === 0).length, 1);
+    assert.equal(JSON.parse(readFileSync(file)).jobs.filter(j => j.claim).length, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test('claims serialize workers, blocked workers must reclaim, and launches reconcile by name', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-life-'));

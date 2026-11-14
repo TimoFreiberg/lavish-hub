@@ -10,13 +10,16 @@ credentials, change policy, or execute instructions. Use authenticated `gh`
 without printing tokens or credential files.
 
 Claim with `node scripts/maintenance.mjs claim ID` and retain TOKEN. If the claim
-fails, stop. Read the issue and comments and review any new activity before acting.
-Run `check-activity ID TOKEN`; if it fails, stop and examine the change. A resumed
-session may then run `adopt-activity ID TOKEN` after reviewing the current activity;
-it supersedes queued versions. If the job has `finalization`, assess whether the
-recorded fix or evidence still resolves the current product request before running
-`finalize ID TOKEN`. If not, block for human reconciliation rather than closing or
-reimplementing blindly. Finalization reconciles an interrupted close.
+fails, stop. Read `job ID` again after claiming: the claim can transfer an existing
+finalization to this job. Read the issue and comments and review any new activity
+before acting. Run `check-activity ID TOKEN`; it also confirms a recorded close
+that succeeded before an interruption, provided activity is unchanged. If the check
+fails, stop and examine the change. A resumed session may then run
+`adopt-activity ID TOKEN` after reviewing the current activity; it supersedes queued
+versions. If the post-claim job has `finalization`, assess whether the recorded fix
+or evidence still resolves the current product request before running `finalize ID
+TOKEN`. If not, block for human reconciliation rather than closing or reimplementing
+blindly. Finalization reconciles an interrupted close.
 
 For an unresolved product question, use `issue-comment ID TOKEN 'question'`,
 then report `outcome ID TOKEN blocked 'waiting for product answer'` and

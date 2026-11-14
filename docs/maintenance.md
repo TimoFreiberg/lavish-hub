@@ -25,7 +25,9 @@ if needed. The operator defaults to the authenticated GitHub user; set
 `MAINTENANCE_OPERATOR` to select a different login. Run from the intended
 repository. State is under `$XDG_STATE_HOME/lavish-kit/maintenance` (or
 `$HOME/.local/state/lavish-kit/maintenance`), shared by its workspaces. It
-contains GitHub activity and should be treated as private. A leftover `lock`
+contains GitHub activity and should be treated as private. Draft state containing
+per-job finalizations is not supported: back up and remove `state.json` before
+restarting, and manually reconcile any unfinished public actions first. A leftover `lock`
 directory requires manual inspection: remove it only after confirming no watcher
 or outcome command is running. `status` displays queued jobs, errors, blocked
 sessions and launch uncertainties. An uncertain launch cannot be retried: inspect
