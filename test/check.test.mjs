@@ -126,6 +126,26 @@ for (const boundary of ['before checks', 'after install', 'after shots']) {
   });
 }
 
+test('correctness pipeline records cancellation during final status publication', async () => {
+  const controller = new AbortController(), snapshots = [];
+  const result = await runChecks({
+    directory: '<artifacts>', signal: controller.signal,
+    execute: async () => 0,
+    publish: async (name, value) => {
+      if (name !== 'status.json') return;
+      snapshots.push(structuredClone(value));
+      if (value.status === 'passed') {
+        await new Promise(resolve => setImmediate(resolve));
+        controller.abort();
+      }
+    },
+  });
+  assert.equal(result.status, 'failed');
+  assert.equal(snapshots.at(-2).status, 'passed');
+  assert.equal(snapshots.at(-1).status, 'failed');
+  assert.deepEqual(snapshots.at(-1), result);
+});
+
 test('correctness pipeline records stage exceptions and completes other checks', async () => {
   const result = await runChecks({ directory: '<artifacts>', publish: async () => {}, execute: async name => { if (name === 'test') throw new Error('launch failed'); return 0; } });
   assert.equal(result.status, 'failed'); assert.equal(result.stages.test.error, 'launch failed'); assert.equal(result.stages.e2e.code, 0);

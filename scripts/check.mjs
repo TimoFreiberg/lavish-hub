@@ -33,6 +33,10 @@ export async function runChecks({ mode = 'all', directory, execute, publish, sig
   else if (mode !== 'shots') await stage(mode);
   result.status = signal?.aborted || Object.values(result.stages).some(stage => stage.code !== 0) ? 'failed' : 'passed';
   await publish('status.json', result);
+  if (result.status === 'passed' && signal?.aborted) {
+    result.status = 'failed';
+    await publish('status.json', result);
+  }
   return result;
 }
 
@@ -44,7 +48,9 @@ async function main() {
   catch (error) { if (error.code === 'EEXIST') throw new Error('Another correctness command owns .checks/lock; wait for it to finish (remove a stale lock only after confirming its owner stopped)'); throw error; }
   const directory = path.join(root, '.checks', `${Date.now()}-${randomUUID().slice(0, 8)}`);
   const cancellation = new AbortController(), children = new Set();
+  let finalized = false;
   const cancel = signal => {
+    if (finalized) return;
     cancellation.abort(signal);
     process.exitCode = 1;
     for (const child of children) child.kill(signal);
@@ -81,8 +87,10 @@ async function main() {
       } finally { await log.close(); }
     };
     const result = await runChecks({ mode, directory, execute, publish, signal: cancellation.signal });
+    // Publication completes the result; later signals must not change only the exit code.
+    finalized = true;
     console.log(`Correctness ${result.status}: ${directory}/status.json${result.screenshotReviewRequired ? '; screenshot inspection still required' : ''}`);
-    process.exitCode = !cancellation.signal.aborted && result.status === 'passed' ? 0 : 1;
+    process.exitCode = result.status === 'passed' ? 0 : 1;
   } finally {
     try { await rm(lock, { recursive: true, force: true }); }
     finally { process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); }
