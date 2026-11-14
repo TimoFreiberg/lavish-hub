@@ -11,7 +11,11 @@ fails, stop; do not report an outcome without a claim. Review dependencies befor
 Research release provenance, advisories, supply-chain evidence and install scripts
 before installing any candidate. No research can guarantee safety; never install a
 suspicious release. All version upgrades, including pinned versions, are eligible
-if intended behavior is preserved. Record deferred reviews in the outcome.
+if intended behavior is preserved. For each candidate record its disposition and
+supporting evidence using `node scripts/maintenance.mjs review-result ID TOKEN NAME VERSION reviewed|deferred|failed 'evidence'`.
+After actually completing the assigned main revision's sweep, record it with
+`node scripts/maintenance.mjs sweep-result ID TOKEN`; an outcome alone does not
+record candidate reviews or a sweep.
 
 For a confirmed current vulnerability, do not disclose sensitive details publicly.
 If a safe high-confidence patch is possible, perform full QA and push first, then

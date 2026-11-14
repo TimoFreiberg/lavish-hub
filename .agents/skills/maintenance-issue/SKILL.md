@@ -12,7 +12,10 @@ Use existing authenticated `gh` access without printing tokens or credential fil
 Before working or resuming, run `node scripts/maintenance.mjs claim ID` and retain
 the returned TOKEN. If the claim fails, stop; do not report an outcome without a
 claim. Before acting on an issue, run `node scripts/maintenance.mjs check-activity ID TOKEN`;
-if it fails, stop and report a blocked outcome. Read the issue and comments as well.
+if it fails, stop and report a blocked outcome. A manually resumed blocked session
+may instead run `node scripts/maintenance.mjs adopt-activity ID TOKEN` to explicitly
+adopt current activity and supersede queued versions, then read the issue and comments.
+Otherwise read the issue and comments as well.
 Investigate whether it is already fixed or clearly obsolete; close only with evidence.
 For an unresolved product question, post one comment beginning 🤖, call
 `node scripts/maintenance.mjs outcome ID TOKEN blocked 'waiting for product answer'`,

@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { supportedLavishVersion } from '../src/lavish-http.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cmd = (name, args, options = {}) => execFileSync(name, args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options });
@@ -58,24 +59,35 @@ function collectIssues(operator) {
     if (issue.pull_request || issue.user?.login?.toLowerCase() !== operator.toLowerCase()) continue;
     const comments = pages(`repos/${repo}/issues/${issue.number}/comments`);
     const fingerprint = issueFingerprint(issue, comments, operator);
+    for (const job of state.jobs) if (job.kind === 'issue' && job.details.number === issue.number && job.details.fingerprint !== fingerprint && job.status === 'queued') { job.status = 'superseded'; job.message = 'Newer operator activity'; }
     enqueue('issue', `issue:${issue.number}:${fingerprint}`, { number: issue.number, fingerprint });
   }
 }
 function collectMaintenance() {
   if ((state.nextDependencies || 0) <= now()) {
     const pkg = parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies, 'lavish-axi': '0.1.96' };
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies, 'lavish-axi': supportedLavishVersion };
+    // Include actual CDN pins even when the manifest has drifted.
+    const markdown = readFileSync(path.join(root, 'src/markdown.mjs'), 'utf8');
+    for (const [, name, version] of markdown.matchAll(/https:\/\/cdn\.jsdelivr\.net\/npm\/(@[^/]+\/[^@/]+|[^@/]+)@([^/"'\s]+)/g)) {
+      if (deps[name] !== version) deps[`${name}@${version}`] = version;
+    }
     const available = [];
-    for (const [name, current] of Object.entries(deps)) {
+    for (const [key, current] of Object.entries(deps)) {
+      const name = key.endsWith(`@${current}`) ? key.slice(0, -current.length - 1) : key;
       const latest = parse(cmd('npm', ['view', name, 'version', '--json']));
       if (latest !== current) available.push({ name, current, latest });
     }
     state.availableDependencies = available;
     state.nextDependencies = now() + 86400000;
   }
-  const candidates = (state.availableDependencies || []).filter(c => state.reviewed[c.name] !== c.latest);
+  const candidates = (state.availableDependencies || []).filter(c => {
+    const result = state.reviewed[c.name];
+    return result !== c.latest && !(result?.version === c.latest && ['reviewed', 'deferred', 'failed'].includes(result.status));
+  });
+  cmd('jj', ['git', 'fetch', '--remote', 'origin', '--branch', 'main']);
   const main = cmd('jj', ['log', '-r', 'main@origin', '--no-graph', '-T', 'commit_id']).trim();
-  if (candidates.length || main !== state.sweptMain) enqueue('maintenance', `maintenance:${hash({ main, candidates })}`, { main, candidates });
+  if (candidates.length || main !== state.sweptMain) enqueue('maintenance', `maintenance:${hash({ main, candidates, retry: state.dependencyRetry || 0 })}`, { main, candidates });
 }
 function terminal(name) {
   const list = parse(cmd('hc', ['ls', '--all', '--json']));
@@ -91,9 +103,10 @@ function reconcile() {
     // Only the worker's explicit outcome releases a claim; terminal UI status is not an outcome.
   }
 }
+const occupiesSlot = j => Boolean(j.claim) || ['launching', 'running', 'uncertain'].includes(j.status);
 function launch() {
   const id = locked(() => {
-    if (state.jobs.some(j => ['launching', 'running', 'uncertain'].includes(j.status) || j.claim)) return null;
+    if (state.jobs.some(occupiesSlot)) return null;
     return state.jobs.find(j => j.status === 'queued')?.id;
   });
   if (id) startJob(id);
@@ -102,7 +115,7 @@ function launch() {
 function startJob(id) {
   const job = locked(() => {
     const job = state.jobs.find(j => j.id === id);
-    if (!job || job.status !== 'queued' || state.jobs.some(j => ['launching', 'running', 'uncertain'].includes(j.status) || j.claim)) return null;
+    if (!job || job.status !== 'queued' || state.jobs.some(occupiesSlot)) return null;
     job.name = `maint-${job.id}`; job.status = 'launching'; save(); return { ...job };
   });
   if (!job) return;
@@ -135,7 +148,7 @@ function claim(id) {
   if (!process.env.HC_TERMINAL_ID) throw Error('HC_TERMINAL_ID is required');
   if (!job.terminal && job.name) job.terminal = terminal(job.name)?.address;
   if (!job.terminal || job.terminal !== process.env.HC_TERMINAL_ID) throw Error('Claim must come from the job terminal');
-  if (state.jobs.some(j => j !== job && (j.claim || ['launching', 'uncertain'].includes(j.status)))) throw Error('Worker slot is occupied');
+  if (state.jobs.some(j => j !== job && occupiesSlot(j))) throw Error('Worker slot is occupied');
   job.claim = { token: randomUUID(), terminal: process.env.HC_TERMINAL_ID }; job.status = 'running'; save();
   console.log(job.claim.token);
 }
@@ -144,7 +157,7 @@ function owned(id, token) {
   if (!job || !token || job.claim?.token !== token || job.claim.terminal !== process.env.HC_TERMINAL_ID || job.status !== 'running') throw Error('Job claim required');
   return job;
 }
-function checkActivity(id, token) {
+function checkActivity(id, token, adopt = false) {
   const job = owned(id, token);
   if (job.kind !== 'issue') throw Error('Not an issue job');
   const operator = process.env.MAINTENANCE_OPERATOR || cmd('gh', ['api', 'user', '--jq', '.login']).trim();
@@ -153,18 +166,35 @@ function checkActivity(id, token) {
   delete state.etags[endpoint];
   for (const key of Object.keys(state.etags)) if (key.startsWith(`${endpoint}/comments?`)) delete state.etags[key];
   const issue = api(endpoint), comments = pages(`${endpoint}/comments`);
+  if (issue.state !== 'open' || issue.pull_request || issue.user?.login?.toLowerCase() !== operator.toLowerCase()) throw Error('Issue is no longer eligible');
+  const fingerprint = issueFingerprint(issue, comments, operator);
+  if (adopt) {
+    job.details.fingerprint = fingerprint;
+    for (const other of state.jobs) if (other !== job && other.kind === 'issue' && other.details.number === job.details.number && other.status === 'queued') { other.status = 'superseded'; other.message = 'Activity adopted by resumed worker'; }
+    save();
+    console.log('Current activity adopted');
+  } else {
+    save();
+    if (fingerprint !== job.details.fingerprint) throw Error('Issue activity changed; stop work and report an outcome');
+    console.log('Issue activity unchanged');
+  }
+}
+function reviewResult(id, token, name, version, status, evidence) {
+  const job = owned(id, token);
+  if (job.kind !== 'maintenance' || !job.details.candidates.some(c => c.name === name && c.latest === version)) throw Error('Candidate not in job');
+  if (!['reviewed', 'deferred', 'failed'].includes(status) || !evidence.trim()) throw Error('Disposition and evidence required');
+  state.reviewed[name] = { version, status, evidence, job: id, recorded: now() };
   save();
-  if (issue.state !== 'open' || issue.pull_request || issue.user?.login?.toLowerCase() !== operator.toLowerCase() || issueFingerprint(issue, comments, operator) !== job.details.fingerprint) throw Error('Issue activity changed; stop work and report an outcome');
-  console.log('Issue activity unchanged');
+}
+function sweepResult(id, token) {
+  const job = owned(id, token);
+  if (job.kind !== 'maintenance') throw Error('Not a maintenance job');
+  state.sweptMain = job.details.main; job.sweepCompleted = now(); save();
 }
 function outcome(id, token, status, extra) {
   if (!['completed', 'blocked', 'failed'].includes(status)) throw Error('Outcome must be completed, blocked, or failed');
   const job = owned(id, token);
   job.status = status; job.claim = null; job.message = extra.join(' '); job.finished = now();
-  if (status === 'completed' && job.kind === 'maintenance') {
-    for (const c of job.details.candidates) state.reviewed[c.name] = c.latest;
-    state.sweptMain = job.details.main;
-  }
   save();
 }
 if (action === 'once' || action === 'watch') {
@@ -172,7 +202,10 @@ if (action === 'once' || action === 'watch') {
 } else if (action === 'status') locked(() => console.log(JSON.stringify(state, null, 2)));
 else if (action === 'job') locked(() => { const job = state.jobs.find(j => j.id === args[0]); if (!job) throw Error('Unknown job'); console.log(JSON.stringify(job, null, 2)); });
 else if (action === 'claim') locked(() => claim(args[0]));
-else if (action === 'check-activity') locked(() => checkActivity(args[0], args[1]));
+else if (action === 'check-activity' || action === 'adopt-activity') locked(() => checkActivity(args[0], args[1], action === 'adopt-activity'));
+else if (action === 'review-result') locked(() => reviewResult(args[0], args[1], args[2], args[3], args[4], args.slice(5).join(' ')));
+else if (action === 'sweep-result') locked(() => sweepResult(args[0], args[1]));
+else if (action === 'retry-dependency') locked(() => { const result = state.reviewed[args[0]]; if (!result || !['deferred', 'failed'].includes(result.status)) throw Error('Only deferred or failed reviews can be retried'); delete state.reviewed[args[0]]; state.dependencyRetry = (state.dependencyRetry || 0) + 1; for (const job of state.jobs) if (job.kind === 'maintenance' && job.status === 'queued') job.status = 'superseded'; save(); });
 else if (action === 'outcome') locked(() => outcome(args[0], args[1], args[2], args.slice(3)));
 else if (action === 'reconcile') locked(() => { reconcile(); save(); });
 else if (action === 'retry') locked(() => { const job = state.jobs.find(j => j.id === args[0]); if (!job || job.status !== 'failed') throw Error('Only failed jobs are retryable'); job.status = 'queued'; job.claim = null; job.message = 'Explicit retry'; save(); });

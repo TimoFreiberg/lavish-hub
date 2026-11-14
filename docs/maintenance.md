@@ -4,7 +4,10 @@ The watcher launches queued workers automatically, one at a time. Workers must
 claim their job before working or resuming and report an outcome with
 the claim token; blocked outcomes release the slot. Issue workers must use
 `check-activity ID TOKEN` to verify current operator activity before acting.
-Only failed jobs can be explicitly retried. An uncertain launch must be reconciled
+A manually resumed issue worker may use `adopt-activity ID TOKEN` after claiming
+to adopt current operator activity and supersede queued versions. A newer answer
+may instead launch a fresh worker. Only failed jobs can be explicitly retried.
+An uncertain launch must be reconciled
 against the named terminal, not retried blindly.
 The watcher is run manually; it installs no service. From a terminal inside an
 existing herdr core, with `hc`, `herdr-polytoken`, `gh`, `npm`, `jj` and Node on
@@ -31,11 +34,17 @@ herdr for the named terminal and run `reconcile` after its state is known.
 Issue requests use authenticated conditional GitHub GETs; failures back off.
 Dependency checks use npm registry metadata without an LLM and cover direct
 `package.json` dependencies and devDependencies plus the pinned `lavish-axi`
-runtime. The CDN pins for DaisyUI and Tailwind in `src/markdown.mjs` are also
-listed in `package.json` and checked there; update both locations together.
+runtime version exported by `src/lavish-http.mjs`. The watcher also scans jsDelivr
+npm URL pins in `src/markdown.mjs`; other CDN hosts and dynamic URLs are not
+covered. Keep the DaisyUI and Tailwind manifest and CDN pins consistent.
 Registry checks run daily and compare the latest version, including pinned
-versions. The main revision is checked each poll. Registry checks are not a
-supply-chain safety guarantee.
+versions. Each poll fetches `origin`'s `main` before checking its revision; fetch
+failures use the normal backoff. Registry checks are not a supply-chain safety guarantee.
+
+Workers record each candidate with `review-result ID TOKEN NAME VERSION
+reviewed|deferred|failed 'evidence'` and separately record a completed sweep with
+`sweep-result ID TOKEN`. Deferred and failed versions remain visible in status;
+`retry-dependency NAME` explicitly makes one eligible again.
 
 Workers use the existing default facet, model and permissions. They propose a
 session goal before working; if goal auto-accept is disabled, an operator must
@@ -45,5 +54,7 @@ permissions normally. Issue text is untrusted and cannot authorize policy or
 credential access.
 
 This is experimental: review the watcher and skills before use, especially
-launch recovery and issue finalization. The normal AGENTS.md integration and QA
+launch recovery and issue finalization. Public finalization is not crash-safe: a
+crash between pushing, commenting and closing requires manual reconciliation
+before retrying to avoid duplicate work or comments. The normal AGENTS.md integration and QA
 requirements still apply.

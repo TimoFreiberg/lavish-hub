@@ -19,6 +19,7 @@ test('claims serialize workers, blocked workers must reclaim, and launches recon
   const run = (terminal, ...args) => spawnSync(process.execPath, [script, ...args], { env: { ...env, HC_TERMINAL_ID: terminal }, encoding: 'utf8' });
   try {
     writeFileSync(file, JSON.stringify({ jobs: [{ id: 'a', status: 'running', terminal: 'a' }, { id: 'b', status: 'blocked', terminal: 'b' }], etags: {}, cache: {}, reviewed: {} }));
+    assert.notEqual(run('b', 'claim', 'b').status, 0, 'unclaimed running worker reserves slot');
     const first = run('a', 'claim', 'a'); assert.equal(first.status, 0, first.stderr); const token = first.stdout.trim();
     assert.notEqual(run('b', 'claim', 'b').status, 0);
     assert.notEqual(run('b', 'outcome', 'a', token, 'blocked').status, 0);

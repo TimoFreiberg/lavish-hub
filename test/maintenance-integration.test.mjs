@@ -71,6 +71,10 @@ test('fresh activity, backoff, and changed main after reviewed candidates', t =>
  const claim=worker('claim',issue.id); assert.equal(claim.status,0,claim.stderr); const token=claim.stdout.trim();
  x.put('github',{issue:x.issue,comments:[],notModified:true}); assert.equal(worker('check-activity',issue.id,token).status,0);
  x.put('github',{issue:{...x.issue,body:'Changed'},comments:[]}); assert.notEqual(worker('check-activity',issue.id,token).status,0);
+ assert.equal(x.run('once').status,0);
+ assert.equal(worker('adopt-activity',issue.id,token).status,0);
+ assert.equal(worker('check-activity',issue.id,token).status,0);
+ assert.equal(x.state().jobs.filter(j=>j.kind==='issue' && j.status==='queued').length,0);
  assert.equal(worker('outcome',issue.id,token,'blocked','changed').status,0);
  let st=x.state(); st.jobs=[]; st.sweptMain='main-a'; st.reviewed=Object.fromEntries(maintenance.details.candidates.map(c=>[c.name,c.latest])); writeFileSync(x.file,JSON.stringify(st));
  x.put('github',{issue:{...x.issue,user:{login:'other'}},comments:[]}); x.put('main','main-b');
