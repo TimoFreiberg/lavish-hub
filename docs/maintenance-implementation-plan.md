@@ -1,7 +1,7 @@
 # Maintenance automation: approved scope
 
-This is a review and implementation record, not an operator guide. The automation
-is not implemented by this document.
+This is a review and implementation record. The accompanying watcher is an
+incomplete draft with automatic launches disabled; see maintenance.md.
 
 - Keep the watcher and skills in this repository. Use shared machine-local
   state across jj workspaces. Run once or watch; do not install a service.

@@ -12,6 +12,7 @@ This index lists one doc per feature or topic. Start with the
 | [feedback-routing.md](feedback-routing.md) | Delivery inside herdr, polling outside it, the outbox, retarget, worker lifetime |
 | [lavish-http.md](lavish-http.md) | Pinned Lavish HTTP contracts, CLI compatibility mode, transport memory measurements |
 | [files-and-logs.md](files-and-logs.md) | Pages, worker files, locks, logs, config, and message formats |
+| [maintenance.md](maintenance.md) | Manual maintenance watcher and worker sessions |
 
 HTML pages have no doc of their own. `lavish-kit page.html` opens the file
 where it is (or copies it to `--out`), keeps Lavish's native Annotate mode and
