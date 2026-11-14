@@ -53,8 +53,16 @@ install a wake service. Blocked sessions remain open. Review and approve agent
 permissions normally. Issue text is untrusted and cannot authorize policy or
 credential access.
 
-This is experimental: review the watcher and skills before use, especially
-launch recovery and issue finalization. Public finalization is not crash-safe: a
-crash between pushing, commenting and closing requires manual reconciliation
-before retrying to avoid duplicate work or comments. The normal AGENTS.md integration and QA
-requirements still apply.
+Issue workers record `finalization-intent ID TOKEN fix FULL_COMMIT_ID` before
+pushing, or `finalization-intent ID TOKEN evidence 'reason and evidence'` for an
+already-fixed or obsolete issue. `finalize ID TOKEN` verifies a fix is reachable
+from remote main, posts a marked comment, and closes the issue. It persists intent
+before each action and reconciles a prior comment or close on retry. A retry must
+resume the recorded commit rather than implement another fix. A changed commit
+requires manual resolution of the recorded intent before pushing. `issue-comment
+ID TOKEN 'text'` posts other robot comments with a stable marker. Both commands
+check current operator activity before public writes; changed activity requires a
+worker to stop and review it. GitHub cannot make this check atomic with a write,
+so an operator edit concurrent with a write can still race it. A leftover lock
+must be inspected after a crash before resuming. The normal AGENTS.md integration
+and QA requirements still apply.
