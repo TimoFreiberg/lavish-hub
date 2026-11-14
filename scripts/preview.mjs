@@ -15,18 +15,11 @@ if ((await readdir(out)).length) {
   try { previous = JSON.parse(await (await import('node:fs/promises')).readFile(path.join(out, 'manifest.json'), 'utf8')); } catch {}
   const legacy = previous?.generator === undefined && previous?.version === 1 && Array.isArray(previous.pages)
     && previous.pages.length > 0 && previous.pages.every(page => /^[a-z0-9-]+$/.test(page.id) && page.url === `${page.id}/page/index.html`);
-  if (legacy) {
-    const backup = await mkdtemp(`${out}-legacy-`);
-    await rename(out, path.join(backup, 'preview'));
-    console.log(`Previous preview preserved: ${path.join(backup, 'preview')}`);
-    await mkdir(out);
-  } else {
-    if (previous?.generator !== 'lavish-kit-preview' || !Array.isArray(previous.pages)) throw new Error(`Preview output directory is not a generated preview: ${out}`);
-    for (const name of ['assets', ...previous.pages.map(page => page.id)]) {
-      if (!/^[a-z0-9-]+$/.test(name)) throw new Error('Invalid generated preview manifest');
-      await rm(path.join(out, name), { recursive: true, force: true });
-    }
-  }
+  if (!legacy && (previous?.generator !== 'lavish-kit-preview' || !Array.isArray(previous.pages))) throw new Error(`Preview output directory is not a generated preview: ${out}`);
+  const backup = await mkdtemp(`${out}-previous-`);
+  await rename(out, path.join(backup, 'preview'));
+  console.log(`Previous preview preserved: ${path.join(backup, 'preview')}`);
+  await mkdir(out);
 }
 const scratch = await mkdtemp(path.join(os.tmpdir(), 'lavish-preview-'));
 try {

@@ -11,10 +11,16 @@ import { chromium } from 'playwright-core';
 test('preview simulates saves and conflicts without external requests', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'preview-browser-'));
   let browser, server;
-  const fixtures = 'test/visual/fixtures';
   const fixtureHash = async () => {
     const digest = createHash('sha256');
-    for (const name of (await readdir(fixtures)).sort()) digest.update(name).update(await readFile(path.join(fixtures, name)));
+    const visit = async dir => {
+      for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+        const name = path.join(dir, entry.name);
+        if (entry.isDirectory()) await visit(name);
+        else if (entry.isFile()) digest.update(name).update(await readFile(name));
+      }
+    };
+    for (const dir of ['test/visual/fixtures', 'src', 'web']) await visit(dir);
     return digest.digest('hex');
   };
   const before = await fixtureHash();
@@ -30,7 +36,7 @@ test('preview simulates saves and conflicts without external requests', async ()
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${server.address().port}/nested/`;
     browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
-    const context = await browser.newContext({ hasTouch: true });
+    const context = await browser.newContext({ hasTouch: true, serviceWorkers: 'block' });
     const forbidden = [], missing = [];
     await context.route('**/*', route => {
       const request = route.request();
@@ -74,12 +80,30 @@ test('preview simulates saves and conflicts without external requests', async ()
     page.once('dialog', dialog => dialog.accept()); await page.locator('#preview-reset').click();
     await page.locator('#editor').waitFor({ state: 'visible' });
     assert.notEqual(await page.locator('#editor').inputValue(), 'Second edit');
+    const original = await page.locator('#editor').inputValue();
+    await page.locator('#editor').fill('Unsaved before theme change');
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByLabel('Theme').selectOption('light');
+    await page.waitForURL(/theme=light/);
+    await page.locator('#editor').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#editor').inputValue(), original);
+    await page.getByRole('link', { name: 'All previews' }).click();
+    assert.match(page.url(), /index\.html\?theme=light/);
+    await page.getByRole('link', { name: 'task-short-edit', exact: true }).click();
+    assert.match(page.url(), /theme=light/);
+    await page.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
+    assert.equal(await page.locator('#editor').inputValue(), original);
+    await page.locator('#editor').fill('Unsaved before reload');
+    page.once('dialog', dialog => dialog.accept()); await page.reload();
+    await page.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
+    assert.equal(await page.locator('#editor').inputValue(), original);
     await page.goto(`${base}pr-unconfigured-rendered/page/index.html`);
     assert.equal(await page.locator('#create-pr').isDisabled(), true);
     await page.goto(`${base}pr-configured-edit/page/index.html`);
     await page.locator('#editor').waitFor({ state: 'visible' });
     await page.locator('#pr-title').fill(''); await page.locator('#create-pr').click();
-    assert.notEqual(await page.locator('#status').textContent(), 'Saved — up to date with disk');
+    assert.equal(await page.locator('#status').textContent(), 'PR title must be a nonempty single line');
+    assert.doesNotMatch(await page.locator('#preview-receipt').textContent(), /acknowledged/);
     await page.locator('#pr-title').fill('Preview PR'); await page.locator('#create-pr').click();
     await page.getByText('Simulated Create PR acknowledged; no PR was created.').waitFor();
     await page.getByText('Saved — up to date with disk').waitFor();
@@ -91,9 +115,27 @@ test('preview simulates saves and conflicts without external requests', async ()
       await page.getByPlaceholder('Write a comment').fill(text);
       await page.getByRole('button', { name: 'Queue comment' }).click();
     };
-    await addComment('First comment');
+    await page.evaluate(() => { const original = window.lavish.queuePrompt; window.lavish.queuePrompt = (...args) => { window.capturedComment = args; return original(...args); }; });
+    const location = await (async () => {
+      await page.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
+      await page.getByRole('button', { name: 'Add comment' }).click();
+      const where = await page.locator('.draft strong').textContent();
+      await page.getByPlaceholder('Write a comment').fill('First comment');
+      await page.getByRole('button', { name: 'Queue comment' }).click();
+      return where;
+    })();
+    assert.match(location, /^new .+:\d+ \([a-f0-9]+\)$/);
+    const captured = await page.evaluate(() => window.capturedComment);
+    assert.ok(captured[0].includes(location));
+    assert.match(captured[0], /First comment/);
+    assert.equal(captured[1].tag, 'code-comment');
     assert.equal(await page.locator('#preview-queue li').count(), 1);
+    assert.match(await page.locator('#preview-queue li').textContent(), new RegExp(location.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     await page.locator('#preview-queue button').click();
+    assert.equal(await page.locator('#preview-queue li').count(), 0);
+    await addComment('Discard on reset');
+    page.once('dialog', dialog => dialog.accept()); await page.locator('#preview-reset').click();
+    await page.locator('[data-content] [data-line-type="change-addition"] span[style]').first().waitFor();
     assert.equal(await page.locator('#preview-queue li').count(), 0);
     await addComment('Second comment');
     await page.locator('#preview-send').click();
@@ -107,7 +149,7 @@ test('preview simulates saves and conflicts without external requests', async ()
       codeColors.push(await code.evaluate(el => getComputedStyle(el).color));
     }
     assert.notEqual(codeColors[0], codeColors[1], 'highlighted code uses theme colors');
-    for (const id of ['html-document', 'diff-jj']) {
+    for (const id of ['html-document', 'markdown-document', 'task-short-edit', 'pr-configured-edit', 'diff-jj']) {
       const colors = [];
       for (const theme of ['dark', 'light']) {
         await page.goto(`${base}${id}/page/index.html?theme=${theme}`);
@@ -119,7 +161,16 @@ test('preview simulates saves and conflicts without external requests', async ()
     await page.setViewportSize({ width: 480, height: 900 });
     await page.goto(`${base}diff-jj/page/index.html`);
     await page.locator('.file-link').first().waitFor();
+    const files = page.locator('.file-link');
+    assert.ok(await files.count() > 1);
+    const target = await files.nth(1).getAttribute('data-path');
+    await files.nth(1).click();
+    assert.equal(await page.locator('.file-link[aria-current]').getAttribute('data-path'), target);
     await page.keyboard.press('s'); await page.getByRole('button', { name: 'Unified' }).waitFor();
+    await page.keyboard.press('s'); await page.getByRole('button', { name: 'Split', exact: true }).waitFor();
+    await page.getByRole('link', { name: /Open in Zed/ }).first().click();
+    await page.getByText('Opening an editor is unavailable in the demo.').waitFor();
+    await page.getByRole('button', { name: /Copy Zed command/ }).first().click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     const touchTarget = async (selector) => {
       const control = page.locator(selector).first();

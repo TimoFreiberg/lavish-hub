@@ -71,8 +71,8 @@ function gallery(report) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Screenshot and layout checks</title><style>body{font:16px system-ui;margin:2rem;background:#fafafa;color:#171717}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:1rem}h2{grid-column:1/-1}article{border:1px solid #aaa;padding:1rem;min-width:0}img{width:100%;height:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}a{overflow-wrap:anywhere}h3{overflow-wrap:anywhere}</style></head><body><h1>Screenshot and layout checks</h1><p>${report.shots.length} shots; ${report.shots.filter(shot => shot.failures.length).length} failed. <a href="report.json">JSON report</a></p><p><a href="preview/index.html">Interactive static preview</a>. Static images show the preview; integration images include Lavish chrome and its artifact iframe. Full-page and scroll captures are linked where content scrolls.</p>${groups}</body></html>\n`;
 }
 
-export async function runShots({ launch = launchBrowser, close = closeVisualResources } = {}) {
-const report = { version: 1, matrix: { viewports: [{ width: 1440, height: 900 }, { width: 480, height: 900 }], colorSchemes: ['light', 'dark'], gitDiff: 'Same renderer and parser as jj; equivalent git matrix omitted' }, shots: [] };
+export async function runShots({ launch = launchBrowser, close = closeVisualResources, afterLaunch = () => {} } = {}) {
+const report = { version: 2, matrix: { viewports: [{ width: 1440, height: 900 }, { width: 480, height: 900 }], colorSchemes: ['light', 'dark'], gitDiff: 'Same renderer and parser as jj; equivalent git matrix omitted' }, shots: [] };
 let lavish, browser, server, interrupted = false;
 const timings = {}; const started = performance.now();
 const interrupt = () => { interrupted = true; browser?.close().catch(() => {}); };
@@ -103,6 +103,7 @@ try {
   execFileSync(process.execPath, [path.join(root, 'build.mjs'), root, dist]);
   const diff = await scratchDiff(lavish.dir);
   browser = await launch();
+  if (await afterLaunch(browser) !== false) {
   const jobs = [];
   // PR fixtures change the shared config, so prepare all pages before concurrent captures.
   for (const variant of variants) for (const viewport of report.matrix.viewports) for (const colorScheme of report.matrix.colorSchemes) {
@@ -162,6 +163,7 @@ try {
   report.shots.sort((a, b) => a.id.localeCompare(b.id));
   const reportErrors = validateReport(report, variants, manifest);
   if (reportErrors.length) throw new Error(reportErrors.join('; '));
+  }
 } catch (error) {
   report.runnerErrors = [error.message]; console.error(error.message);
 } finally {

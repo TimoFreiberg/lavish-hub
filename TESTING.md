@@ -127,7 +127,7 @@ data directories, its own port, no workers). It replaces the gitignored
 - eight wide (1440×900), dark viewport PNGs: static HTML, Markdown, populated diff, long task edit, and configured PR rendered; real-Lavish populated diff, changed-on-disk task edit, and configured PR edit,
 - full-page and scrolled-pane captures for selected pages that scroll,
 - `preview/`, the generated interactive static artifact used for static checks,
-- `report.json` with static and integration check records, timings, and cleanup result,
+- `report.json` (schema version 2) with static and integration check records, timings, and cleanup result; unlike version 1, records distinguish their source and diagnostic-only cases need not have a PNG,
 - `index.html`, a gallery linking the preview and distinguishing check-only records from captures.
 
 Fixtures cover HTML, Markdown with highlighted code and frontmatter, a jj diff
