@@ -1,17 +1,15 @@
 # Working on lavish-kit
 
-Last verified: 2026-11-13
+Last verified: 2026-11-14
 
-Testing is in [TESTING.md](TESTING.md). Never run two test commands at once in
-one checkout. After UI work, run `just shots` and look at the changed PNGs in
-`shots/`. User and agent docs are in [docs/](docs/README.md). Update them when
-behavior changes.
+Testing is in [TESTING.md](TESTING.md). User and agent docs are in
+[docs/](docs/README.md). Update them when behavior changes.
 
 Use jj. Start with an empty change, review `jj diff --git`, and commit only
 files you changed. Use imperative commit messages of at most 72 characters,
-without a trailing period. Preserve the repo-local noreply author identity.
-Leave the working-copy change empty after committing. Do not push or move
-bookmarks without the operator's approval.
+without a trailing period. Leave the working-copy change empty after
+committing. Advancing and pushing `main` is authorized through the development
+process below; other bookmark moves require the operator's approval.
 
 This is a public repo. Keep private names, work details, credentials, hostnames,
 and absolute home paths out of code, tests, and docs. Use `$HOME`/XDG paths in
@@ -23,3 +21,33 @@ When changing delivery, keep the guarantees in
 save or action keeps the target it arrived with, and Create PR records its
 launch attempt before calling herdr. Generated pages and worker files stay
 local and outside the reviewed repository.
+
+## Development process
+
+- Make every file edit in your own jj workspace under `.workspaces/<name>`
+  (see the `jj-workspaces` skill), based on the revision the operator named
+  (default: `main`). Commit only your task as new leaf commits.
+- Finish every task by integrating it into `main`. Serialize integration with
+  one shared lock file at `<primary-checkout>/.workspaces/merge.lock`, never a
+  workspace-local copy. Acquire it atomically with exclusive creation, record
+  your agent session ID and workspace as owner, and wait if held. Clear a
+  stale lock only after operator confirmation that its owner is no longer
+  integrating. Never release another session's lock.
+- While holding the lock, fetch `origin` and rebase your task commits onto
+  `main@origin`. Stop if this would include unrelated unpublished work or
+  discard unrelated local `main` commits. Resolve conflicts before QA.
+- Run `just test`, `just test-e2e`, and `just shots` sequentially in that
+  workspace, then visually inspect the resulting PNGs at original size.
+  Never run two test commands at once in one checkout. All checks are
+  mandatory, including for documentation changes; missing prerequisites
+  (including herdr) block integration. Any fixes require fresh QA on the
+  exact commits to be pushed.
+- After QA passes, move local `main` to the tested task tip and push only
+  `main` to `origin`, never force-push. If remote `main` advances, fetch,
+  rebase onto the new `main@origin`, and repeat all QA before moving local
+  `main` to the newly tested tip and retrying. Replacing your previous local
+  integration tip is allowed; discarding unrelated work is not.
+- Hold the lock through confirmed push success, then release it and remove
+  the task workspace using the `jj-workspaces` skill. On failure or
+  cancellation, release your lock and report the unmerged task and any local
+  bookmark movement; reacquire the lock and restart from fetch before retrying.
