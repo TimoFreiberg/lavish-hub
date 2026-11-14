@@ -39,22 +39,23 @@ To run a single file: `node --test --test-concurrency=1 test/cli.test.mjs`.
 
 ## `just test-e2e`
 
-Runs `test/relay-e2e.mjs`. Run it inside herdr, with herdr running. It creates
-a scratch jj repository, herdr space, and terminals
-(`hc run --bg --no-parent --no-notify`), and checks:
+Runs `test/relay-e2e.mjs`. It requires a working `hc` service, but not the
+herdr desktop app. It creates a scratch jj repository and isolated terminals
+(`hc run --bg --no-parent --no-notify`) with synthetic space labels, and checks:
 
 - delivery follows a moved session label,
 - the exact saved bytes, page updates, and agent notices,
-- Create PR with a stub command from a temporary `XDG_CONFIG_HOME`, through a
-  real `tab.new` in the recorded space and repository (no PR command or GitHub
-  access),
+- Create PR with a stub command from a temporary `XDG_CONFIG_HOME`: a mock
+  validates the `tab.new` request and persisted launch checkpoint, then starts
+  the stub through real `hc` (no PR command or GitHub access),
 - that opening commands return before edits,
 - that a watch-only Markdown page updates in the browser and its worker stops
   when the session ends.
 
-It ends its pages and removes only its own workers, logs, space, terminals, and
-temporary files. It never sends to the terminal you run it from. Don't point
-tests at terminals they didn't create.
+It ends its pages and removes only its own workers, logs, terminals, and temporary
+files. It never sends to the terminal you run it from. Don't point tests at
+terminals they didn't create. Automated tests mock the desktop app; actual GUI
+integration and phone artifact behavior require manual desktop testing.
 
 ## `just shots`
 

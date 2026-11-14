@@ -40,7 +40,8 @@ local and outside the reviewed repository.
   workspace, then visually inspect the resulting PNGs at original size.
   Never run two test commands at once in one checkout. All checks are
   mandatory, including for documentation changes; missing prerequisites
-  (including herdr) block integration. Any fixes require fresh QA on the
+  (including a working `hc` service) block integration. Automated tests mock
+  `herdr-app` and do not require its desktop application. Any fixes require fresh QA on the
   exact commits to be pushed.
 - After QA passes, move local `main` to the tested task tip and push only
   `main` to `origin`, never force-push. If remote `main` advances, fetch,

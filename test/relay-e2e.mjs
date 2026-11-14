@@ -1,4 +1,4 @@
-// Run explicitly inside herdr: node test/relay-e2e.mjs
+// Run with hc available: node test/relay-e2e.mjs
 // This creates and cleans up only its own scratch terminals and Lavish page.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -16,7 +16,11 @@ const file = path.join(dir, 'page.html');
 const sourceFile = path.join(dir, 'task.md');
 const prFile = path.join(dir, 'pr-page/index.html'), prSource = path.join(dir, 'pr.md');
 const launchFile = path.join(dir, 'launch.json'), captureFile = path.join(dir, 'create-pr.json');
-const terminals = []; let browser, space;
+const terminals = []; let browser;
+const space = session, tab = `${session}-pr`, journal = path.join(dir, 'terminal.json');
+const bin = path.join(dir, 'bin'), config = path.join(dir, 'config'), repo = path.join(dir, 'repo');
+const stubFile = path.join(bin, 'create-pr-stub');
+const executable = async (name, script) => { const file = path.join(bin, name); await writeFile(file, `#!${process.execPath}\n${script}\n`); await chmod(file, 0o755); };
 const outsideFile = path.join(dir, 'markdown/index.html'), outsideSource = path.join(dir, 'notes.md');
 const run = async (name, args, options = {}) => {
   const result = await exec(name, args, { ...options, maxBuffer: 4 * 1024 * 1024 });
@@ -29,17 +33,28 @@ const until = async fn => {
   throw new Error('E2E readiness timeout');
 };
 try {
-  const scratchSpace = JSON.parse(await run('herdr-app', ['do', 'space.new', JSON.stringify({ name: session, folder: dir, argv: ['cat'] })]));
-  space = scratchSpace.space;
-  assert.ok(space); assert.ok(scratchSpace.terminal);
+  await mkdir(bin); await mkdir(path.join(config, 'lavish-kit'), { recursive: true });
+  await executable('create-pr-stub', `const fs=require('node:fs'); const args=process.argv.slice(2); const source=args[args.indexOf('--body-file')+1]; fs.writeFileSync(${JSON.stringify(captureFile)},JSON.stringify({args,cwd:process.cwd(),terminal:process.env.HC_TERMINAL_ID,text:fs.readFileSync(source,'utf8')})); console.log('stub-create-pr: '+JSON.stringify(args)); console.log('No GitHub access');`);
+  await executable('herdr-app', `const fs=require('node:fs'),cp=require('node:child_process'),assert=require('node:assert/strict');
+const args=process.argv.slice(2);
+if(args[0]==='do' && args[1]?.startsWith('task-tree.artifact:')) { const payload=JSON.parse(args[1].slice('task-tree.artifact:'.length)); fs.writeFileSync(payload.ack,JSON.stringify({ok:true})); process.exit(0); }
+assert.deepEqual(args.slice(0,2),['do','tab.new']); assert.equal(args.length,3);
+const request=JSON.parse(args[2]), source=fs.realpathSync(${JSON.stringify(prSource)}), repo=fs.realpathSync(${JSON.stringify(repo)});
+assert.deepEqual(request,{space:${JSON.stringify(space)},folder:repo,name:'Create PR',argv:[${JSON.stringify(process.execPath)},${JSON.stringify(stubFile)},'-r','@-','--body-file',source]});
+assert.equal(fs.readFileSync(source,'utf8'),${JSON.stringify('# Create PR title\n\nCreate PR body " \\ 雪\n\n')});
+assert.ok(JSON.parse(fs.readFileSync(${JSON.stringify(relayPaths(prFile).outbox)},'utf8')).some(batch=>batch.states.some(state=>state.launchAttempted)));
+const result=JSON.parse(cp.execFileSync('hc',['run','--bg','--no-parent','--no-notify','--json','--cwd',repo,'--label',${JSON.stringify(`herdr.space=${space}`)},'--label',${JSON.stringify(`herdr.tab=${tab}`)},${JSON.stringify(process.execPath)},${JSON.stringify(stubFile)},'-r','@-','--body-file',source],{encoding:'utf8'}));
+fs.writeFileSync(${JSON.stringify(journal)},JSON.stringify(result.address)); assert.ok(result.address);
+const launch={space:${JSON.stringify(space)},tab:${JSON.stringify(tab)},terminal:result.address}; fs.writeFileSync(${JSON.stringify(launchFile)},JSON.stringify(launch)); process.stdout.write(JSON.stringify(launch));`);
+  process.env.PATH = `${bin}:${process.env.PATH}`;
+  process.env.LAVISH_AXI_STATE_DIR = path.join(dir, 'lavish-state');
+  process.env.LAVISH_KIT_LAVISH_TRANSPORT = 'cli';
   for (const label of [session, `${session}-spare`]) {
     const result = JSON.parse(await run('hc', ['run', '--bg', '--no-parent', '--no-notify', '--json', '--cwd', dir, '--label', `herdr.space=${space}`, '--label', `polytoken.session=${label}`, 'cat']));
     const terminal = result.address;
     assert.ok(terminal, JSON.stringify(result));
     terminals.push(terminal); console.log(`Created scratch terminal ${terminal} in ${space}`);
   }
-  // Keep the space's initial terminal separate from the two delivery targets.
-  terminals.push(scratchSpace.terminal);
   await writeFile(sourceFile, '# Relay E2E\n\nQuoted E2E context\n');
   const taskStart = Date.now();
   const taskOutput = await run(process.execPath, [cli, sourceFile, '--out', file, '--title', 'Relay E2E'], { env: { ...process.env, HC_TERMINAL_ID: terminals[0] }, timeout: 15000 });
@@ -92,18 +107,8 @@ try {
   await until(async () => { try { await access(relayPaths(file).lock); return false; } catch { return true; } });
   console.log('PASS: browser queue-and-send, delivery, moved session, and relay exit');
 
-  // Real tab.new launches only an absolute scratch command from config.json.
-  // The wrapper captures acknowledgement but does not alter the launch argv.
-  const bin = path.join(dir, 'bin'), config = path.join(dir, 'config');
-  const herdrHome = process.env.HERDR_APP_HOME || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'herdr-app');
-  await mkdir(bin); await mkdir(path.join(config, 'lavish-kit'), { recursive: true });
-  const stubFile = path.join(bin, 'create-pr-stub');
-  const executable = async (name, script) => { const file = path.join(bin, name); await writeFile(file, `#!${process.execPath}\n${script}\n`); await chmod(file, 0o755); };
-  await executable('create-pr-stub', `const fs=require('node:fs'); const args=process.argv.slice(2); const source=args[args.indexOf('--body-file')+1]; fs.writeFileSync(${JSON.stringify(captureFile)},JSON.stringify({args,cwd:process.cwd(),terminal:process.env.HC_TERMINAL_ID,text:fs.readFileSync(source,'utf8')})); console.log('stub-create-pr: '+JSON.stringify(args)); console.log('No GitHub access');`);
+  // The mock validates tab.new and launches only the configured scratch stub via hc.
   await writeFile(path.join(config, 'lavish-kit/config.json'), JSON.stringify({ createPr: [process.execPath, stubFile] }));
-  const realApp = (await exec('which', ['herdr-app'])).stdout.trim();
-  await executable('herdr-app', `const fs=require('node:fs'), cp=require('node:child_process'); const args=process.argv.slice(2); if(args[0]==='do' && args[1]==='tab.new'){ const request=JSON.parse(args[2]); if(request.argv[0]!==${JSON.stringify(process.execPath)} || request.argv[1]!==${JSON.stringify(stubFile)}) throw Error('unexpected launch'); const output=cp.execFileSync(${JSON.stringify(realApp)},args,{encoding:'utf8'}); fs.writeFileSync(${JSON.stringify(launchFile)},output); process.stdout.write(output); } else {process.stdout.write(cp.execFileSync(${JSON.stringify(realApp)},args,{encoding:'utf8'}));}`);
-  const repo = path.join(dir, 'repo');
   await run('jj', ['git', 'init', repo]);
   for (const [key, value] of [['user.name', 'Test'], ['user.email', 'test@example.invalid'], ['revset-aliases."trunk()"', 'root()']]) {
     await run('jj', ['config', 'set', '--repo', key, value], { cwd: repo });
@@ -112,7 +117,7 @@ try {
   await run('jj', ['commit', '-m', 'Create E2E fixture'], { cwd: repo });
   await writeFile(prSource, '# PR E2E title\n\nInitial PR body\n');
   const prStart = Date.now();
-  const prOutput = await run(process.execPath, [cli, 'pr', prSource, '-r', '@-', '--out', prFile], { cwd: repo, env: { ...process.env, HC_TERMINAL_ID: terminals[1], XDG_CONFIG_HOME: config, HERDR_APP_HOME: herdrHome, PATH: `${bin}:${process.env.PATH}` }, timeout: 15000 });
+  const prOutput = await run(process.execPath, [cli, 'pr', prSource, '-r', '@-', '--out', prFile], { cwd: repo, env: { ...process.env, HC_TERMINAL_ID: terminals[1], XDG_CONFIG_HOME: config }, timeout: 15000 });
   assert.match(prOutput, /Lavish review/); assert.ok(Date.now() - prStart < 15000);
   console.log('PASS: PR command returned promptly before Send/Create PR.');
   const prTarget = JSON.parse(await readFile(relayPaths(prFile).target));
@@ -158,7 +163,7 @@ try {
   const realLavish = (await exec('which', ['lavish-axi'])).stdout.trim(), outsideCalls = path.join(dir, 'outside-calls');
   await executable('lavish-axi', `const fs=require('node:fs'),cp=require('node:child_process'),args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(outsideCalls)},JSON.stringify(args)+'\\n');try{process.stdout.write(cp.execFileSync(${JSON.stringify(realLavish)},args,{encoding:'utf8'}));}catch(error){process.stderr.write(error.stderr||error.message);process.exit(1);}`);
   await writeFile(outsideSource, '# Outside review\n\nInitial Markdown\n');
-  const outsideOutput = await run(process.execPath, [cli, outsideSource, '--out', outsideFile], { env: { ...process.env, HC_TERMINAL_ID: '', PATH: `${bin}:${process.env.PATH}` }, timeout: 15000 });
+  const outsideOutput = await run(process.execPath, [cli, outsideSource, '--out', outsideFile], { env: { ...process.env, HC_TERMINAL_ID: '', LAVISH_KIT_LAVISH_TRANSPORT: 'cli' }, timeout: 15000 });
   const outsideURL = outsideOutput.match(/ready: (https?:\/\/\S+)/)?.[1]; assert.ok(outsideURL);
   const outsidePage = await browser.newPage(); await outsidePage.goto(outsideURL);
   const outsideFrame = outsidePage.locator('iframe').first().contentFrame();
@@ -166,7 +171,7 @@ try {
   await writeFile(outsideSource, '# Updated outside review\n\nChanged Markdown\n');
   await outsideFrame.getByRole('heading', { name: 'Updated outside review' }).waitFor();
   await until(async () => (await readFile(outsideCalls, 'utf8')).trim().split('\n').map(JSON.parse).some(args => args.length === 0));
-  await run('lavish-axi', ['end', outsideFile]);
+  await run(realLavish, ['end', outsideFile]);
   await until(async () => { try { await access(relayPaths(outsideFile).lock); return false; } catch { return true; } });
   const outsideTrace = (await readFile(outsideCalls, 'utf8')).trim().split('\n').map(JSON.parse);
   assert.ok(outsideTrace.every(args => !['poll', 'reply', 'end'].includes(args[0])));
@@ -185,14 +190,8 @@ try {
     await until(async () => { try { await access(relayPaths(page).lock); return false; } catch { return true; } });
     } catch (error) { cleanupError ??= error; }
   }
-  // Include a launched terminal even if an assertion failed before capture was read.
-  if (space) {
-    try {
-      const owned = JSON.parse((await exec('herdr-app', ['ls'])).stdout).spaces.find(item => item.id === space);
-      terminals.push(...(owned?.tabs || []).flatMap(tab => tab.terminals.map(item => item.terminal)));
-    } catch {}
-    try { await run('herdr-app', ['do', 'space.close', JSON.stringify({ id: space, confirmed: true })]); } catch {}
-  }
+  // The mock journals its terminal before returning, even if later assertions fail.
+  try { const terminal = JSON.parse(await readFile(journal)); if (terminal) terminals.push(terminal); } catch {}
   for (const terminal of new Set(terminals)) {
     try { await run('hc', ['kill', terminal]); } catch {}
     try { await run('hc', ['rm', terminal]); } catch {}
