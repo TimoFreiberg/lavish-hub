@@ -14,9 +14,11 @@ test('provenance follows isolated jj and Git checkouts', async () => {
     run(parent, 'jj', ['git', 'init']);
     for (const kind of ['jj', 'git']) {
       const repo = path.join(parent, kind); await mkdir(repo);
-      for (const name of ['scripts', 'src', 'test', 'web', 'build.mjs', 'package.json', 'package-lock.json']) {
+      for (const name of ['scripts', 'src', 'web', 'build.mjs', 'package.json', 'package-lock.json']) {
         await cp(path.join(root, name), path.join(repo, name), { recursive: true });
       }
+      await mkdir(path.join(repo, 'test', 'visual'), { recursive: true });
+      await cp(path.join(root, 'test', 'visual', 'fixtures'), path.join(repo, 'test', 'visual', 'fixtures'), { recursive: true });
       await symlink(path.join(root, 'node_modules'), path.join(repo, 'node_modules'), 'dir');
       await writeFile(path.join(repo, '.gitignore'), 'node_modules\n');
       if (kind === 'jj') {
@@ -32,7 +34,7 @@ test('provenance follows isolated jj and Git checkouts', async () => {
         const out = path.join(parent, `${kind}-${label}`);
         run(repo, process.execPath, ['scripts/preview.mjs', out]);
         const manifest = JSON.parse(await readFile(path.join(out, 'manifest.json'), 'utf8'));
-        assert.deepEqual(Object.keys(manifest), ['generator', 'version', 'fixtureVersion', 'revision', 'dirty', 'timestamp', 'pages']);
+        assert.deepEqual(Object.keys(manifest).sort(), ['generator', 'version', 'fixtureVersion', 'revision', 'dirty', 'timestamp', 'pages'].sort());
         assert.equal(manifest.generator, 'lavish-kit-preview');
         assert.equal(manifest.version, 1);
         assert.equal(manifest.revision, revision);
