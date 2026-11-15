@@ -18,7 +18,7 @@ export async function writeDocumentShell(file, dist, title, app, pr, { bootstrap
   await mkdir(path.dirname(file), { recursive: true });
   await cp(dist, path.join(path.dirname(file), 'assets'), { recursive: true, force: true });
   const metadata = pr ? `<script>globalThis.lavishViewPR=${JSON.stringify(pr).replaceAll('<', '\\u003c')};</script>` : '';
-  await atomicWrite(file, `<!doctype html>\n<html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><link rel="stylesheet" href="./assets/document.css"></head><body><main id="app"></main>${metadata}${bootstrap ? `<script src="${escape(bootstrap)}"></script>` : ''}<script src="./assets/${app}-app.js"></script></body></html>\n`);
+  await atomicWrite(file, `<!doctype html>\n<html lang="en" data-theme="dark" data-lavish-annotate="off"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><link rel="stylesheet" href="./assets/document.css"></head><body><main id="app"></main>${metadata}${bootstrap ? `<script src="${escape(bootstrap)}"></script>` : ''}<script src="./assets/${app}-app.js"></script></body></html>\n`);
 }
 export async function writeTaskPage(source, dist, { out, title, deps, sourceName, bootstrap } = {}) {
   source = await realpath(source);

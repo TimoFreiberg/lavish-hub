@@ -33,7 +33,8 @@ test('task browser: real save transport, rendered annotations, clean/dirty disk 
   await frame.getByRole('heading', { name: /^Original/ }).waitFor();
   assert.ok((await frame.locator('#preview').innerText()).includes('Hidden metadata'));
   assert.equal(await frame.locator('#preview strong#inline-html').innerText(), 'Inline HTML');
-  await page.locator('#annotation[aria-pressed="true"]').waitFor();
+  await page.locator('#annotation[aria-pressed="false"]').waitFor();
+  await page.locator('#annotation').click();
   await frame.getByRole('heading', { name: /^Original/ }).click();
   await frame.getByPlaceholder(/tell the agent/i).waitFor();
   await frame.getByRole('button', { name: 'Cancel', exact: true }).click();

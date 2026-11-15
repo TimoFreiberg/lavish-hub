@@ -140,7 +140,10 @@ function renderSidebar() {
   markCurrent();
 }
 function renderToolbar() {
-  toolbar.replaceChildren(button(state.split ? 'Unified' : 'Split', toggleSplit), button('Keyboard shortcuts (?)', () => help.hidden = !help.hidden));
+  toolbar.replaceChildren(button('Send', () => {
+    if (typeof window.lavish?.sendQueuedPrompts !== 'function') { notice.textContent = 'Send unavailable: open this page in Lavish'; return; }
+    window.lavish.sendQueuedPrompts();
+  }), button(state.split ? 'Unified' : 'Split', toggleSplit), button('Keyboard shortcuts (?)', () => help.hidden = !help.hidden));
   if (state.storageFailed) toolbar.append(el('span', 'Viewed resets on reload', 'hint'));
 }
 function toggleSplit() { state.split = !state.split; view.setOptions(options()); renderToolbar(); }

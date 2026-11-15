@@ -56,7 +56,7 @@ test('real Lavish offline browser smoke', { timeout: 120000 }, async t => {
   await frame.getByRole('button', { name: 'Queue comment' }).click();
   await frame.getByRole('button', { name: 'Refresh' }).click(); await frame.locator('[data-content]').getByText(/changed/).first().waitFor({ timeout: 10000 });
   assert.equal(await frame.locator('body').evaluate(() => window.__identity), identity);
-  await page.getByRole('button', { name: 'Send to Agent' }).click(); await pollDone; assert.match(pollOutput, /code-comment/); assert.match(pollOutput, /old old name.js:1/); assert.match(pollOutput, /abc123/); assert.match(pollOutput, /const old/);
+  await frame.getByRole('button', { name: 'Send', exact: true }).click(); await pollDone; assert.match(pollOutput, /code-comment/); assert.match(pollOutput, /old old name.js:1/); assert.match(pollOutput, /abc123/); assert.match(pollOutput, /const old/);
   assert.deepEqual(errors, []);
 });
 

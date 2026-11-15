@@ -30,6 +30,7 @@ test('PR browser: hierarchy, preview, Save/Create PR envelopes, clean/dirty watc
   const page = await browser.newPage(), errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => ['localhost', '127.0.0.1', '[::1]'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
   await page.goto(url);
+  await page.locator('#annotation[aria-pressed="false"]').waitFor();
   for (const value of [undefined, '{', '{"createPr":[]}']) {
     if (value !== undefined) {
       await writeFile(configFile, value);

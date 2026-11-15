@@ -34,8 +34,8 @@ Diff pages start with Lavish's own Annotate mode off, because Lavish's
 annotations would see the diff renderer's container rather than the clicked
 line. Click a code line, or select a range in the line-number gutter, to open a
 comment box beside it. Queue comment (Cmd+Enter) adds it to Lavish's queue
-with the path, old or new side, revision, and quoted source lines. Lavish's
-Send delivers the queue.
+with the path, old or new side, revision, and quoted source lines. The page's
+Send button delivers Lavish's queue directly.
 
 ## Keyboard
 

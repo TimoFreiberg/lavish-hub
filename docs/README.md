@@ -20,6 +20,10 @@ where it is (or copies it to `--out`), keeps Lavish's native Annotate mode and
 live reload, and has nothing to watch. Everything else about them is in
 [cli.md](cli.md) and [feedback-routing.md](feedback-routing.md).
 
+Pages with their own forms or commenting controls start with Lavish Annotate
+mode off and provide a page-level Send button. You can turn Annotate on
+manually. Display-only pages retain Lavish's default Annotate behavior.
+
 Generated Markdown, PR, and diff pages use dark mode by default, including
 syntax highlighting and native controls, regardless of the operating system
 theme. Opening an existing HTML file preserves its authored appearance.
