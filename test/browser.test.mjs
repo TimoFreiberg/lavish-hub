@@ -51,8 +51,13 @@ test('real Lavish offline browser smoke', { timeout: 120000 }, async t => {
   const poll = spawn('lavish-axi', ['poll', file, '--timeout-ms', '15000']); let pollOutput = ''; poll.stdout.on('data', chunk => pollOutput += chunk); const pollDone = new Promise((resolve, reject) => { poll.on('error', reject); poll.on('close', resolve); });
   t.after(() => poll.kill());
   await frame.locator('body').evaluate(() => { window.__identity = Math.random(); }); const identity = await frame.locator('body').evaluate(() => window.__identity);
+  await frame.locator('body').evaluate(() => { window.__send = window.lavish.sendQueuedPrompts; window.lavish.sendQueuedPrompts = undefined; });
+  await frame.getByRole('button', { name: 'Send', exact: true }).click();
+  await frame.getByText('Send unavailable: open this page in Lavish').waitFor();
   await writeDiffPage({ ...source, patch: patch.replace('newer', 'changed') }, dist, file);
   await frame.getByText('Diff changed').waitFor({ timeout: 8000 }); assert.equal(await frame.getByRole('button', { name: 'Refresh' }).isDisabled(), true);
+  assert.equal(await frame.getByText('Send unavailable: open this page in Lavish').isVisible(), true);
+  await frame.locator('body').evaluate(() => { window.lavish.sendQueuedPrompts = window.__send; });
   await frame.getByRole('button', { name: 'Queue comment' }).click();
   await frame.getByRole('button', { name: 'Refresh' }).click(); await frame.locator('[data-content]').getByText(/changed/).first().waitFor({ timeout: 10000 });
   assert.equal(await frame.locator('body').evaluate(() => window.__identity), identity);
