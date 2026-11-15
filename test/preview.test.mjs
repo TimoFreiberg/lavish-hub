@@ -1,10 +1,56 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { variants, variantId } from '../scripts/visual/fixtures.mjs';
+
+test('provenance follows isolated jj and Git checkouts', async () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'preview-provenance-'));
+  const run = (cwd, command, args) => execFileSync(command, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.invalid' } }).trim();
+  try {
+    run(parent, 'jj', ['git', 'init']);
+    for (const kind of ['jj', 'git']) {
+      const repo = path.join(parent, kind); await mkdir(repo);
+      for (const name of ['scripts', 'src', 'test', 'web', 'build.mjs', 'package.json', 'package-lock.json']) {
+        await cp(path.join(root, name), path.join(repo, name), { recursive: true });
+      }
+      await symlink(path.join(root, 'node_modules'), path.join(repo, 'node_modules'), 'dir');
+      await writeFile(path.join(repo, '.gitignore'), 'node_modules\n');
+      if (kind === 'jj') {
+        run(repo, 'jj', ['git', 'init']);
+        run(repo, 'jj', ['new', '-m', 'Fixture']);
+      } else {
+        run(repo, 'git', ['init']);
+        run(repo, 'git', ['add', '.']);
+        run(repo, 'git', ['commit', '-m', 'Fixture']);
+      }
+      const generate = async label => {
+        const revision = kind === 'jj' ? run(repo, 'jj', ['log', '-r', '@', '--no-graph', '-T', 'commit_id']) : run(repo, 'git', ['rev-parse', 'HEAD']);
+        const out = path.join(parent, `${kind}-${label}`);
+        run(repo, process.execPath, ['scripts/preview.mjs', out]);
+        const manifest = JSON.parse(await readFile(path.join(out, 'manifest.json'), 'utf8'));
+        assert.deepEqual(Object.keys(manifest), ['generator', 'version', 'fixtureVersion', 'revision', 'dirty', 'timestamp', 'pages']);
+        assert.equal(manifest.generator, 'lavish-kit-preview');
+        assert.equal(manifest.version, 1);
+        assert.equal(manifest.revision, revision);
+        const index = await readFile(path.join(out, 'index.html'), 'utf8');
+        assert.match(index, /Simulated interactions do not save files or run actions/);
+        assert.doesNotMatch(index, /not published/i);
+        return manifest;
+      };
+      assert.equal((await generate('clean')).dirty, false);
+      await writeFile(path.join(repo, 'changed.txt'), 'change\n');
+      assert.equal((await generate('dirty')).dirty, true);
+      if (kind === 'git') {
+        run(repo, 'git', ['add', 'changed.txt']);
+        assert.equal((await generate('staged')).dirty, true);
+      }
+    }
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
 
 test('legacy preview is preserved and unrelated output is refused', async () => {
   const root = path.resolve(import.meta.dirname, '..');
@@ -43,7 +89,7 @@ test('preview generator writes portable fixture pages and provenance', async () 
     execFileSync(process.execPath, ['scripts/preview.mjs', dir], { cwd: root, env: { ...process.env, SOURCE_DATE_EPOCH: '0' }, stdio: 'pipe' });
     const manifest = JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8'));
     assert.equal(manifest.timestamp, '1970-01-01T00:00:00.000Z');
-    assert.equal(manifest.revision, execFileSync('jj', ['log', '-r', '@', '--no-graph', '-T', 'commit_id'], { cwd: root, encoding: 'utf8' }).trim());
+    assert.match(manifest.revision, /^[0-9a-f]{40,64}$/);
     assert.deepEqual(manifest.pages.map(page => page.id), variants.map(variantId));
     const index = await readFile(path.join(dir, 'index.html'), 'utf8');
     for (const page of manifest.pages) {

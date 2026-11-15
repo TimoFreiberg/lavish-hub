@@ -7,7 +7,23 @@ import { variants, variantId, scratchDiff, makePage } from './visual/fixtures.mj
 const root = path.resolve(import.meta.dirname, '..');
 const out = path.resolve(process.argv[2] || path.join(root, 'preview'));
 const timestamp = new Date(process.env.SOURCE_DATE_EPOCH ? Number(process.env.SOURCE_DATE_EPOCH) * 1000 : Date.now()).toISOString();
-const revision = execFileSync('jj', ['log', '-r', '@', '--no-graph', '-T', 'commit_id'], { cwd: root, encoding: 'utf8' }).trim();
+const run = (command, args) => execFileSync(command, args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+let jjRoot;
+try { jjRoot = run('jj', ['root']); } catch {}
+let revision, dirty;
+try {
+  if (jjRoot === root) {
+    revision = run('jj', ['log', '-r', '@', '--no-graph', '-T', 'commit_id']);
+    dirty = Boolean(run('jj', ['diff', '--summary', '-r', '@']));
+  } else {
+    if (run('git', ['rev-parse', '--show-toplevel']) !== root) throw new Error('Not a Git checkout root');
+    revision = run('git', ['rev-parse', '--verify', 'HEAD^{commit}']);
+    dirty = Boolean(run('git', ['status', '--porcelain', '--untracked-files=normal']));
+  }
+  if (!/^[0-9a-f]{40,64}$/.test(revision)) throw new Error('Invalid revision');
+} catch (error) {
+  throw new Error(`Cannot determine preview source revision and dirty state: ${error.message}`);
+}
 const version = JSON.parse(await (await import('node:fs/promises')).readFile(path.join(root, 'package.json'), 'utf8')).version;
 await mkdir(out, { recursive: true });
 if ((await readdir(out)).length) {
@@ -40,10 +56,9 @@ try {
     await cp(path.join(dir, 'page'), path.join(out, id, 'page'), { recursive: true });
     pages.push({ ...variant, id, url: `${id}/page/index.html` });
   }
-  const dirty = Boolean(execFileSync('jj', ['diff', '--summary', '-r', '@'], { cwd: root, encoding: 'utf8' }).trim());
   const manifest = { generator: 'lavish-kit-preview', version: 1, fixtureVersion: version, revision, dirty, timestamp, pages };
   await writeFile(path.join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   const links = pages.map(page => `<li><a href="${page.url}">${page.id}</a></li>`).join('\n');
-  await writeFile(path.join(out, 'index.html'), `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Preview fixtures</title></head><body><h1>Preview fixtures</h1><p>Development preview; not published. Simulated interactions do not save files or run actions.</p><p>Fixture version ${version}; source revision ${revision}${dirty ? ' (working change modified)' : ''}; built ${timestamp}.</p><ul>${links}</ul><p><a href="manifest.json">Manifest</a></p><script>const theme=new URL(location.href).searchParams.get('theme'); if(theme==='light') document.querySelectorAll('li a').forEach(a=>a.search='?theme=light');</script></body></html>\n`);
+  await writeFile(path.join(out, 'index.html'), `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Preview fixtures</title></head><body><h1>Preview fixtures</h1><p>Fixture preview. Simulated interactions do not save files or run actions.</p><p>Fixture version ${version}; source revision ${revision}${dirty ? ' (working change modified)' : ''}; built ${timestamp}.</p><ul>${links}</ul><p><a href="manifest.json">Manifest</a></p><script>const theme=new URL(location.href).searchParams.get('theme'); if(theme==='light') document.querySelectorAll('li a').forEach(a=>a.search='?theme=light');</script></body></html>\n`);
   console.log(`Preview generated: ${out}`);
 } finally { await rm(scratch, { recursive: true, force: true }); }
