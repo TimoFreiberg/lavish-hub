@@ -69,6 +69,9 @@ test('preview simulates saves and conflicts without external requests', async ()
     }
     await page.goto(`${base}task-short-edit/page/index.html`);
     await page.locator('#editor').waitFor({ state: 'visible' });
+    await page.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
+    const original = await page.locator('#editor').inputValue();
+    assert.notEqual(original, '');
     await page.locator('#editor').fill('First edit'); await page.locator('#save').click();
     await page.getByRole('status').filter({ hasText: 'Simulated save complete' }).waitFor();
     await page.getByText('Saved — up to date with disk').waitFor();
@@ -80,14 +83,13 @@ test('preview simulates saves and conflicts without external requests', async ()
     await page.locator('#reload').click();
     assert.match(await page.locator('#editor').inputValue(), /External fixture edit/);
     page.once('dialog', dialog => dialog.accept()); await page.locator('#preview-reset').click();
-    await page.locator('#editor').waitFor({ state: 'visible' });
-    assert.notEqual(await page.locator('#editor').inputValue(), 'Second edit');
-    const original = await page.locator('#editor').inputValue();
+    await page.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
+    assert.equal(await page.locator('#editor').inputValue(), original);
     await page.locator('#editor').fill('Unsaved before theme change');
     page.once('dialog', dialog => dialog.accept());
     await page.getByLabel('Theme').selectOption('light');
     await page.waitForURL(/theme=light/);
-    await page.locator('#editor').waitFor({ state: 'visible' });
+    await page.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
     assert.equal(await page.locator('#editor').inputValue(), original);
     await page.getByRole('link', { name: 'All previews' }).click();
     assert.match(page.url(), /index\.html\?theme=light/);
