@@ -62,7 +62,12 @@ select a built-in view or published document ID, or run `lavish-kit hub stop
 `hub publish` command to open the existing review (or list it under Artifacts
 when available). Publishing selects the document. Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
-on Commits. The owner exits on stop, SIGINT,
+on Commits. An open hub checks for selection, repository, and source changes about
+every two seconds after each completed check; slow or unavailable actions can delay
+updates. Clean documents update automatically, while unsaved drafts remain in the
+page. Published HTML stays mounted across navigation and ordinary refreshes, but
+republishing or changing its source reloads it and resets its internal state.
+Reloading the hub page also resets that state. The owner exits on stop, SIGINT,
 SIGTERM, an ended Lavish session, or a listener error. It does not start a
 background daemon. A second owner is refused; an unreachable live process is
 not replaced. A stale record is reclaimed only when its recorded process is

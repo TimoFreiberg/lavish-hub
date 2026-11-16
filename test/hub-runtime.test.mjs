@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveWorkspace } from '../src/hub-workspace.mjs';
+import { chromium } from 'playwright-core';
 
 const cli = path.resolve('bin/lavish-kit');
 test('hub foreground owner rejects duplicates and stops without a relay', async t => {
@@ -41,7 +42,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const owner = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '', output = ''; owner.stderr.on('data', chunk => { stderr += chunk; }); owner.stdout.on('data', chunk => { output += chunk; });
   t.after(() => { if (owner.exitCode === null) owner.kill('SIGKILL'); });
-  for (let i = 0; i < 100; i++) { try { await stat(runtime); break; } catch { if (owner.exitCode !== null) throw new Error(stderr); await delay(30); } }
+  for (let i = 0; i < 400; i++) { try { await stat(runtime); break; } catch { if (owner.exitCode !== null) throw new Error(stderr); await delay(30); } }
   assert.equal((await stat(runtime)).mode & 0o777, 0o600);
   const execute = promisify(execFile);
   const run = (file, args, options) => execute(file, args, { ...options, timeout: 5000 });
@@ -63,9 +64,28 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal((await request('status')).selected, 'tasks');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--open'], { env });
   const inside = path.join(repo, 'inside.html');
-  await writeFile(inside, '<p>original</p>');
+  await writeFile(inside, '<input aria-label="Frame draft"><p>original</p>');
   await writeFile(path.join(repo, 'asset.css'), 'original');
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(() => browser.close());
+  const browserPage = await browser.newPage();
+  await browserPage.goto(`file://${path.join(identity.directory, 'hub.html')}`);
+  await browserPage.getByRole('button', { name: 'Tasks', exact: true }).waitFor();
+  const taskDraft = browserPage.getByRole('textbox', { name: 'Tasks Markdown' });
+  await taskDraft.fill('Unsaved task');
   await run(process.execPath, [cli, 'hub', 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
+  await browserPage.getByRole('heading', { name: 'inside.html' }).waitFor({ timeout: 10000 });
+  const frameDraft = browserPage.frameLocator('iframe[title="inside.html"]').getByRole('textbox', { name: 'Frame draft' });
+  await frameDraft.fill('Keep this');
+  await browserPage.getByRole('button', { name: 'Refresh' }).click();
+  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
+  await taskDraft.waitFor({ timeout: 10000 });
+  assert.equal(await taskDraft.inputValue(), 'Unsaved task');
+  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
+  await frameDraft.waitFor({ timeout: 10000 });
+  assert.equal(await frameDraft.inputValue(), 'Keep this');
+  await writeFile(inside, '<p>externally updated</p>');
+  await browserPage.frameLocator('iframe[title="inside.html"]').getByText('externally updated').waitFor({ timeout: 10000 });
   const outsideHtml = path.join(dir, 'outside.html');
   await writeFile(outsideHtml, '<p>outside</p>');
   await writeFile(path.join(dir, 'outside.css'), 'outside');

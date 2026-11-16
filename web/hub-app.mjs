@@ -4,12 +4,14 @@ const drafts = new Map();
 const diffContainer = document.createElement('div'); diffContainer.className = 'hub-diff';
 let diffView;
 let selected = 'commits', snapshot, documents = [], busy = false;
+const frames = new Map();
+let refreshTimer, rendered = false;
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks', pr: 'PR draft' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
 const button = (text, action) => { const node = el('button', text, { type: 'button' }); node.addEventListener('click', action); return node; };
 async function action(operation, body = {}) {
   let response;
-  try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }) }); }
+  try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
   catch { throw new Error('Hub actions are unreachable. Your edits remain on this page. Local actions require the running hub owner.'); }
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Action failed');
@@ -22,36 +24,60 @@ function renderNav() {
     const b = button(label, () => select(id)); if (id === selected) b.setAttribute('aria-current', 'page'); nav.append(b);
   }
 }
+let navigationRevision = 0;
 async function select(id) {
-  try { await action('navigate', { id }); selected = id; renderNav(); await renderView(); }
+  const revision = ++navigationRevision;
+  try { await action('navigate', { id }); if (revision !== navigationRevision) return; selected = id; renderNav(); await renderView(); }
   catch (error) { status(error.message); }
 }
 async function refresh() {
-  if (busy) return; busy = true; status('Refreshing…');
+  if (busy) return; busy = true;
+  const navigationAtStart = navigationRevision;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
+    const oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSnapshot = JSON.stringify(snapshot);
     documents = list.documents;
-    if (state.selected) selected = state.selected;
+    if (state.selected && navigationAtStart === navigationRevision) selected = state.selected;
     try { snapshot = await action('snapshot'); status(state.available ? 'Connected' : 'Workspace unavailable'); }
     catch (error) { snapshot = undefined; status(error.message); }
-    const active = document.activeElement;
-    const label = active?.tagName === 'TEXTAREA' ? active.getAttribute('aria-label') : null;
-    const selection = label ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
+    let documentChanged = false;
     const cached = drafts.get(`doc:${selected}`);
     if (cached && cached.text === cached.original && !cached.saving) {
       try {
         const data = await action('readDocument', { id: selected });
         // Do not replace a draft edited while the read was in flight.
-        if (cached.text === cached.original && !cached.saving) Object.assign(cached, { text: data.text, original: data.text, hash: data.hash, version: data.version, message: '' });
-      } catch (error) { cached.message = error.message; }
+        if (cached.text === cached.original && !cached.saving) {
+          documentChanged = cached.hash !== data.hash || cached.version !== data.version;
+          if (documentChanged) Object.assign(cached, { text: data.text, original: data.text, hash: data.hash, version: data.version, message: '' });
+        }
+      } catch (error) { if (cached.message !== error.message) { cached.message = error.message; documentChanged = true; } }
     }
-    renderNav(); await renderView();
-    if (label) {
-      const replacement = [...document.querySelectorAll('#view textarea')].find(node => node.getAttribute('aria-label') === label);
-      if (replacement) { replacement.focus(); replacement.setSelectionRange(...selection); }
+    const doc = documents.find(item => item.id === selected);
+    const frame = frames.get(selected);
+    let htmlData;
+    if (doc?.source?.toLowerCase().endsWith('.html')) {
+      try {
+        const data = await action('readDocument', { id: selected });
+        htmlData = data;
+        if (frame && (frame.version !== data.version || (frame.hash !== undefined && frame.hash !== data.hash))) { frame.version = data.version; frame.hash = data.hash; frame.node.src = frame.url; }
+        else if (frame) { frame.version = data.version; frame.hash = data.hash; }
+      } catch (error) { status(error.message); }
+    }
+    if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents)) renderNav();
+    if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (['commits', 'changes'].includes(selected) && oldSnapshot !== JSON.stringify(snapshot))) {
+      const active = document.activeElement;
+      const label = active?.closest('#view') && active.getAttribute('aria-label');
+      const selection = label && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
+      await renderView();
+      const createdFrame = frames.get(selected);
+      if (!frame && createdFrame && htmlData) { createdFrame.version = htmlData.version; createdFrame.hash = htmlData.hash; }
+      if (label) {
+        const replacement = [...document.querySelectorAll('#view [aria-label]')].find(node => node.getAttribute('aria-label') === label);
+        if (replacement) { replacement.focus(); if (selection) replacement.setSelectionRange(...selection); }
+      }
     }
   } catch (error) { status(error.message); }
-  finally { busy = false; }
+  finally { busy = false; clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 2000); }
 }
 function draft(key, initial) { if (!drafts.has(key)) drafts.set(key, initial); return drafts.get(key); }
 function editor(label, value, onInput) { const area = el('textarea', null, { 'aria-label': label, rows: '5', spellcheck: 'false' }); area.value = value; area.addEventListener('input', () => onInput(area.value)); return area; }
@@ -90,8 +116,10 @@ function feedback(view, id) {
   section.append(area, queue, send, info); view.append(section);
 }
 async function renderView() {
-  const view = document.querySelector('#view'); view.replaceChildren();
-  const id = selected; view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
+  const view = document.querySelector('#view'); view.replaceChildren(); rendered = true;
+  const id = selected;
+  for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
+  view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
   feedback(view, id);
   if (id === 'commits' || id === 'changes') {
     if (!snapshot) { view.append(notice('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
@@ -127,8 +155,18 @@ async function renderView() {
   if (doc?.metadata && Object.keys(doc.metadata).length) { const scope = el('p', Object.entries(doc.metadata).map(([key, value]) => `${key}: ${value}`).join(' · '), { class: 'muted' }); view.append(scope); }
   if (doc?.source?.toLowerCase().endsWith('.html')) {
     const file = doc.source.split('/').pop();
-    const frame = el('iframe', null, { title: doc.title, sandbox: 'allow-scripts allow-forms allow-popups allow-downloads', referrerpolicy: 'no-referrer', src: `${config.url}/resources/${config.resourceKey}/${encodeURIComponent(id)}/${encodeURIComponent(file)}` });
-    frame.className = 'published-document'; view.append(frame); return;
+    const url = `${config.url}/resources/${config.resourceKey}/${encodeURIComponent(id)}/${encodeURIComponent(file)}`;
+    let frame = frames.get(id);
+    if (!frame) {
+      const node = el('iframe', null, { title: doc.title, sandbox: 'allow-scripts allow-forms allow-popups allow-downloads', referrerpolicy: 'no-referrer', src: url });
+      node.className = 'published-document'; document.querySelector('#frames').append(node);
+      frame = { node, url, version: doc.version, hash: undefined }; frames.set(id, frame);
+    } else {
+      frame.node.title = doc.title;
+      if (frame.url !== url) { frame.url = url; frame.node.src = url; frame.version = doc.version; frame.hash = undefined; }
+      frame.node.hidden = false;
+    }
+    return;
   }
   let state = drafts.get(`doc:${id}`);
   if (!state) {
@@ -202,7 +240,7 @@ async function renderView() {
   }
   view.append(info);
 }
-app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><nav id="navigation" aria-label="Workspace views"></nav><main id="view"></main></div>';
+app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><nav id="navigation" aria-label="Workspace views"></nav><div><main id="view"></main><div id="frames"></div></div></div>';
 document.querySelector('#workspace').textContent = config.workspace;
 document.querySelector('#refresh').addEventListener('click', refresh);
 refresh();
