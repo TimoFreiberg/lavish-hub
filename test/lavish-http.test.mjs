@@ -36,7 +36,7 @@ test('HTTP checks version and state before consuming; never retries broken poll 
 });
 
 test('HTTP preserves feedback, listener errors, cancellation, and non-consuming listings', async t => {
-  const x = await fixture(t), calls = []; let result = { status: 'feedback', prompts: [{ id: 'p1', prompt: 'Keep exactly', tag: 'save', target: { path: 'odd path' } }], artifact_failures: [{ kind: 'load', detail: 'missing' }], session_ended: true, ended_by: 'user', dom_snapshot: '<main>' };
+  const x = await fixture(t), calls = []; let result = { status: 'feedback', prompts: [{ id: 'p1', prompt: 'Keep exactly', tag: 'save', target: { path: 'odd path' } }], artifact_failures: [{ kind: 'load', detail: 'missing' }], session_ended: true, ended_by: 'user', dom_snapshot: '<main>', snapshot_page: 'tasks.html' };
   const controller = new AbortController();
   const client = createLavishClient({ env: x.env, signal: controller.signal, fetch: async (url, options) => {
     calls.push([new URL(url), options]);
@@ -44,6 +44,7 @@ test('HTTP preserves feedback, listener errors, cancellation, and non-consuming 
   } });
   const feedback = await client.poll(x.file, `lavish-kit:${x.file}`);
   assert.deepEqual(feedback.prompts, result.prompts); assert.deepEqual(feedback.artifact_failures, result.artifact_failures);
+  assert.equal(feedback.snapshot_page, 'tasks.html');
   assert.equal(feedback.session.session_ended, true); assert.equal(feedback.session.ended_by, 'user');
   assert.equal(calls.at(-1)[0].searchParams.get('owner'), `lavish-kit:${x.file}`);
   assert.equal(calls.at(-1)[0].searchParams.has('takeover'), false); assert.equal(calls.at(-1)[1].signal, controller.signal);

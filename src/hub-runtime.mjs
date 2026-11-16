@@ -140,7 +140,7 @@ export async function runHubOwner(options = {}) {
     while (!stopping) {
       const batch = await client.poll(page, instance, { timeoutMs: 10000 });
       if (batch.session.status === 'feedback') {
-        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts: batch.prompts, context: batch.dom_snapshot, failures: batch.artifact_failures || [], reply: `lavish-axi reply ${quote(page)} --agent-reply '...'` }));
+        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts: batch.prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, failures: batch.artifact_failures || [], reply: `lavish-axi reply ${quote(page)} --agent-reply '...'` }));
       }
       if (batch.session.status === 'ended' || batch.session.session_ended) break;
     }

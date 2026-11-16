@@ -52,7 +52,7 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
       if (!['feedback', 'ended', 'waiting', 'browser_disconnected'].includes(data.status)) throw failure('LAVISH_PROTOCOL_ERROR', 'Unknown poll status');
       return {
         session: { file: absolute, status: data.status, ...(data.session_ended ? { session_ended: true } : {}), ...(data.ended_by ? { ended_by: data.ended_by } : {}) },
-        ...(data.status === 'feedback' ? { prompts: data.prompts || [], dom_snapshot: data.dom_snapshot || '', ...(data.artifact_failures?.length ? { artifact_failures: data.artifact_failures } : {}) } : {}),
+        ...(data.status === 'feedback' ? { prompts: data.prompts || [], dom_snapshot: data.dom_snapshot || '', ...(Object.hasOwn(data, 'snapshot_page') ? { snapshot_page: data.snapshot_page } : {}), ...(data.artifact_failures?.length ? { artifact_failures: data.artifact_failures } : {}) } : {}),
       };
     },
     async reply(file, text) {
