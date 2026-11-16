@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile, chmod } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -97,4 +98,53 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
   assert.equal(exit, 0, stderr);
+});
+
+test('CLI recovers published HTML after SIGKILL and refuses edited generated files', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-crash-'));
+  const repo = path.join(dir, 'repo'), state = path.join(dir, 'state');
+  await mkdir(repo); await mkdir(state); await run('jj', ['git', 'init', repo]);
+  const socket = net.createServer();
+  await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
+  const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
+  const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
+  delete env.HC_TERMINAL_ID;
+  const cli = path.resolve('bin/lavish-kit');
+  const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
+  const children = [];
+  const start = () => {
+    const child = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.errors = ''; child.stderr.on('data', chunk => { child.errors += chunk; }); child.stdout.resume(); children.push(child); return child;
+  };
+  const waitReady = async child => {
+    for (let i = 0; i < 400; i++) {
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error(child.errors);
+      try { const record = JSON.parse(await readFile(runtime, 'utf8')); if (record.pid === child.pid) return; } catch {}
+      await delay(50);
+    }
+    throw new Error(`Owner did not start: ${child.errors}`);
+  };
+  const kill = async child => { const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited; };
+  t.after(async () => {
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await kill(child);
+    try { await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) }); } catch {}
+    await rm(dir, { recursive: true, force: true });
+  });
+  const source = path.join(dir, 'review.html'); await writeFile(source, '<p>Crash recovery</p>');
+  const first = start(); await waitReady(first);
+  await run(process.execPath, [cli, 'hub', 'publish', source, '--id', 'review', '--workspace', repo], { env });
+  const name = `document-${createHash('sha256').update(JSON.stringify(['review', await realpath(source)])).digest('hex')}.html`;
+  const sibling = path.join(identity.directory, name), registration = path.join(identity.directory, 'documents.json');
+  const before = await readFile(registration, 'utf8');
+  await kill(first);
+  const second = start(); await waitReady(second);
+  assert.match(await readFile(sibling, 'utf8'), /Crash recovery/);
+  assert.equal(await readFile(registration, 'utf8'), before);
+  await kill(second);
+  await writeFile(sibling, 'User edit');
+  const third = start();
+  const code = await new Promise(resolve => third.once('exit', resolve));
+  assert.notEqual(code, 0); assert.match(third.errors, /edited; refusing to overwrite/);
+  assert.equal(await readFile(sibling, 'utf8'), 'User edit');
+  assert.equal(await readFile(registration, 'utf8'), before);
 });

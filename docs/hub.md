@@ -109,7 +109,9 @@ in the page. Published HTML is generated when the owner starts or a document is
 published; republish after changing its source, then reload the page to see the
 new version. If a source is unavailable, the owner leaves its last generated copy
 in place and reports the error. It refuses to overwrite a generated copy edited on
-disk; preserve or remove that copy before publishing again. Navigating away or
+disk, including after an abrupt owner termination; preserve or remove that copy
+before starting the owner or publishing again. Document registrations are retained
+across restarts. Navigating away or
 reloading resets its internal state. The owner exits on stop, SIGINT,
 SIGTERM, an ended Lavish session, or a listener error. It does not start a
 background daemon. A second owner is refused; an unreachable live process is

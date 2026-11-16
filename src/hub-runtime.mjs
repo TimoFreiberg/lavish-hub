@@ -74,10 +74,27 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
   let transport, commands, stopping = false;
   const generatedSiblings = new Set();
   const siblingContents = new Map();
+  const recordFile = path.join(identity.directory, 'generated-documents.json');
+  const hashes = new Map();
+  const digest = content => createHash('sha256').update(content).digest('hex');
+  const saveHashes = () => atomicJson(recordFile, Object.fromEntries(hashes));
   const stop = () => { stopping = true; abort.abort(); };
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) process.once(signal, stop);
   try {
+    let recorded = {};
+    try { recorded = await readJson(recordFile); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (!recorded || typeof recorded !== 'object' || Array.isArray(recorded)) throw new Error('Invalid generated document ownership record');
+    const recovered = [];
+    for (const [name, values] of Object.entries(recorded)) {
+      if (!/^document-[a-f0-9]{64}\.html$/.test(name) || !Array.isArray(values) || !values.length || values.some(value => !/^[a-f0-9]{64}$/.test(value))) throw new Error('Invalid generated document ownership record');
+      hashes.set(name, values);
+      const target = path.join(identity.directory, name);
+      const current = await readFile(target, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (current !== null && !values.includes(digest(current))) throw new Error(`Published document ${name} was edited; refusing to overwrite it`);
+      if (current !== null) recovered.push({ target, current });
+    }
+    for (const { target, current } of recovered) { generatedSiblings.add(target); siblingContents.set(target, current); }
     if (!(await workspaceMatches(identity))) console.error('Workspace is unavailable or has changed; repository actions are disabled.');
     await recordWorkspace(identity);
     const page = path.join(identity.directory, 'hub.html');
@@ -102,6 +119,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     async function writeSiblings(docs = documents.list().documents, commit = async () => {}, requiredId = null) {
       const htmlDocs = docs.filter(doc => doc.source.toLowerCase().endsWith('.html'));
       const staged = [];
+      const previousHashes = new Map(hashes);
       try {
       for (const doc of htmlDocs) {
         let authored;
@@ -129,6 +147,10 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         await writeFile(temp, authored, { mode: 0o600, flag: 'wx' });
       }
       for (const item of staged) {
+        hashes.set(item.name, [...new Set([...(item.current === null ? [] : [digest(item.current)]), digest(item.authored)])]);
+      }
+      await saveHashes();
+      for (const item of staged) {
         await rename(item.temp, item.target);
         item.installed = true;
       }
@@ -139,6 +161,8 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         siblingSources.set(item.name, item.source);
       }
       } catch (error) {
+        hashes.clear();
+        for (const [name, values] of previousHashes) hashes.set(name, values);
         for (const item of staged.filter(item => item.installed).reverse()) {
           if (item.current === null) await rm(item.target, { force: true });
           else {
