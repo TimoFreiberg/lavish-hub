@@ -3,7 +3,7 @@ import { WorkerPoolManager } from '@pierre/diffs/worker';
 import { modelPatch } from '../src/diff/model.mjs';
 import { commentLocation, quoteSelection, zedCommand, zedUrl } from './locations.mjs';
 
-const app = document.querySelector('#app');
+export function mountDiff(app, { embedded = false } = {}) {
 const el = (tag, text, cls) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; };
 const button = (text, action) => { const node = el('button', text); node.type = 'button'; node.addEventListener('click', action); return node; };
 const state = { data: null, files: [], hash: null, latest: null, pending: null, split: false, viewed: new Set(), collapsed: new Set(), current: 0, hunk: -1, draft: null, storageFailed: false };
@@ -144,7 +144,7 @@ function renderToolbar() {
   toolbar.replaceChildren(button('Send', () => {
     if (typeof window.lavish?.sendQueuedPrompts !== 'function') { sendStatus.textContent = 'Send unavailable: open this page in Lavish'; return; }
     sendStatus.textContent = '';
-    window.lavish.sendQueuedPrompts();
+    try { window.lavish.sendQueuedPrompts(); } catch (error) { sendStatus.textContent = `Could not send feedback: ${error.message}`; }
   }), button(state.split ? 'Unified' : 'Split', toggleSplit), button('Keyboard shortcuts (?)', () => help.hidden = !help.hidden));
   if (state.storageFailed) toolbar.append(el('span', 'Viewed resets on reload', 'hint'));
 }
@@ -164,7 +164,7 @@ function goHunk(delta) {
   }
   state.hunk = Math.max(0, Math.min(at, hunks.length - 1)); const h = hunks[state.hunk]; state.current = h.i; markCurrent(); view.scrollTo({ type: 'line', id: String(h.i), lineNumber: h.line, side: h.side, align: 'start' });
 }
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && !help.hidden) { help.hidden = true; return; } if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey && event.key !== '?' || event.composedPath().some(node => node instanceof Element && node.matches('input,textarea,select,[contenteditable]:not([contenteditable="false"])'))) return; const actions = { j: () => goFile(state.current + 1), k: () => goFile(state.current - 1), n: () => goHunk(1), p: () => goHunk(-1), v: () => toggleViewed(state.current), s: toggleSplit, '?': () => help.hidden = !help.hidden }; if (actions[event.key]) { event.preventDefault(); actions[event.key](); } });
+document.addEventListener('keydown', event => { if (embedded && !app.isConnected) return; if (event.key === 'Escape' && !help.hidden) { help.hidden = true; return; } if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey && event.key !== '?' || event.composedPath().some(node => node instanceof Element && node.matches('input,textarea,select,[contenteditable]:not([contenteditable="false"])'))) return; const actions = { j: () => goFile(state.current + 1), k: () => goFile(state.current - 1), n: () => goHunk(1), p: () => goHunk(-1), v: () => toggleViewed(state.current), s: toggleSplit, '?': () => help.hidden = !help.hidden }; if (actions[event.key]) { event.preventDefault(); actions[event.key](); } });
 function closeDraft() {
   const draft = state.draft;
   state.draft = null;
@@ -184,7 +184,7 @@ function openDraft(index, range) {
   box.setAttribute('data-lavish-action', '');
   const where = `${location.side} ${location.where} (${location.revision})`; box.append(el('strong', where), textarea);
   const actions = el('div', null, 'draft-actions');
-  const queue = button('Queue comment', () => { if (!textarea.value.trim()) return; if (!window.lavish?.queuePrompt) { box.append(el('p', 'Comments require an active Lavish session.')); return; } const quote = quoteSelection(file.parsed, range); window.lavish.queuePrompt(`${where}\n\n${quote}\n\n${textarea.value}`, { tag: 'code-comment', text: where }); closeDraft(); });
+  const queue = button('Queue comment', () => { if (!textarea.value.trim()) return; if (!window.lavish?.queuePrompt) { box.append(el('p', 'Comments require an active Lavish session.')); return; } const quote = quoteSelection(file.parsed, range); try { window.lavish.queuePrompt(`${embedded ? `Hub view: Changes (changes)\nRevision range: ${state.data.range}\n\n` : ''}${where}\n\n${quote}\n\n${textarea.value}`, { tag: 'code-comment', text: where }); closeDraft(); } catch (error) { box.append(el('p', `Could not queue comment: ${error.message}. Your draft is retained.`)); } });
   queue.title = 'Queue comment (⌘Enter)'; textarea.setAttribute('aria-keyshortcuts', 'Meta+Enter');
   actions.append(queue, button('Cancel', closeDraft));
   box.append(actions); textarea.addEventListener('input', updateNotice);
@@ -207,7 +207,7 @@ function openDraft(index, range) {
 }
 function updateNotice() {
   notice.replaceChildren(); if (!state.pending || state.pending === state.hash) return;
-  notice.append('Diff changed. '); const refresh = button('Refresh', () => loadData(state.pending)); refresh.disabled = Boolean(state.draft?.textarea.value); notice.append(refresh); if (refresh.disabled) notice.append(' Finish or cancel your comment first.');
+  notice.append('Diff changed. '); const refresh = button('Refresh', () => embedded ? applyEmbedded(state.pending) : loadData(state.pending)); refresh.disabled = Boolean(state.draft?.textarea.value); notice.append(refresh); if (refresh.disabled) notice.append(' Finish or cancel your comment first.');
 }
 function render(data) {
   closeDraft();
@@ -221,6 +221,13 @@ function render(data) {
 let loadingHash;
 function script(src, onerror) { const node = document.createElement('script'); node.src = src; node.onload = () => node.remove(); node.onerror = () => { node.remove(); onerror?.(); }; document.head.append(node); }
 function loadData(hash) { if (loadingHash) return; loadingHash = hash; script(`./data-${encodeURIComponent(hash)}.js?t=${Date.now()}`, () => { loadingHash = null; notice.textContent = 'Could not load diff data; waiting for the next update.'; }); }
-globalThis.lavishViewData = data => { state.hash = loadingHash; loadingHash = null; state.pending = state.latest !== state.hash ? state.latest : null; render(data); };
-globalThis.lavishViewLatest = hash => { state.latest = hash; if (!state.hash && !loadingHash) loadData(hash); else if (state.hash) { state.pending = hash !== state.hash ? hash : null; updateNotice(); } };
-function poll() { script(`./latest.js?t=${Date.now()}`); } poll(); if (!window.lavishPreview) setInterval(poll, 2000);
+function applyEmbedded(data) { state.hash = data; state.pending = null; render(data); }
+if (!embedded) {
+  globalThis.lavishViewData = data => { state.hash = loadingHash; loadingHash = null; state.pending = state.latest !== state.hash ? state.latest : null; render(data); };
+  globalThis.lavishViewLatest = hash => { state.latest = hash; if (!state.hash && !loadingHash) loadData(hash); else if (state.hash) { state.pending = hash !== state.hash ? hash : null; updateNotice(); } };
+  function poll() { script(`./latest.js?t=${Date.now()}`); } poll(); if (!window.lavishPreview) setInterval(poll, 2000);
+}
+return { update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range) { state.pending = null; updateNotice(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
+}
+if (document.querySelector('#app') && !globalThis.hubConfig) mountDiff(document.querySelector('#app'));
+globalThis.mountLavishDiff = mountDiff;

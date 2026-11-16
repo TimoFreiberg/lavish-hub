@@ -1,6 +1,8 @@
 const config = globalThis.hubConfig;
 const app = document.querySelector('#app');
 const drafts = new Map();
+const diffContainer = document.createElement('div'); diffContainer.className = 'hub-diff';
+let diffView;
 let selected = 'commits', snapshot, documents = [], busy = false;
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks', pr: 'PR draft' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
@@ -94,7 +96,12 @@ async function renderView() {
   if (id === 'commits' || id === 'changes') {
     if (!snapshot) { view.append(notice('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `Range ${snapshot.base.slice(0, 12)} → ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
-    if (id === 'changes') { view.append(el('pre', snapshot.patch || 'No changes.')); return; }
+    if (id === 'changes') {
+      view.append(diffContainer);
+      if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true });
+      diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, kind: 'jj', to: snapshot.head });
+      return;
+    }
     const stats = button(snapshot.stat || 'No changed files', () => select('changes')); stats.className = 'stats'; view.append(stats);
     if (!snapshot.commits.length) view.append(el('p', 'No commits in this range.'));
     for (const commit of snapshot.commits) {

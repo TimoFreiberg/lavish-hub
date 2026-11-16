@@ -3,24 +3,42 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 import { createHubTransport } from '../src/hub-transport.mjs';
+import { ensureDeps } from '../src/deps.mjs';
+import path from 'node:path';
 
 test('hub keeps description drafts across navigation and stale saves', { timeout: 30000 }, async t => {
   const commit = { changeId: 'a'.repeat(32), commitId: 'b'.repeat(40), description: 'Original\n', immutable: false, divergent: false };
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
-    snapshot: () => ({ base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff content', commits: [commit] }),
+    snapshot: () => ({ base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-old\n+new\n', commits: [commit] }),
     describe: () => ({ status: 'conflict', reason: 'stale', current: [{ description: 'External\n' }] }),
     readDocument: () => ({ text: '- [ ] Task\n', hash: 'hash', version: 'version' }),
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const { dist } = await ensureDeps();
+  const bundle = await readFile(path.join(dist, 'diff-app.js'), 'utf8');
+  const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
   const page = await browser.newPage();
-  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}</script><script type="module">${script}</script>`);
+  await page.setContent(`<style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}; globalThis.queued=[]; globalThis.lavish={queuePrompt:(...args)=>queued.push(args),sendQueuedPrompts:()=>{throw new Error('send failed')}};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
   const description = page.getByRole('textbox', { name: /Description/ });
   await description.waitFor(); await description.fill('My draft');
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  await page.getByText('diff content').waitFor();
+  await page.getByRole('button', { name: 'example.txt' }).waitFor();
+  await page.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
+  await page.getByRole('button', { name: 'Add comment' }).click();
+  await page.getByPlaceholder('Write a comment').fill('Keep this draft');
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  assert.equal(await page.getByPlaceholder('Write a comment').inputValue(), 'Keep this draft');
+  await page.getByRole('button', { name: 'Queue comment' }).click();
+  const queued = await page.evaluate(() => globalThis.queued);
+  assert.match(queued[0][0], /Hub view: Changes/);
+  assert.ok(queued[0][0].includes('b'.repeat(40)));
+  assert.match(queued[0][0], /1: new/);
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await page.getByText('Could not send feedback: send failed').waitFor();
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   assert.equal(await description.inputValue(), 'My draft');
   await page.getByRole('button', { name: 'Save description' }).click();
