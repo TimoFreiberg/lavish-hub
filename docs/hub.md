@@ -76,7 +76,7 @@ the source directory as described below. Use the page's hub navigation to open
 built-in views or published documents.
 Explicit view and publish commands also switch an open published HTML page to the
 selected view, unless unsaved edits pause the switch. The hub asks before leaving
-for a published HTML page when a hub draft is unsaved. Published pages similarly
+for a published HTML page when a hub draft or an unqueued diff comment is unsaved. Published pages similarly
 ask after user input or changes outside the navigation, and pause automatic
 switches. Cancel the prompt to keep the current page and its edits.
 These guards do not persist drafts: accepting a prompt, a browser crash, or forced

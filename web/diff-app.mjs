@@ -227,7 +227,7 @@ if (!embedded) {
   globalThis.lavishViewLatest = hash => { state.latest = hash; if (!state.hash && !loadingHash) loadData(hash); else if (state.hash) { state.pending = hash !== state.hash ? hash : null; updateNotice(); } };
   function poll() { script(`./latest.js?t=${Date.now()}`); } poll(); if (!window.lavishPreview) setInterval(poll, 2000);
 }
-return { update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range) { state.pending = null; updateNotice(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
+return { hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range) { state.pending = null; updateNotice(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
 }
 if (document.querySelector('#app') && !globalThis.hubConfig) mountDiff(document.querySelector('#app'));
 globalThis.mountLavishDiff = mountDiff;

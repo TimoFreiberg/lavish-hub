@@ -26,7 +26,7 @@ function renderNav() {
 }
 let navigationRevision = 0, leavingConfirmed = false;
 function hasUnsavedDrafts() {
-  return [...drafts].some(([key, state]) => state.saving || (key.startsWith('feedback:') ? !!state.text : state.text !== state.original));
+  return Boolean(diffView?.hasUnsavedDraft()) || [...drafts].some(([key, state]) => state.saving || (key.startsWith('feedback:') ? !!state.text : state.text !== state.original));
 }
 window.addEventListener('beforeunload', event => {
   if (!leavingConfirmed && hasUnsavedDrafts()) { event.preventDefault(); event.returnValue = ''; }

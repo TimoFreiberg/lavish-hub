@@ -93,7 +93,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   assert.equal(notification.snapshotDocument, await realpath(source));
   assert.equal(notification.snapshotPage, notification.prompts[0].page);
   assert.match(notification.context, /Published review/);
-  await page.frameLocator('#artifact').getByRole('link', { name: 'Workspace hub' }).click();
+  await page.frameLocator('#artifact').getByRole('link', { name: 'Commits', exact: true }).click();
   await page.frameLocator('#artifact').getByRole('heading', { name: 'Commits', exact: true }).waitFor();
   await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
