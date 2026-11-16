@@ -30,7 +30,7 @@ async function registerArtifact(payload) {
   return false;
 }
 
-export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr, generation } = {}) {
+export async function prepareReview(file, { reopen = false } = {}) {
   file = path.resolve(file);
   let result;
   try { result = await exec('lavish-axi', [file, '--no-open', ...(reopen ? ['--reopen'] : [])]); }
@@ -41,15 +41,16 @@ export async function openReview(file, { title, open = false, reopen = false, so
   }
   const url = result.stdout.match(/^\s*url:\s*"?(https?:\/\/[^"\s]+)"?\s*$/m)?.[1];
   if (!url) throw new Error(result.stderr?.trim() || 'lavish-axi printed no review URL');
+  return { url };
+}
+
+export async function presentReview(file, url, { title, open = false } = {}) {
+  file = path.resolve(file);
   if (title === undefined) {
     const html = await readFile(file, 'utf8');
     title = html.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i)?.[1].trim() || path.basename(file);
   }
   let registered = false;
-  if (process.env.HC_TERMINAL_ID) {
-    await recordTarget(file, { title, sourceFile, pr, generation });
-  }
-  const worker = await ensureRelay(await realpath(file));
   if (process.env.HC_TERMINAL_ID) {
     registered = await registerArtifact({ terminal: process.env.HC_TERMINAL_ID, path: file, title });
   }
@@ -60,6 +61,20 @@ export async function openReview(file, { title, open = false, reopen = false, so
   console.log(registered
     ? `Lavish review of ${file} is listed under the task's Artifacts.`
     : `Lavish review of ${file} ready: ${url}${open ? '' : ' (ask the user to open it)'}`);
+  return { url, registered };
+}
+
+export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr, generation } = {}) {
+  file = path.resolve(file);
+  const review = await prepareReview(file, { reopen });
+  if (review.ended) return review;
+  if (title === undefined) {
+    const html = await readFile(file, 'utf8');
+    title = html.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i)?.[1].trim() || path.basename(file);
+  }
+  if (process.env.HC_TERMINAL_ID) await recordTarget(file, { title, sourceFile, pr, generation });
+  const worker = await ensureRelay(await realpath(file));
+  const { url, registered } = await presentReview(file, review.url, { title, open });
   console.log(worker.delivery
     ? `Feedback is delivered automatically; do not poll ${file}.`
     : `Feedback requires agent polling: lavish-axi poll ${quote(file)}.`);

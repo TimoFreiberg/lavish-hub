@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rename, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveWorkspace, workspaceMatches } from '../src/hub-workspace.mjs';
+import { recordWorkspace, resolveRecordedWorkspace, resolveWorkspace, workspaceMatches } from '../src/hub-workspace.mjs';
 import { createHubTransport } from '../src/hub-transport.mjs';
 
 test('hub workspace identity distinguishes workspaces and detects replacement', async t => {
@@ -19,7 +19,14 @@ test('hub workspace identity distinguishes workspaces and detects replacement', 
   assert.equal(a.directory, sub.directory); assert.notEqual(a.directory, b.directory);
   assert.equal(a.repo, b.repo); assert.equal(await workspaceMatches(a), true);
   assert.notEqual(a.directory, (await resolveWorkspace(root, { ...env, LAVISH_AXI_STATE_DIR: path.join(dir, 'other') })).directory);
-  await rename(root, path.join(dir, 'old')); await mkdir(root);
+  await symlink(dir, path.join(dir, 'alias'));
+  const aliasEnv = { XDG_DATA_HOME: path.join(dir, 'alias', 'data'), LAVISH_AXI_STATE_DIR: path.join(dir, 'alias', 'state') };
+  assert.equal((await resolveWorkspace(root, aliasEnv)).directory, a.directory);
+  await recordWorkspace(a);
+  await rename(root, path.join(dir, 'old'));
+  assert.deepEqual(await resolveRecordedWorkspace(root, aliasEnv), a);
+  assert.equal(await workspaceMatches(a), false);
+  await mkdir(root);
   execFileSync('jj', ['git', 'init'], { cwd: root, stdio: 'ignore' });
   assert.equal(await workspaceMatches(a), false);
 });

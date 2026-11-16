@@ -83,8 +83,10 @@ tests use the default HTTP transport.
 
 To run a single file: `node --test --test-concurrency=1 test/cli.test.mjs`.
 `test/hub-foundation.test.mjs` exercises canonical jj workspace identity,
-repository replacement detection, and capability-protected loopback requests.
-It does not test a hub runtime, browser integration, or feedback delivery.
+repository replacement detection, state-directory aliases, recorded missing-workspace
+lookup, and capability-protected loopback requests. `test/hub-opening.test.mjs`
+checks the opening helpers independently of the standalone relay. These tests do
+not establish a hub runtime, browser integration, or feedback delivery.
 
 Temporary tests are useful during implementation. Before pushing, consider
 whether the behavior is likely to regress and whether existing checks would catch
