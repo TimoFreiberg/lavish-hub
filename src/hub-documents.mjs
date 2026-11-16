@@ -37,7 +37,7 @@ export async function readMetadata(file) {
   } finally { await handle.close(); }
 }
 
-export async function createHubDocuments(directory) {
+export async function createHubDocuments(directory, { guardSource = async () => {} } = {}) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const stateFile = path.join(directory, 'documents.json');
   let state;
@@ -103,6 +103,7 @@ export async function createHubDocuments(directory) {
     read: body => locked(async () => {
       const target = lookup(body.id);
       if (!target) throw new Error('Unknown document');
+      await guardSource(target.source);
       const text = await readFile(target.source, 'utf8');
       return { ...target, text, hash: textHash(text) };
     }),

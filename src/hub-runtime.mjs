@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
 import { createHubJj } from './hub-jj.mjs';
@@ -79,9 +79,20 @@ export async function runHubOwner(options = {}) {
     await recordWorkspace(identity);
     const page = path.join(identity.directory, 'hub.html');
     const jj = createHubJj(identity.root, { validate: () => workspaceMatches(identity) });
-    const documents = await createHubDocuments(identity.directory);
+    const guardSource = async file => {
+      const withinWorkspace = candidate => {
+        const relative = path.relative(identity.root, candidate);
+        return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+      };
+      if (!(await workspaceMatches(identity))) {
+        if (withinWorkspace(file)) throw new Error('Workspace is unavailable or has changed; source is unavailable');
+        if (withinWorkspace(await realpath(file))) throw new Error('Workspace is unavailable or has changed; source is unavailable');
+      }
+    };
+    const documents = await createHubDocuments(identity.directory, { guardSource });
     commands = await createHubCommands(identity.directory, identity.root, () => workspaceMatches(identity));
     const launchPr = await createHubPr(identity.directory, identity.root, documents, jj);
+    let reviewUrl;
     let selected = 'commits';
     const select = id => {
       if (!['commits', 'changes', 'tasks', 'pr'].includes(id) && !documents.list().documents.some(doc => doc.id === id)) throw new Error('Unknown view');
@@ -90,6 +101,7 @@ export async function runHubOwner(options = {}) {
     };
     transport = await createHubTransport({
       navigate: body => select(body.id),
+      open: async () => { if (!reviewUrl) throw new Error('Hub review is not ready'); return presentReview(page, reviewUrl, { title: 'Workspace hub', open: true, log: console.error }); },
       launchPr: async body => {
         if (!(await workspaceMatches(identity))) throw new Error('Workspace is unavailable or has changed; launching is disabled');
         return launchPr(body);
@@ -110,7 +122,7 @@ export async function runHubOwner(options = {}) {
       snapshot: () => jj.snapshot(),
       describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },
-    }, { resource: id => documents.list().documents.find(doc => doc.id === id)?.source });
+    }, { resource: id => documents.list().documents.find(doc => doc.id === id)?.source, guardSource });
     const web = new URL('../web/', import.meta.url);
     const { dist } = await ensureDeps();
     const [script, style, diffScript, diffStyle, markdownScript, documentStyle] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8'), readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'), readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8')]);
@@ -120,6 +132,7 @@ export async function runHubOwner(options = {}) {
     await chmod(page, 0o600);
     const review = await prepareReview(page, { reopen: options.reopen, log: console.error });
     if (review.ended) return 1;
+    reviewUrl = review.url;
     const client = createLavishClient({ signal: abort.signal });
     await atomicJson(path.join(lock, 'runtime.json'), { pid: process.pid, instance, url: transport.url, capability: transport.capability, page });
     await presentReview(page, review.url, { title: 'Workspace hub', open: options.open, log: console.error });

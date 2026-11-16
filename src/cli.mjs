@@ -83,17 +83,16 @@ Options:
   --open            open a browser if the page isn't listed under Artifacts
   --reopen          reopen a review the user ended in the browser
 
-Hub owner (experimental; browser views are not yet implemented):
+Hub owner (experimental):
   hub listen [--workspace DIR] [--open] [--reopen]  run a foreground owner
-  hub [--workspace DIR] [--view VIEW]               check status or select a view
-  hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR]
+  hub [--workspace DIR] [--view VIEW] [--open]      check status or select a view
+  hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
   hub tasks --file FILE [--workspace DIR]            attach a Markdown file
   hub pr [--file FILE] [--rev REV] [--workspace DIR]  configure PR draft and head
   The PR head defaults to @-. Launch saves the draft and resolves the selected
   expression to a full commit ID before opening an interactive terminal.
   hub stop [--workspace DIR]                        stop the owner
-  Publication registers a source for the future hub view; it does not yet show
-  the document. Metadata accepts reviewedRepository, baseCommit, headCommit and
+  Metadata accepts reviewedRepository, baseCommit, headCommit and
   sourceUrl. Each publication replaces previous metadata, including omission.
   The owner prints feedback as agent-notification JSON lines and never starts a
   relay. An unreachable owner is not automatically replaced.
@@ -125,7 +124,7 @@ export function parseArgs(args) {
       } else if (command === 'status' && arg === '--view') {
         if (result.view !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--view requires one value');
         result.view = args[++i];
-      } else if (command === 'listen' && (arg === '--open' || arg === '--reopen')) {
+      } else if ((arg === '--open' && ['listen', 'status', 'publish'].includes(command)) || (arg === '--reopen' && command === 'listen')) {
         const key = arg.slice(2);
         if (result[key]) throw new UsageError(`${arg} given twice`);
         result[key] = true;
@@ -176,11 +175,13 @@ export async function main(args = process.argv.slice(2)) {
           ? { id: options.id, title: options.title, file: path.resolve(options.file), ...(options.metadataFile ? { metadata: await readMetadata(options.metadataFile) } : {}) }
           : { kind: options.hub, ...(options.file ? { file: path.resolve(options.file) } : {}), ...(options.rev ? { rev: options.rev } : {}) };
         await callHub(options.hub === 'publish' ? 'publish' : options.hub === 'pr' ? 'configurePr' : 'attach', { ...options, body });
+        if (options.open) await callHub('open', options);
         console.log(options.hub === 'publish' ? `Registered document ${options.id}.` : `Configured ${options.hub}.`);
         return 0;
       }
       if (options.hub === 'status' && options.view) await callHub('navigate', { ...options, body: { id: options.view } });
       const result = await callHub(options.hub, options);
+      if (options.open) await callHub('open', options);
       console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}.`);
       return 0;
     }

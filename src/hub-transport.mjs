@@ -7,7 +7,7 @@ const limit = 64 * 1024;
 const allowedHeaders = new Set(['content-type', 'x-lavish-capability']);
 
 // The caller owns the capability and must keep it out of URLs and logs.
-export async function createHubTransport(operations, { resource } = {}) {
+export async function createHubTransport(operations, { resource, guardSource = async () => {} } = {}) {
   const capability = randomBytes(32).toString('hex');
   const resourceKey = randomBytes(32).toString('hex');
   const server = http.createServer(async (req, res) => {
@@ -24,9 +24,13 @@ export async function createHubTransport(operations, { resource } = {}) {
         const id = decodeURIComponent(parts[3]);
         const file = await resource(id);
         if (!file) throw new Error('Not found');
+        await guardSource(file);
         const root = await realpath(path.dirname(file));
         const relative = parts.slice(4).map(decodeURIComponent).join('/');
-        const target = await realpath(path.resolve(root, relative));
+        const requested = path.resolve(root, relative);
+        await guardSource(requested);
+        const target = await realpath(requested);
+        await guardSource(target);
         const within = path.relative(root, target);
         if (!within || within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within) || !(await stat(target)).isFile()) throw new Error('Not found');
         const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.woff': 'font/woff', '.woff2': 'font/woff2' };

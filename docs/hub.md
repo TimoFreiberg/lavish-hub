@@ -36,7 +36,9 @@ with the hub.
 
 Run `lavish-kit hub [--workspace DIR]` to check the owner, add `--view VIEW` to
 select a built-in view or published document ID, or run `lavish-kit hub stop
-[--workspace DIR]` to request shutdown. Publishing selects the document. Selection
+[--workspace DIR]` to request shutdown. Add `--open` to the short hub or
+`hub publish` command to open the existing review (or list it under Artifacts
+when available). Publishing selects the document. Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. The owner exits on stop, SIGINT,
 SIGTERM, an ended Lavish session, or a listener error. It does not start a
@@ -57,7 +59,9 @@ per-instance secret; do not share its runtime metadata. If a recorded workspace
 is removed, start its owner with the original explicit `--workspace` path to read
 surviving registered documents. Saves and repository actions remain disabled, including if
 a different checkout later appears at that path; the hub does not retarget it.
-Sources removed with the workspace cannot be read. This experimental owner is
+Sources and HTML resources inside the unavailable workspace cannot be read, even
+if replacement files appear there; surviving sources outside it remain readable.
+This experimental owner is
 not yet the full hub described in the project plan.
 
 The authenticated action endpoint supports `snapshot` and `describe` for the
