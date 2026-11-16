@@ -56,11 +56,14 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   const bundle = await readFile(path.join(dist, 'diff-app.js'), 'utf8');
   const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
   const page = await browser.newPage();
-  await page.setContent(`<style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}; globalThis.queued=[]; globalThis.lavish={queuePrompt:(...args)=>queued.push(args),sendQueuedPrompts:()=>{throw new Error('send failed')}};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}; globalThis.queued=[]; globalThis.lavish={queuePrompt:(...args)=>queued.push(args),sendQueuedPrompts:()=>{throw new Error('send failed')}};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
   const description = page.getByRole('textbox', { name: /Description/ });
   await description.waitFor(); await description.fill('My draft');
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  await page.getByRole('button', { name: 'example.txt' }).waitFor();
+  await page.locator('.file-link[data-path="example.txt"]').waitFor();
+  for (const selector of ['.file-header .path', '.file-header .viewed']) {
+    assert.equal(await page.locator(selector).first().evaluate(el => getComputedStyle(el).color), 'rgb(230, 237, 243)');
+  }
   await page.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
   await page.getByRole('button', { name: 'Add comment' }).click();
   await page.getByPlaceholder('Write a comment').fill('Keep this draft');
