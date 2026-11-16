@@ -159,6 +159,8 @@ function bootSdk({
   htmlAnnotate = null,
   platform = "Linux",
   structuralQueries = false,
+  sdkOptions = undefined,
+  origin = "http://127.0.0.1",
 } = {}) {
   const posted = [];
   const documentListeners = [];
@@ -194,11 +196,11 @@ function bootSdk({
       observe() {}
       disconnect() {}
     },
-    URL: {
-      createObjectURL() {
+    URL: class extends URL {
+      static createObjectURL() {
         return "blob:lavish-test";
-      },
-      revokeObjectURL() {},
+      }
+      static revokeObjectURL() {}
     },
     getComputedStyle: () => ({}),
     setTimeout: scheduleTimer,
@@ -206,6 +208,7 @@ function bootSdk({
     requestAnimationFrame: (fn) => (runAnimationFrames ? scheduleTimer(fn, 0) : 0),
     document: {
       readyState: "complete",
+      currentScript: { src: "http://127.0.0.1/sdk.js?key=abc" },
       documentElement,
       head,
       body,
@@ -237,12 +240,18 @@ function bootSdk({
     innerHeight: 800,
     scrollX: 0,
     scrollY: 0,
-    location: { origin: "http://127.0.0.1" },
+    location: {
+      origin,
+      pathname: "/artifact/abc/sub/page.html",
+      search: "?view=full",
+      hash: "#notes",
+    },
     URL: sandbox.URL,
   };
+  sandbox.top = sandbox.parent;
   sandbox.globalThis = sandbox;
 
-  vm.runInNewContext(createSdkJs("abc", 3, "load-token"), sandbox);
+  vm.runInNewContext(createSdkJs("abc", 3, "load-token", sdkOptions), sandbox);
 
   return {
     document: sandbox.document,
@@ -296,6 +305,9 @@ function bootSdk({
     setDocumentQuery(query) {
       documentQuery = query;
     },
+    setLocation(next) {
+      Object.assign(sandbox.window.location, next);
+    },
     runTimers() {
       const pending = timers.splice(0, timers.length);
       for (const timer of pending) {
@@ -339,11 +351,22 @@ function bootSdk({
         .flatMap((child) => child.shadowRoot?.children || [])
         .filter((child) => child.className === "lavish-reveal-marker");
     },
-    // The chrome is the only legitimate sender, so its messages arrive with `source: parent`.
+    // Chrome messages come from the parent at the server origin.
+
     sendChromeMessage(data) {
       const listeners = windowListeners.filter((entry) => entry.type === "message");
       assert.ok(listeners.length > 0, "the SDK registers a window message listener");
-      for (const listener of listeners) listener.handler({ source: sandbox.parent, data });
+      for (const listener of listeners) {
+        listener.handler({ source: sandbox.parent, origin: sandbox.window.location.origin, data });
+      }
+    },
+    dispatchWindowEvent(type, properties = {}) {
+      for (const listener of windowListeners.filter((entry) => entry.type === type)) {
+        listener.handler({ source: sandbox.parent, origin: sandbox.window.location.origin, ...properties });
+      }
+    },
+    documentListenerCount(type) {
+      return documentListeners.filter((entry) => entry.type === type).length;
     },
     cards() {
       return documentElement.children
@@ -472,6 +495,31 @@ test("a reveal marker stops tracking once it is removed or replaced", () => {
   assert.equal(scroll.reads, readsAtRemoval, "no frame re-reads the target after the marker is gone");
 });
 
+const TEST_CHROME_NONCE = "nonce-AAAAAAAAAAAAAAAAAAAAAAAA";
+const TEST_CHROME_AUTH = "server-issued-chrome-auth-mac";
+
+// Bounded: resolves with whatever reached the port within the window, never waits forever.
+function portMessagesWithin(port, ms = 150) {
+  return new Promise((resolve) => {
+    const seen = [];
+    port.addEventListener("message", (event) => seen.push(event.data));
+    port.start?.();
+    setTimeout(() => resolve(seen), ms);
+  });
+}
+
+function nextPortMessage(port, type = "") {
+  return new Promise((resolve) => {
+    const handler = (event) => {
+      if (type && event.data?.type !== type) return;
+      port.removeEventListener("message", handler);
+      resolve(event.data);
+    };
+    port.addEventListener("message", handler);
+    port.start?.();
+  });
+}
+
 function buildTable(sdk) {
   const table = appendTo(sdk.body, createElement("table"));
   const thead = appendTo(table, createElement("thead"));
@@ -487,6 +535,278 @@ function buildTable(sdk) {
   const badge = appendTo(evidence, cell("code", "Drive"));
   return { evidence, badge };
 }
+
+test("the protocol-1 SDK rebinds a BFCache document without reinstalling its DOM listeners", async () => {
+  const sdk = bootSdk({
+    sdkOptions: {
+      pageProtocol: 1,
+      page: "sub/page.html",
+      pageProof: "proof-sub-page",
+      servedRoute: "sub/page.html",
+      chromeNonce: TEST_CHROME_NONCE,
+      chromeAuth: TEST_CHROME_AUTH,
+    },
+  });
+  const initialReady = sdk.posted.at(-1);
+  assert.equal(initialReady.type, "lavish:ready");
+
+  const first = new MessageChannel();
+  /** @type {any} */ (first.port1).unref?.();
+  /** @type {any} */ (first.port2).unref?.();
+  const firstResponsePromise = nextPortMessage(first.port1);
+  sdk.dispatchWindowEvent("message", {
+    data: { type: "lavish:challenge", challenge: "first-challenge", chrome_auth: TEST_CHROME_AUTH },
+    ports: [first.port2],
+  });
+  const firstResponse = await firstResponsePromise;
+  const firstRevisionsPromise = nextPortMessage(first.port1, "lavish:revisions");
+  first.port1.postMessage({
+    ...firstResponse,
+    type: "lavish:activate",
+    document_sequence: 1,
+    historical_destination_receipt: "receipt-before-bfcache",
+  });
+  const revisions = await firstRevisionsPromise;
+  assert.equal(revisions.page, "sub/page.html");
+  assert.equal(revisions.document_sequence, 1);
+  const clickListeners = sdk.documentListenerCount("click");
+  assert.ok(clickListeners > 0, "the accepted document installs the full SDK once");
+
+  const heading = appendTo(sdk.body, cell("h1", "Headline"));
+  sdk.click(heading);
+  const card = sdk.card();
+  card.querySelector("textarea").value = "Keep my annotated image";
+  const input = card.querySelector(".lavish-attach-input");
+  input.files = [{ name: "evidence.png", type: "image/png", size: 3, arrayBuffer: async () => new ArrayBuffer(3) }];
+  const uploadPromise = nextPortMessage(first.port1, "lavish:uploadAttachment");
+  input.listeners.find((listener) => listener.type === "change").handler();
+  const upload = await uploadPromise;
+  first.port1.postMessage({
+    ...firstResponse,
+    type: "lavish:attachmentResult",
+    document_sequence: 1,
+    nonce: upload.nonce,
+    localId: upload.localId,
+    ok: true,
+    id: "stored-image",
+  });
+  // Messages on one port arrive in order, so a snapshot round trip proves the SDK has
+  // applied the upload result; a single event-loop turn is not enough on Windows.
+  const uploadedSnapshotPromise = nextPortMessage(first.port1, "lavish:snapshot");
+  first.port1.postMessage({
+    type: "lavish:requestSnapshot",
+    snapshot_request_id: "after-upload",
+    page: firstResponse.page,
+    page_proof: firstResponse.page_proof,
+    document_id: firstResponse.document_id,
+    document_sequence: 1,
+    artifact_load_token: firstResponse.artifact_load_token,
+    artifact_revision: firstResponse.artifact_revision,
+  });
+  assert.equal((await uploadedSnapshotPromise).snapshot_request_id, "after-upload");
+
+  const departingPromise = nextPortMessage(first.port1, "lavish:documentDeparting");
+  sdk.dispatchWindowEvent("pagehide");
+  const departing = await departingPromise;
+  assert.equal(departing.type, "lavish:documentDeparting");
+  assert.equal(departing.document_sequence, 1);
+  // Signed history is retained by trusted chrome under document-id/exact-URL,
+  // not echoed back as authority by the untrusted artifact SDK.
+  assert.equal(departing.historical_destination_receipt, undefined);
+  assert.equal(departing.destination, firstResponse.destination);
+
+  sdk.dispatchWindowEvent("pageshow", { persisted: true });
+  const resumedReady = sdk.posted.at(-1);
+  assert.equal(resumedReady.type, "lavish:ready");
+  assert.equal(resumedReady.document_id, initialReady.document_id, "BFCache keeps the document identity");
+
+  const second = new MessageChannel();
+  /** @type {any} */ (second.port1).unref?.();
+  /** @type {any} */ (second.port2).unref?.();
+  const secondResponsePromise = nextPortMessage(second.port1);
+  sdk.dispatchWindowEvent("message", {
+    data: { type: "lavish:challenge", challenge: "second-challenge", chrome_auth: TEST_CHROME_AUTH },
+    ports: [second.port2],
+  });
+  const secondResponse = await secondResponsePromise;
+  assert.equal(secondResponse.historical_destination_receipt, undefined);
+  assert.equal(secondResponse.document_id, firstResponse.document_id);
+  assert.equal(secondResponse.destination, firstResponse.destination);
+  second.port1.postMessage({ ...secondResponse, type: "lavish:activate", document_sequence: 2 });
+  // The snapshot reply follows activate on the same port, so the SDK is rebound before
+  // the card is used.
+  const snapshotPromise = nextPortMessage(second.port1, "lavish:snapshot");
+  second.port1.postMessage({
+    type: "lavish:requestSnapshot",
+    snapshot_request_id: "after-bfcache",
+    page: secondResponse.page,
+    page_proof: secondResponse.page_proof,
+    document_id: secondResponse.document_id,
+    document_sequence: 2,
+    artifact_load_token: secondResponse.artifact_load_token,
+    artifact_revision: secondResponse.artifact_revision,
+  });
+  const snapshot = await snapshotPromise;
+  assert.equal(snapshot.type, "lavish:snapshot");
+  assert.equal(snapshot.document_sequence, 2);
+  assert.equal(snapshot.snapshot_request_id, "after-bfcache");
+  assert.equal(sdk.documentListenerCount("click"), clickListeners, "rebind does not duplicate the SDK");
+  assert.equal(sdk.card(), card, "BFCache preserves the live annotation card");
+  assert.equal(card.querySelector("textarea").value, "Keep my annotated image");
+  const queuedPromise = nextPortMessage(second.port1, "lavish:queuePrompt");
+  card.querySelector(".lavish-send").onclick();
+  const queued = await queuedPromise;
+  assert.equal(queued.prompt.prompt, "Keep my annotated image");
+  assert.deepEqual(queued.prompt.attachments, [{ id: "stored-image", name: "evidence.png" }]);
+
+  first.port1.close();
+  second.port1.close();
+});
+
+test("the protocol-1 SDK sends scoped uploads and authored destinations over its accepted port", async (t) => {
+  const sdk = bootSdk({
+    sdkOptions: {
+      pageProtocol: 1,
+      page: "sub/page.html",
+      pageProof: "proof-sub-page",
+      servedRoute: "sub/page.html",
+      chromeNonce: TEST_CHROME_NONCE,
+      chromeAuth: TEST_CHROME_AUTH,
+    },
+  });
+  const channel = new MessageChannel();
+  /** @type {any} */ (channel.port1).unref?.();
+  /** @type {any} */ (channel.port2).unref?.();
+  t.after(() => {
+    channel.port1.close();
+    channel.port2.close();
+  });
+  const responsePromise = nextPortMessage(channel.port1);
+  sdk.dispatchWindowEvent("message", {
+    data: { type: "lavish:challenge", challenge: "scoped-upload", chrome_auth: TEST_CHROME_AUTH },
+    ports: [channel.port2],
+  });
+  const response = await responsePromise;
+  assert.equal(response.destination, "/artifact/abc/sub/page.html?view=full#notes");
+  const revisionsPromise = nextPortMessage(channel.port1, "lavish:revisions");
+  channel.port1.postMessage({
+    ...response,
+    type: "lavish:activate",
+    document_sequence: 7,
+    historical_destination_receipt: "receipt-initial",
+  });
+  const revisions = await revisionsPromise;
+  assert.equal(revisions.page, "sub/page.html");
+  assert.equal(revisions.document_sequence, 7);
+
+  const destinationPromise = nextPortMessage(channel.port1, "lavish:documentDestination");
+  sdk.dispatchWindowEvent("hashchange");
+  const destination = await destinationPromise;
+  assert.deepEqual(
+    {
+      type: destination.type,
+      page: destination.page,
+      page_proof: destination.page_proof,
+      served_route: destination.served_route,
+      destination: destination.destination,
+      document_sequence: destination.document_sequence,
+      historical_destination_receipt: destination.historical_destination_receipt,
+    },
+    {
+      type: "lavish:documentDestination",
+      page: "sub/page.html",
+      page_proof: "proof-sub-page",
+      served_route: "sub/page.html",
+      destination: "/artifact/abc/sub/page.html?view=full#notes",
+      document_sequence: 7,
+      historical_destination_receipt: undefined,
+    },
+  );
+
+  sdk.setLocation({ hash: "#other" });
+  const unknownDestinationPromise = nextPortMessage(channel.port1, "lavish:documentDestination");
+  sdk.dispatchWindowEvent("hashchange");
+  const unknownDestination = await unknownDestinationPromise;
+  assert.equal(unknownDestination.historical_destination_receipt, undefined);
+  assert.equal(unknownDestination.destination, "/artifact/abc/sub/page.html?view=full#other");
+  channel.port1.postMessage({
+    ...response,
+    type: "lavish:historicalDestinationReceipt",
+    document_sequence: 7,
+    historical_destination_receipt: "receipt-other",
+    destination: "/artifact/abc/sub/page.html?view=full#other",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  sdk.setLocation({ hash: "#notes" });
+  const restoredDestinationPromise = nextPortMessage(channel.port1, "lavish:documentDestination");
+  sdk.dispatchWindowEvent("popstate");
+  const restoredDestination = await restoredDestinationPromise;
+  assert.equal(restoredDestination.historical_destination_receipt, undefined);
+  assert.equal(restoredDestination.destination, "/artifact/abc/sub/page.html?view=full#notes");
+  sdk.setLocation({ hash: "#other" });
+  const otherDestinationPromise = nextPortMessage(channel.port1, "lavish:documentDestination");
+  sdk.dispatchWindowEvent("popstate");
+  const otherDestination = await otherDestinationPromise;
+  assert.equal(otherDestination.historical_destination_receipt, undefined);
+  assert.equal(otherDestination.destination, "/artifact/abc/sub/page.html?view=full#other");
+  sdk.setLocation({ hash: "#notes" });
+
+  const { evidence } = buildTable(sdk);
+  sdk.click(evidence);
+  const card = sdk.card();
+  const input = card.querySelector(".lavish-attach-input");
+  input.files = [
+    {
+      name: "evidence.png",
+      type: "image/png",
+      size: 3,
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
+    },
+  ];
+  const change = input.listeners.find((listener) => listener.type === "change");
+  assert.ok(change, "the emitted SDK wires the attachment picker");
+  const uploadPromise = nextPortMessage(channel.port1, "lavish:uploadAttachment");
+  change.handler();
+  const upload = await uploadPromise;
+  assert.equal(upload.type, "lavish:uploadAttachment");
+  assert.equal(upload.page, "sub/page.html");
+  assert.equal(upload.page_proof, "proof-sub-page");
+  assert.equal(upload.served_route, "sub/page.html");
+  assert.equal(upload.destination, "/artifact/abc/sub/page.html?view=full#notes");
+  assert.equal(upload.document_sequence, 7);
+  assert.equal(upload.artifact_load_token, "load-token");
+  assert.equal(upload.localId, "att-1");
+  assert.equal(upload.bytes.byteLength, 3);
+  assert.ok(upload.nonce);
+
+  channel.port1.postMessage({
+    ...response,
+    type: "lavish:attachmentResult",
+    document_sequence: 7,
+    nonce: upload.nonce,
+    localId: upload.localId,
+    ok: true,
+    id: "stored-image",
+  });
+  const uploadedSnapshotPromise = nextPortMessage(channel.port1, "lavish:snapshot");
+  channel.port1.postMessage({
+    type: "lavish:requestSnapshot",
+    snapshot_request_id: "after-upload",
+    page: response.page,
+    page_proof: response.page_proof,
+    document_id: response.document_id,
+    document_sequence: 7,
+    artifact_load_token: response.artifact_load_token,
+    artifact_revision: response.artifact_revision,
+  });
+  assert.equal((await uploadedSnapshotPromise).snapshot_request_id, "after-upload");
+  const queuedPromise = nextPortMessage(channel.port1, "lavish:queuePrompt");
+  card.querySelector("textarea").value = "Review scoped upload";
+  card.querySelector(".lavish-send").onclick();
+  const queued = await queuedPromise;
+  assert.equal(queued.type, "lavish:queuePrompt");
+  assert.deepEqual(queued.prompt.attachments, [{ id: "stored-image", name: "evidence.png" }]);
+});
 
 test("a requested layout diagnostic publishes even when the result is unchanged", async () => {
   const sdk = bootSdk({ runAnimationFrames: true });
@@ -1419,6 +1739,7 @@ test("setDocumentMeta posts the title and icon the page asked for, stamped with 
       title: "(1) Board",
       icon: "data:image/svg+xml,<svg/>",
       artifact_load_token: "load-token",
+      artifact_revision: 3,
     },
   );
 });
@@ -1433,4 +1754,136 @@ test("setDocumentMeta forwards null to restore, omits unset fields and drops non
     messages.map((entry) => JSON.parse(JSON.stringify({ title: entry.title, icon: entry.icon }))),
     [{ title: null }, {}, {}],
   );
+});
+
+test("the protocol-1 SDK reveals nothing to a parent that cannot present this document's chrome auth", async (t) => {
+  const boot = (overrides = {}) =>
+    bootSdk({
+      sdkOptions: {
+        pageProtocol: 1,
+        page: "sub/page.html",
+        pageProof: "proof-sub-page",
+        servedRoute: "sub/page.html",
+        chromeNonce: TEST_CHROME_NONCE,
+        chromeAuth: TEST_CHROME_AUTH,
+        ...overrides,
+      },
+    });
+  const attempt = async (sdk, data) => {
+    const channel = new MessageChannel();
+    /** @type {any} */ (channel.port1).unref?.();
+    /** @type {any} */ (channel.port2).unref?.();
+    t.after(() => {
+      channel.port1.close();
+      channel.port2.close();
+    });
+    const seen = portMessagesWithin(channel.port1);
+    sdk.dispatchWindowEvent("message", { data, ports: [channel.port2] });
+    return { seen: await seen, port: channel.port1 };
+  };
+
+  const sdk = boot();
+  const ready = sdk.posted.at(-1);
+  assert.equal(ready.type, "lavish:ready");
+  assert.equal(ready.document_nonce, TEST_CHROME_NONCE);
+  // Readiness is broadcast to whatever parent frames the page, so it must carry no secret.
+  const readyText = JSON.stringify(ready);
+  assert.ok(!readyText.includes("proof-sub-page"));
+  assert.ok(!readyText.includes(TEST_CHROME_AUTH));
+  const clickListenersBefore = sdk.documentListenerCount("click");
+
+  const hostileChallenges = [
+    { type: "lavish:challenge", challenge: "missing" },
+    { type: "lavish:challenge", challenge: "forged", chrome_auth: "forged-mac" },
+    { type: "lavish:challenge", challenge: "empty", chrome_auth: "" },
+    { type: "lavish:challenge", challenge: "nonce-as-auth", chrome_auth: TEST_CHROME_NONCE },
+    { type: "lavish:challenge", challenge: "other-document", chrome_auth: "mac-for-another-document-nonce" },
+    // The obsolete bind message must stay meaningless too.
+    { type: "lavish:bind", challenge: "legacy", chrome_auth: TEST_CHROME_AUTH },
+  ];
+  for (const data of hostileChallenges) {
+    const { seen, port } = await attempt(sdk, data);
+    assert.deepEqual(seen, [], `no response for ${data.challenge}`);
+    // Even a well-formed activation on that port cannot install the review SDK.
+    port.postMessage({ type: "lavish:activate", document_id: ready.document_id, document_sequence: 1 });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sdk.documentListenerCount("click"), clickListenersBefore, "the review SDK never installed");
+
+  // A document served without auth material can never be activated, even by an empty match.
+  const bare = boot({ chromeNonce: "", chromeAuth: "" });
+  for (const chrome_auth of [undefined, "", TEST_CHROME_AUTH]) {
+    const { seen } = await attempt(bare, { type: "lavish:challenge", challenge: "bare", chrome_auth });
+    assert.deepEqual(seen, []);
+  }
+
+  // Positive control: the same document answers the authenticated chrome.
+  const { seen } = await attempt(sdk, {
+    type: "lavish:challenge",
+    challenge: "genuine",
+    chrome_auth: TEST_CHROME_AUTH,
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].type, "lavish:challengeResponse");
+  assert.equal(seen[0].page_proof, "proof-sub-page");
+});
+
+test("the protocol-1 SDK accepts the chrome origin in an opaque artifact and rejects relays", async (t) => {
+  const boot = (origin = undefined) =>
+    bootSdk({
+      origin,
+      sdkOptions: {
+        pageProtocol: 1,
+        page: "sub/page.html",
+        pageProof: "proof-sub-page",
+        servedRoute: "sub/page.html",
+        chromeNonce: TEST_CHROME_NONCE,
+        chromeAuth: TEST_CHROME_AUTH,
+      },
+    });
+  const attempt = async (sdk, origin) => {
+    const channel = new MessageChannel();
+    /** @type {any} */ (channel.port1).unref?.();
+    /** @type {any} */ (channel.port2).unref?.();
+    t.after(() => {
+      channel.port1.close();
+      channel.port2.close();
+    });
+    const seen = portMessagesWithin(channel.port1);
+    sdk.dispatchWindowEvent("message", {
+      origin,
+      data: { type: "lavish:challenge", challenge: "relayed", chrome_auth: TEST_CHROME_AUTH },
+      ports: [channel.port2],
+    });
+    const messages = await seen;
+    channel.port1.postMessage({
+      type: "lavish:activate",
+      document_id: sdk.posted.find((message) => message.type === "lavish:ready")?.document_id,
+      document_sequence: 1,
+    });
+    return messages;
+  };
+
+  // An external page left in the chrome's artifact frame can obtain the MAC for any nonce it
+  // announces, then frame this document top-level in a popup it controls and relay that MAC.
+  const sdk = boot();
+  const clickListenersBefore = sdk.documentListenerCount("click");
+  for (const origin of ["http://evil.example", "http://127.0.0.1:4388", "null", "", undefined]) {
+    assert.deepEqual(await attempt(sdk, origin), [], `no response for origin ${origin}`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sdk.documentListenerCount("click"), clickListenersBefore, "the review SDK never installed");
+
+  // The sandbox gives the artifact an opaque origin, but its served SDK still names
+  // the chrome's origin. An opaque sender remains untrusted.
+  const opaque = boot("null");
+  assert.deepEqual(await attempt(opaque, "null"), []);
+  const opaqueAccepted = await attempt(opaque, "http://127.0.0.1");
+  assert.equal(opaqueAccepted.length, 1);
+  assert.equal(opaqueAccepted[0].type, "lavish:challengeResponse");
+
+  // Positive control: the same MAC from the chrome's own origin completes the challenge.
+  const seen = await attempt(sdk, "http://127.0.0.1");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].type, "lavish:challengeResponse");
 });

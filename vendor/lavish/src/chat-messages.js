@@ -468,6 +468,7 @@ export function chatEntryForPrompt(prompt, at) {
   const anchor = promptAnchor(prompt, kind);
   if (!text && attachments.length === 0 && !promptId && !anchor) return null;
   const entry = { role: "user", kind, text, at: String(at || new Date().toISOString()) };
+  if (Object.hasOwn(prompt, "page")) entry.page = prompt.page === null ? null : String(prompt.page || "");
   if (promptId) entry.prompt_id = promptId;
   if (anchor) entry.anchor = anchor;
   if (attachments.length) entry.attachments = attachments;
@@ -579,13 +580,12 @@ export function markPreReceipt(chat) {
   return changed;
 }
 
-// `takeFeedback` drains every pending prompt under the store lock, so the undelivered user entries
-// at that moment are exactly the batch being handed over - no id matching needed (the stored prompts
-// lost their `prompt_id` at queue time). `seq` ties the stamps to one take so a restore can undo it.
-export function stampDelivered(chat, seq, at) {
+// Select only entries belonging to the prompts taken; another page can still be queued.
+// `seq` ties the stamps to one take so a restore can undo it.
+export function stampDelivered(chat, seq, at, receiptIds = null) {
   let changed = false;
   for (const entry of Array.isArray(chat) ? chat : []) {
-    if (!isUserEntry(entry) || entry.delivered_at) continue;
+    if (!isUserEntry(entry) || entry.delivered_at || (receiptIds && !receiptIds.has(entry.receipt_id))) continue;
     entry.delivered_at = String(at);
     entry.delivered_seq = seq;
     changed = true;

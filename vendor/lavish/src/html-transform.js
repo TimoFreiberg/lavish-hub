@@ -1,9 +1,6 @@
 import { parse } from "parse5";
 
-// parse5 finds the real </body> the way a browser does: a literal "</body>"
-// inside a script, style, comment, attribute value, or inert template content
-// is character data, not markup. Splice at the parser-reported end-tag offset
-// so served bytes stay identical to the file on disk apart from the SDK tag.
+// Find the browser-parsed body end tag without rewriting artifact bytes.
 function findBodyElement(node) {
   if (node.tagName === "body") return node;
   if (!Array.isArray(node.childNodes)) return null;
@@ -20,16 +17,26 @@ function bodyCloseIndex(html) {
   return endTag ? endTag.startOffset : -1;
 }
 
-export function injectLavishSdk(html, key, artifactRevision, artifactLoadToken = "") {
-  const revisionNumber = Number(artifactRevision);
+export function injectLavishSdk(html, key, artifactRevision, artifactLoadToken = "", context = {}) {
+  const hasRevision = artifactRevision !== null && artifactRevision !== undefined && artifactRevision !== "";
+  const revisionNumber = hasRevision ? Number(artifactRevision) : Number.NaN;
   const revision = Number.isFinite(revisionNumber) && revisionNumber >= 0 ? Math.trunc(revisionNumber) : null;
-  const revisionQuery = revision === null ? "" : `&artifact_revision=${revision}`;
   const token = String(artifactLoadToken || "").slice(0, 200);
-  const tokenQuery = token ? `&artifact_load_token=${encodeURIComponent(token)}` : "";
-  const script = `<script src="/sdk.js?key=${encodeURIComponent(key)}${revisionQuery}${tokenQuery}"></script>`;
-  const index = bodyCloseIndex(html);
-  if (index !== -1) {
-    return `${html.slice(0, index)}${script}${html.slice(index)}`;
+  let query = `key=${encodeURIComponent(key)}`;
+  if (context?.pageProtocol === 1 || context?.page_protocol === 1) {
+    query += "&page_protocol=1";
+    if (context.page !== undefined && context.page !== null) {
+      query += `&page=${encodeURIComponent(String(context.page))}`;
+    }
+    if (context.pageProof) query += `&page_proof=${encodeURIComponent(String(context.pageProof))}`;
+    if (context.servedRoute) query += `&served_route=${encodeURIComponent(String(context.servedRoute))}`;
+    if (context.chromeNonce) query += `&chrome_nonce=${encodeURIComponent(String(context.chromeNonce))}`;
+    if (context.chromeAuth) query += `&chrome_auth=${encodeURIComponent(String(context.chromeAuth))}`;
   }
+  if (revision !== null) query += `&artifact_revision=${revision}`;
+  if (token) query += `&artifact_load_token=${encodeURIComponent(token)}`;
+  const script = `<script src="/sdk.js?${query}"></script>`;
+  const index = bodyCloseIndex(html);
+  if (index !== -1) return `${html.slice(0, index)}${script}${html.slice(index)}`;
   return `${html}\n${script}`;
 }
