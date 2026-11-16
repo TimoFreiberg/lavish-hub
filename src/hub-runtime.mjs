@@ -98,10 +98,10 @@ export async function runHubOwner(options = {}) {
       snapshot: () => jj.snapshot(),
       describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },
-    });
+    }, { resource: id => documents.list().documents.find(doc => doc.id === id && doc.source.toLowerCase().endsWith('.html'))?.source });
     const web = new URL('../web/', import.meta.url);
     const [script, style] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8')]);
-    const config = JSON.stringify({ url: transport.url, capability: transport.capability, workspace: identity.root }).replaceAll('<', '\\u003c');
+    const config = JSON.stringify({ url: transport.url, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root }).replaceAll('<', '\\u003c');
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><style>${style}</style></head><body><div id="app"></div><script>globalThis.hubConfig=${config};</script><script type="module">${script}</script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);

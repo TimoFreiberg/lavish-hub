@@ -76,7 +76,11 @@ async function renderView() {
   }
   const doc = documents.find(item => item.id === id);
   if (doc?.metadata && Object.keys(doc.metadata).length) { const scope = el('p', Object.entries(doc.metadata).map(([key, value]) => `${key}: ${value}`).join(' · '), { class: 'muted' }); view.append(scope); }
-  if (doc?.source?.toLowerCase().endsWith('.html')) { view.append(notice('HTML viewing and local assets are not available in this hub yet. The source remains registered.')); return; }
+  if (doc?.source?.toLowerCase().endsWith('.html')) {
+    const file = doc.source.split('/').pop();
+    const frame = el('iframe', null, { title: doc.title, sandbox: 'allow-scripts allow-forms allow-popups allow-downloads', referrerpolicy: 'no-referrer', src: `${config.url}/resources/${config.resourceKey}/${encodeURIComponent(id)}/${encodeURIComponent(file)}` });
+    frame.className = 'published-document'; view.append(frame); return;
+  }
   let state = drafts.get(`doc:${id}`);
   if (!state) {
     try { const data = await action('readDocument', { id }); state = draft(`doc:${id}`, { text: data.text, original: data.text, hash: data.hash, version: data.version }); }

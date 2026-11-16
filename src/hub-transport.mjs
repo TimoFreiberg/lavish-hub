@@ -1,12 +1,15 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
+import path from 'node:path';
+import { readFile, realpath, stat } from 'node:fs/promises';
 
 const limit = 64 * 1024;
 const allowedHeaders = new Set(['content-type', 'x-lavish-capability']);
 
 // The caller owns the capability and must keep it out of URLs and logs.
-export async function createHubTransport(operations) {
+export async function createHubTransport(operations, { resource } = {}) {
   const capability = randomBytes(32).toString('hex');
+  const resourceKey = randomBytes(32).toString('hex');
   const server = http.createServer(async (req, res) => {
     const respond = (status, value) => {
       res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...(req.headers.origin === 'null' ? { 'access-control-allow-origin': 'null', vary: 'Origin' } : {}) });
@@ -15,6 +18,23 @@ export async function createHubTransport(operations) {
     const address = server.address();
     if (req.headers.host !== `127.0.0.1:${address.port}` || !['127.0.0.1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return respond(403, { error: 'Invalid host' });
     if (req.headers.origin && req.headers.origin !== 'null') return respond(403, { error: 'Invalid origin' });
+    if (req.method === 'GET' && resource && req.url.startsWith(`/resources/${resourceKey}/`)) {
+      try {
+        const parts = new URL(req.url, 'http://127.0.0.1').pathname.split('/');
+        const id = decodeURIComponent(parts[3]);
+        const file = await resource(id);
+        if (!file) throw new Error('Not found');
+        const root = await realpath(path.dirname(file));
+        const relative = parts.slice(4).map(decodeURIComponent).join('/');
+        const target = await realpath(path.resolve(root, relative));
+        const within = path.relative(root, target);
+        if (!within || within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within) || !(await stat(target)).isFile()) throw new Error('Not found');
+        const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.woff': 'font/woff', '.woff2': 'font/woff2' };
+        const data = await readFile(target);
+        res.writeHead(200, { 'content-type': types[path.extname(target).toLowerCase()] || 'application/octet-stream', 'cache-control': 'no-store', 'access-control-allow-origin': 'null', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+        return res.end(data);
+      } catch { return respond(404, { error: 'Resource not found' }); }
+    }
     if (req.method === 'OPTIONS') {
       const headers = (req.headers['access-control-request-headers'] || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
       if (req.headers.origin !== 'null' || req.headers['access-control-request-method'] !== 'POST' || headers.some(header => !allowedHeaders.has(header))) return respond(403, { error: 'Invalid preflight' });
@@ -44,5 +64,5 @@ export async function createHubTransport(operations) {
   server.headersTimeout = 10000;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const url = `http://127.0.0.1:${server.address().port}`;
-  return { url, capability, close: () => new Promise((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); }) };
+  return { url, capability, resourceKey, close: () => new Promise((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); }) };
 }

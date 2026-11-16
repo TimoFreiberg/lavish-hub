@@ -10,10 +10,23 @@ the page reports the error without discarding edits. Drafts are not persisted ac
 page reloads.
 
 This is not the complete hub: the diff is not the standalone annotated diff,
-rendered published documents, HTML assets and actions, and feedback context are
+rendered Markdown documents, HTML action integration, and feedback context are
 not yet available. Tasks have a checklist and a Markdown source editor; changes
-are written only when saved.
-The registered HTML source is not displayed by this version.
+are written only when saved. Published HTML is displayed in a nested sandbox and
+can load scripts, styles, and images relative to its source file.
+
+The owner serves files under the published HTML file's directory, including its
+subdirectories, but rejects traversal and symlinks outside that directory. Like
+Lavish's asset serving, this makes other files in that directory readable to a
+reader who has the resource URL: publish from a directory that contains no
+unrelated sensitive files. The resource URL has a random per-owner component;
+keep it private. It is separate from the action capability and does not authorize
+local actions. Published HTML can run scripts and make network requests, so only
+publish trusted content. This local resource server requires the owner and a
+browser able to reach its loopback address; remote viewers cannot load these
+resources. Replacing a document changes its source directory. A nested document
+does not currently receive an action SDK, and its annotations are not integrated
+with the hub.
 
 Run `lavish-kit hub [--workspace DIR]` to check the owner, add `--view VIEW` to
 select a built-in view or published document ID, or run `lavish-kit hub stop
