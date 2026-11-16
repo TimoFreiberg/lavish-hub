@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { saveDocument, textHash } from './save.mjs';
 import { parsePR } from './pr-format.mjs';
@@ -23,9 +23,18 @@ export function validateMetadata(value) {
 }
 
 export async function readMetadata(file) {
-  const data = await readFile(file);
-  if (data.length > maxMetadata) throw new Error('Metadata exceeds 16 KiB');
-  return validateMetadata(JSON.parse(data.toString('utf8')));
+  const handle = await open(file, 'r');
+  try {
+    const data = Buffer.alloc(maxMetadata + 1);
+    let size = 0;
+    while (size < data.length) {
+      const { bytesRead } = await handle.read(data, size, data.length - size, null);
+      if (!bytesRead) break;
+      size += bytesRead;
+    }
+    if (size > maxMetadata) throw new Error('Metadata exceeds 16 KiB');
+    return validateMetadata(JSON.parse(data.subarray(0, size).toString('utf8')));
+  } finally { await handle.close(); }
 }
 
 export async function createHubDocuments(directory) {

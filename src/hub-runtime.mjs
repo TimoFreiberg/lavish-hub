@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
 import { createHubJj } from './hub-jj.mjs';
 import { createHubDocuments } from './hub-documents.mjs';
+import { createHubCommands } from './hub-commands.mjs';
 import { resolveWorkspace, resolveRecordedWorkspace, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
@@ -62,7 +63,7 @@ export async function runHubOwner(options = {}) {
   const instance = randomUUID();
   const lock = await acquire(identity, instance);
   const abort = new AbortController();
-  let transport, stopping = false;
+  let transport, commands, stopping = false;
   const stop = () => { stopping = true; abort.abort(); };
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) process.once(signal, stop);
@@ -72,7 +73,11 @@ export async function runHubOwner(options = {}) {
     const page = path.join(identity.directory, 'hub.html');
     const jj = createHubJj(identity.root, { validate: () => workspaceMatches(identity) });
     const documents = await createHubDocuments(identity.directory);
+    commands = await createHubCommands(identity.directory, identity.root, () => workspaceMatches(identity));
     transport = await createHubTransport({
+      executeCommand: body => commands.execute(body),
+      commandStatus: body => commands.status(body),
+      cancelCommand: body => commands.cancel(body),
       documents: () => documents.list(),
       publish: body => documents.publish(body),
       attach: body => documents.attach(body),
@@ -108,6 +113,7 @@ export async function runHubOwner(options = {}) {
     throw error;
   } finally {
     for (const signal of signals) process.removeListener(signal, stop);
+    if (commands) commands.close();
     if (transport) await transport.close();
     await release(lock, instance);
   }
