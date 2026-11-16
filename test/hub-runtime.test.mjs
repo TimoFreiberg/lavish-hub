@@ -78,6 +78,16 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await run(process.execPath, [cli, 'hub', 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
   const sibling = (await request('documents')).documents.find(doc => doc.id === 'inside').sibling;
   assert.match(await readFile(path.join(identity.directory, sibling), 'utf8'), /original/);
+  const siblingPage = await browser.newPage();
+  await siblingPage.goto(`file://${path.join(identity.directory, sibling)}`);
+  await siblingPage.getByRole('link', { name: 'Changes', exact: true }).click();
+  await siblingPage.getByRole('button', { name: 'Changes', exact: true }).waitFor();
+  assert.equal((await request('status')).selected, 'changes');
+  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
+  await siblingPage.getByLabel('Frame draft').waitFor();
+  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
+  await siblingPage.getByRole('textbox', { name: 'Tasks Markdown' }).waitFor();
+  await siblingPage.close();
   await writeFile(inside, '<p>externally updated</p>');
   await run(process.execPath, [cli, 'hub', 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
   assert.match(await readFile(path.join(identity.directory, sibling), 'utf8'), /externally updated/);

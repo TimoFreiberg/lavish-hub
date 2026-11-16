@@ -67,7 +67,9 @@ saved. Published Markdown has Edit and Preview controls; the preview includes
 unsaved edits and resolves relative links and images from the source directory.
 Published HTML opens as a sibling page in the same Lavish review, where it can
 be annotated directly. Scripts, styles, and images resolve relative to its source
-file. Use the page's hub navigation to return to the built-in views.
+file. Use the page's hub navigation to open built-in views or published documents.
+Explicit view and publish commands also switch an open published HTML page to the
+selected view. Navigating away reloads the hub, so unsaved hub drafts are lost.
 
 The owner serves files under the published document's directory, including its
 subdirectories, but rejects traversal and symlinks outside that directory. Like
