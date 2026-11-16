@@ -24,7 +24,8 @@ function renderNav() {
     const b = button(label, () => select(id)); if (id === selected) b.setAttribute('aria-current', 'page'); nav.append(b);
   }
 }
-let navigationRevision = 0, leavingConfirmed = false;
+let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0;
+for (const type of ['input', 'change']) document.addEventListener(type, event => { if (event.isTrusted) editRevision++; }, true);
 function hasUnsavedDrafts() {
   return Boolean(diffView?.hasUnsavedDraft()) || [...drafts].some(([key, state]) => state.saving || (key.startsWith('feedback:') ? !!state.text : state.text !== state.original));
 }
@@ -34,10 +35,24 @@ window.addEventListener('beforeunload', event => {
 async function select(id) {
   const doc = documents.find(item => item.id === id);
   const leavesPage = doc?.sibling && doc.source?.toLowerCase().endsWith('.html');
-  if (leavesPage && hasUnsavedDrafts() && !window.confirm('Leave this page and discard unsaved hub drafts?')) return;
+  if (navigationPending) return;
+  navigationPending = true;
   const revision = ++navigationRevision;
-  try { await action('navigate', { id }); if (revision !== navigationRevision) return; if (leavesPage) { leavingConfirmed = true; location.href = new URL(doc.sibling, location.href).href; return; } selected = id; renderNav(); await renderView(); }
-  catch (error) { status(error.message); }
+  try {
+    let approved = false, approvedRevision = editRevision;
+    if (leavesPage && hasUnsavedDrafts()) {
+      approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.');
+      if (!approved) return;
+    }
+    await action('navigate', { id });
+    if (revision !== navigationRevision) return;
+    if (leavesPage) {
+      if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
+      leavingConfirmed = true; location.href = new URL(doc.sibling, location.href).href; return;
+    }
+    selected = id; renderNav(); await renderView();
+  } catch (error) { status(error.message); }
+  finally { navigationPending = false; }
 }
 async function refresh() {
   if (busy) return; busy = true;
@@ -48,7 +63,7 @@ async function refresh() {
     documents = list.documents;
     const remoteDoc = documents.find(item => item.id === state.selected);
     const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
-    if (state.selected && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
+    if (state.selected && !navigationPending && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
     if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { location.href = new URL(selectedDoc.sibling, location.href).href; return; }

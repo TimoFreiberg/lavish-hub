@@ -84,8 +84,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.match(await readFile(path.join(identity.directory, sibling), 'utf8'), /original/);
   await browserPage.getByText('Navigation paused: unsaved drafts remain on this page.').waitFor();
   assert.equal(await taskDraft.inputValue(), 'Unsaved task');
-  browserPage.once('dialog', dialog => dialog.dismiss());
   await browserPage.getByRole('button', { name: 'inside.html', exact: true }).click();
+  await browserPage.getByRole('button', { name: 'Keep editing' }).click();
   assert.equal(await taskDraft.inputValue(), 'Unsaved task');
   browserPage.once('dialog', dialog => { assert.equal(dialog.type(), 'beforeunload'); return dialog.dismiss(); });
   await browserPage.reload().catch(() => {});
@@ -99,8 +99,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await diffPage.getByRole('button', { name: 'Add comment' }).click();
   const comment = diffPage.getByPlaceholder('Write a comment');
   await comment.fill('Unqueued annotation');
-  diffPage.once('dialog', dialog => dialog.dismiss());
   await diffPage.getByRole('button', { name: 'inside.html', exact: true }).click();
+  await diffPage.getByRole('button', { name: 'Keep editing' }).click();
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
   diffPage.once('dialog', dialog => { assert.equal(dialog.type(), 'beforeunload'); return dialog.dismiss(); });
   await diffPage.reload().catch(() => {});
@@ -108,8 +108,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
   await diffPage.getByText('Navigation paused: unsaved drafts remain on this page.').waitFor();
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
-  diffPage.once('dialog', dialog => dialog.accept());
   await diffPage.getByRole('button', { name: 'inside.html', exact: true }).click();
+  await diffPage.getByRole('button', { name: 'Leave page' }).click();
   await diffPage.getByText('original', { exact: true }).waitFor();
   await diffPage.close();
   const siblingPage = await browser.newPage();
@@ -124,14 +124,14 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal((await request('status')).selected, 'changes');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
   await siblingPage.getByLabel('Frame draft').fill('Authored draft');
-  siblingPage.once('dialog', dialog => dialog.dismiss());
   await siblingPage.getByRole('link', { name: 'Tasks', exact: true }).click();
+  await siblingPage.getByRole('button', { name: 'Keep editing' }).click();
   assert.equal(await siblingPage.getByLabel('Frame draft').inputValue(), 'Authored draft');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
   await delay(2300);
   assert.equal(await siblingPage.getByLabel('Frame draft').inputValue(), 'Authored draft');
-  siblingPage.once('dialog', dialog => dialog.accept());
   await siblingPage.getByRole('link', { name: 'Tasks', exact: true }).click();
+  await siblingPage.getByRole('button', { name: 'Leave page' }).click();
   await siblingPage.getByRole('textbox', { name: 'Tasks Markdown' }).waitFor();
   await siblingPage.close();
   await writeFile(inside, '<p>externally updated</p>');
