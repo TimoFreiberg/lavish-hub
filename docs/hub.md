@@ -9,6 +9,13 @@ keep the draft on the page. Actions require the local owner; if it is unreachabl
 the page reports the error without discarding edits. Drafts are not persisted across
 page reloads.
 
+## Design priorities
+
+Hub design prioritizes the human end-user experience first, system performance
+second, and agent experience third; implementation simplicity comes last. Added
+complexity is acceptable when it materially supports a higher priority. These
+tradeoffs do not relax safety or correctness requirements.
+
 Start the owner in a terminal or a long-running harness job, not inline in a
 script that must continue. Wait for its running message before using short
 commands; they never start an owner themselves. For example:
