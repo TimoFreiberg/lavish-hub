@@ -35,6 +35,14 @@ async function refresh() {
     const active = document.activeElement;
     const label = active?.tagName === 'TEXTAREA' ? active.getAttribute('aria-label') : null;
     const selection = label ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
+    const cached = drafts.get(`doc:${selected}`);
+    if (cached && cached.text === cached.original && !cached.saving) {
+      try {
+        const data = await action('readDocument', { id: selected });
+        // Do not replace a draft edited while the read was in flight.
+        if (cached.text === cached.original && !cached.saving) Object.assign(cached, { text: data.text, original: data.text, hash: data.hash, version: data.version, message: '' });
+      } catch (error) { cached.message = error.message; }
+    }
     renderNav(); await renderView();
     if (label) {
       const replacement = [...document.querySelectorAll('#view textarea')].find(node => node.getAttribute('aria-label') === label);
@@ -112,25 +120,25 @@ async function renderView() {
     view.querySelectorAll('ol input').forEach(control => { control.disabled = true; });
   });
   const save = button('Save', async () => {
-    const submitted = state.text; save.disabled = true; info.textContent = 'Saving…';
+    const submitted = state.text; state.saving = true; save.disabled = true; info.textContent = 'Saving…';
     try {
       const result = await action('saveDocument', { id, version: state.version, baseHash: state.hash, text: submitted });
       state.message = result.reply;
       if (result.reply === 'Saved') { const data = await action('readDocument', { id }); if (data.version === state.version && data.text === submitted) { state.hash = data.hash; state.original = submitted; } else state.message = 'Saved, but the source changed afterwards. Your draft is retained.'; }
     } catch (error) { state.message = error.message; }
-    save.disabled = false; info.textContent = state.message;
+    state.saving = false; save.disabled = false; info.textContent = state.message;
   });
   view.append(area, save);
   if (id === 'pr') {
     const launch = button('Launch PR command', async () => {
-      const submitted = state.text; launch.disabled = true; save.disabled = true; info.textContent = 'Saving and preparing launch…';
+      const submitted = state.text; state.saving = true; launch.disabled = true; save.disabled = true; info.textContent = 'Saving and preparing launch…';
       try {
         const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
         const result = await action('launchPr', { id: requestId, version: state.version, baseHash: state.hash, text: submitted });
         if (result.savedHash) { state.hash = result.savedHash; state.original = submitted; }
         state.message = [result.message, result.revision && `Submitted revision: ${result.revision}`, result.warning, result.command && result.status !== 'launched' && result.command].filter(Boolean).join('\n');
       } catch (error) { state.message = `${error.message} Launch outcome may be unknown; check the terminal before retrying.`; }
-      launch.disabled = false; save.disabled = false; info.textContent = state.message;
+      state.saving = false; launch.disabled = false; save.disabled = false; info.textContent = state.message;
     });
     view.append(launch);
   }
