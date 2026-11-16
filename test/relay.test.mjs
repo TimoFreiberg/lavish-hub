@@ -2,8 +2,8 @@
 process.env.LAVISH_KIT_LAVISH_TRANSPORT = 'cli';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, realpath, writeFile, chmod, rm, access, utimes } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, realpath, writeFile, chmod, rm, access, utimes, symlink } from 'node:fs/promises';
+import { execFile, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -13,6 +13,14 @@ import { decode, encode } from '@toon-format/toon';
 import { claimLock, deliverFeedback, deliveryReady, dispatchPrompts, formatMessage, liveTerminals, pageLifetime, relayPages, pollLoop, recordTarget, recordWatch, relayPaths, resolveTarget, retarget, selectRetarget } from '../src/relay.mjs';
 import { parseArgs } from '../src/cli.mjs';
 const exec = promisify(execFile);
+const shared = await mkdtemp(path.join(os.tmpdir(), 'lavish-relay-cache-'));
+const setupBin = path.join(shared, 'bin'); await mkdir(setupBin);
+const npm = path.join(setupBin, 'npm'); await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o755);
+const depsModule = fileURLToPath(new URL('../src/deps.mjs', import.meta.url));
+const fixture = fileURLToPath(new URL('../node_modules', import.meta.url));
+const init = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(depsModule)}).then(m=>m.ensureDeps())`], { env: { ...process.env, XDG_DATA_HOME: shared, PATH: `${setupBin}:/usr/bin:/bin`, FIXTURE: fixture }, encoding: 'utf8' });
+assert.equal(init.status, 0, init.stderr);
+test.after(() => rm(shared, { recursive: true, force: true }));
 const daemonLock = state => path.join('/tmp', `lavish-kit-${process.getuid()}-${createHash('sha256').update(path.resolve(state)).digest('hex').slice(0, 24)}`, 'daemon.lock');
 async function waitForDaemonExit(state) {
   const deadline = Date.now() + 15000;
@@ -138,6 +146,8 @@ test('watch failure joins consumed delivery before releasing the lock and superv
 
 test('a second termination signal saves emergency feedback when the outbox is unwritable', { timeout: 15000 }, async t => {
   const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
+  const cache = path.join(x.dir, 'data/lavish-kit'); await mkdir(cache, { recursive: true });
+  for (const name of ['deps', 'dist']) await symlink(path.join(shared, 'lavish-kit', name), path.join(cache, name));
   await recordWatch(x.file, null, true);
   await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log(${JSON.stringify(encode(feedback))});\n`);
   await chmod(path.join(bin, 'lavish-axi'), 0o755);
@@ -154,6 +164,8 @@ test('a second termination signal saves emergency feedback when the outbox is un
 
 test('unwritable outbox and recovery directory warn and release the worker lock', { timeout: 15000 }, async t => {
   const x = await setup(t), bin = path.join(x.dir, 'bin'); await mkdir(bin);
+  const cache = path.join(x.dir, 'data/lavish-kit'); await mkdir(cache, { recursive: true });
+  for (const name of ['deps', 'dist']) await symlink(path.join(shared, 'lavish-kit', name), path.join(cache, name));
   await recordWatch(x.file, null, true);
   await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconsole.log(${JSON.stringify(encode(feedback))});\n`);
   await chmod(path.join(bin, 'lavish-axi'), 0o755);

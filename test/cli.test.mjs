@@ -24,9 +24,20 @@ async function setup(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-cli-')), cleanups = [];
   t.after(async () => {
     for (const cleanup of cleanups) await cleanup();
-    const entries = await readdir(dir, { recursive: true });
-    for (const entry of entries.filter(name => name.endsWith('.relay.lock/pid'))) {
-      const lock = path.join(dir, path.dirname(entry));
+    async function locks(root) {
+      let entries;
+      try { entries = await readdir(root, { withFileTypes: true }); }
+      catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+      const found = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const child = path.join(root, entry.name);
+        if (entry.name.endsWith('.relay.lock')) found.push(child);
+        else found.push(...await locks(child));
+      }
+      return found;
+    }
+    for (const lock of await locks(dir)) {
       const page = lock.slice(0, -'.relay.lock'.length);
       await rm(page, { force: true });
       await rm(relayPaths(page).watch, { force: true });
