@@ -30,13 +30,13 @@ async function registerArtifact(payload) {
   return false;
 }
 
-export async function prepareReview(file, { reopen = false } = {}) {
+export async function prepareReview(file, { reopen = false, log = console.log } = {}) {
   file = path.resolve(file);
   let result;
   try { result = await exec('lavish-axi', [file, '--no-open', ...(reopen ? ['--reopen'] : [])]); }
   catch (error) { throw new Error(error.stderr?.trim() || `lavish-axi failed: ${error.message}`); }
   if (/^\s*status:\s*user-ended\s*$/m.test(result.stdout)) {
-    console.log(`The user ended the Lavish review of ${file}; pass --reopen only if they ask to see it again.`);
+    log(`The user ended the Lavish review of ${file}; pass --reopen only if they ask to see it again.`);
     return { ended: true };
   }
   const url = result.stdout.match(/^\s*url:\s*"?(https?:\/\/[^"\s]+)"?\s*$/m)?.[1];
@@ -44,7 +44,7 @@ export async function prepareReview(file, { reopen = false } = {}) {
   return { url };
 }
 
-export async function presentReview(file, url, { title, open = false } = {}) {
+export async function presentReview(file, url, { title, open = false, log = console.log } = {}) {
   file = path.resolve(file);
   if (title === undefined) {
     const html = await readFile(file, 'utf8');
@@ -58,7 +58,7 @@ export async function presentReview(file, url, { title, open = false } = {}) {
     try { await exec(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]); }
     catch (error) { throw new Error(error.stderr?.trim() || `browser open failed: ${error.message}`); }
   }
-  console.log(registered
+  log(registered
     ? `Lavish review of ${file} is listed under the task's Artifacts.`
     : `Lavish review of ${file} ready: ${url}${open ? '' : ' (ask the user to open it)'}`);
   return { url, registered };

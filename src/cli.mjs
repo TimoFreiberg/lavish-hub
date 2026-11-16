@@ -9,12 +9,14 @@ import { preparePR, writePRPage } from './pr-page.mjs';
 import { ensureDeps } from './deps.mjs';
 import { DiffUsageError, prepareDiff, readDiff } from './diff/source.mjs';
 import { pagePath, writeDiffPage } from './diff/page.mjs';
+import { callHub, runHubOwner } from './hub-runtime.mjs';
 
 const usage = `usage: lavish-kit <file.html|file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit diff [-r REV | --from A --to B] [--git] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit diff - [--repo-root DIR] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit retarget <page.html> [--terminal T]
+       lavish-kit hub [listen|stop] [--workspace DIR] [--open] [--reopen]
 Run lavish-kit --help for details.`;
 const help = `Open an HTML file, a Markdown file, or a jj/git diff as a Lavish review page.
 
@@ -80,6 +82,13 @@ Options:
   --open            open a browser if the page isn't listed under Artifacts
   --reopen          reopen a review the user ended in the browser
 
+Hub owner (experimental; views and publication are not yet implemented):
+  hub listen [--workspace DIR] [--open] [--reopen]  run a foreground owner
+  hub [--workspace DIR]                             check owner status
+  hub stop [--workspace DIR]                        stop the owner
+  The owner prints feedback as agent-notification JSON lines and never starts a
+  relay. An unreachable owner is not automatically replaced.
+
 See docs/README.md for the save and action formats, worker files, logs, and recovery.`;
 class UsageError extends Error {}
 
@@ -87,6 +96,23 @@ export function parseArgs(args) {
   if (args.length === 1 && args[0] === '--help') return { help: true };
   const target = args.shift();
   if (!target || target.startsWith('-')) throw new UsageError();
+  if (target === 'hub') {
+    const command = args[0] && !args[0].startsWith('-') ? args.shift() : 'status';
+    if (!['listen', 'stop', 'status'].includes(command)) throw new UsageError(`unknown hub command ${command}`);
+    const result = { hub: command };
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--workspace') {
+        if (result.workspace || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--workspace requires one value');
+        result.workspace = args[++i];
+      } else if (command === 'listen' && (arg === '--open' || arg === '--reopen')) {
+        const key = arg.slice(2);
+        if (result[key]) throw new UsageError(`${arg} given twice`);
+        result[key] = true;
+      } else throw new UsageError(`unknown hub argument ${arg}`);
+    }
+    return result;
+  }
   if (target === 'retarget') {
     const page = args.shift();
     if (!page || page.startsWith('-')) throw new UsageError('retarget requires a page file');
@@ -120,6 +146,12 @@ export async function main(args = process.argv.slice(2)) {
   try {
     const options = parseArgs([...args]);
     if (options.help) { console.log(help); return 0; }
+    if (options.hub) {
+      if (options.hub === 'listen') return await runHubOwner(options);
+      const result = await callHub(options.hub, options);
+      console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}.`);
+      return 0;
+    }
     if (options.retarget) {
       const result = await retarget(options.page, options.terminal, { log: message => console.error(`lavish-kit: ${message}`) });
       console.log(`Retargeted ${result.target.page} to ${result.target.session || result.target.terminal}; delivered ${result.delivered} outbox batch(es).${result.pending ? ` ${result.pending} batch(es) remain in the outbox.` : ''}`);
