@@ -1319,6 +1319,7 @@ export async function serve({
       ok: true,
       app: "lavish-axi",
       version,
+      lavish_kit_page_reviews: 1,
       state_id: serverStateId,
       state_dir: path.dirname(stateFile),
       // Where this process is listening and every address it was asked to serve (bound or still

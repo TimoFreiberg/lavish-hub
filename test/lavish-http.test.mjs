@@ -35,6 +35,22 @@ test('HTTP checks version and state before consuming; never retries broken poll 
   await assert.rejects(client.poll(x.file, 'test'), SyntaxError); assert.equal(polls, 1);
 });
 
+test('hub HTTP requires the patched version and matching state before polling', async t => {
+  const x = await fixture(t); let polls = 0;
+  const client = createLavishClient({ env: x.env, vendored: true, fetch: async url => {
+    if (new URL(url).pathname === '/health') return Response.json(x.health);
+    polls++; return Response.json({ status: 'waiting' });
+  } });
+  x.health.version = '0.1.97';
+  await assert.rejects(client.poll(x.file, 'test'), /UNSUPPORTED_LAVISH/);
+  x.health.lavish_kit_page_reviews = 1; x.health.state_id = 'other';
+  await assert.rejects(client.poll(x.file, 'test'), /STATE_MISMATCH/);
+  assert.equal(polls, 0);
+  x.health.state_id = keyFor(path.join(await realpath(x.state), 'state.json'));
+  assert.equal((await client.poll(x.file, 'test')).session.status, 'waiting');
+  assert.equal(polls, 1);
+});
+
 test('HTTP preserves feedback, listener errors, cancellation, and non-consuming listings', async t => {
   const x = await fixture(t), calls = []; let result = { status: 'feedback', prompts: [{ id: 'p1', prompt: 'Keep exactly', tag: 'save', target: { path: 'odd path' } }], artifact_failures: [{ kind: 'load', detail: 'missing' }], session_ended: true, ended_by: 'user', dom_snapshot: '<main>', snapshot_page: 'tasks.html' };
   const controller = new AbortController();

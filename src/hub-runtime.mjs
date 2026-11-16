@@ -65,7 +65,7 @@ async function release(lock, instance) {
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
-export async function runHubOwner(options = {}) {
+export async function runHubOwner(options = {}, { prepare = prepareReview } = {}) {
   const identity = await workspace(options.workspace);
   const instance = randomUUID();
   const lock = await acquire(identity, instance);
@@ -130,10 +130,10 @@ export async function runHubOwner(options = {}) {
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><style>${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style></head><body><div id="app"></div><script>globalThis.hubConfig=${config};</script><script>${diffScript.replaceAll('</script', '<\\/script')}</script><script>${markdownScript.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);
-    const review = await prepareReview(page, { reopen: options.reopen, log: console.error });
+    const review = await prepare(page, { reopen: options.reopen, log: console.error, vendored: true });
     if (review.ended) return 1;
     reviewUrl = review.url;
-    const client = createLavishClient({ signal: abort.signal });
+    const client = createLavishClient({ signal: abort.signal, vendored: true });
     await atomicJson(path.join(lock, 'runtime.json'), { pid: process.pid, instance, url: transport.url, capability: transport.capability, page });
     await presentReview(page, review.url, { title: 'Workspace hub', open: options.open, log: console.error });
     console.error(`Hub owner running for ${identity.root}; stop with lavish-kit hub stop.`);

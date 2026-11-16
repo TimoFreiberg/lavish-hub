@@ -10,7 +10,8 @@ const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`
 // These private contracts are verified against lavish-axi 0.1.96's dist/cli.mjs:
 // /health, handlePoll, createPollOutput, replyCommand, endCommand, visibleSessions.
 // Opening a page still uses the CLI, which owns server startup and networking.
-export function createLavishClient({ env = process.env, fetch: request = globalThis.fetch, signal } = {}) {
+export function createLavishClient({ env = process.env, fetch: request = globalThis.fetch, signal, vendored = false } = {}) {
+  const version = vendored ? '0.1.97' : supportedLavishVersion;
   const port = Number(env.LAVISH_AXI_PORT || 4387);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid LAVISH_AXI_PORT');
   const base = `http://127.0.0.1:${port}`;
@@ -27,8 +28,8 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
   }
   async function verify() {
     const health = await json(`${base}/health`, { signal: boundedSignal() });
-    if (!health.ok || health.app !== 'lavish-axi' || health.version !== supportedLavishVersion) {
-      throw failure('UNSUPPORTED_LAVISH', `Direct HTTP requires lavish-axi ${supportedLavishVersion}; server reports ${health.version || 'unknown'}`);
+    if (!health.ok || health.app !== 'lavish-axi' || health.version !== version || (vendored && health.lavish_kit_page_reviews !== 1)) {
+      throw failure('UNSUPPORTED_LAVISH', `Direct HTTP requires ${vendored ? 'the patched vendored ' : ''}lavish-axi ${version}; server reports ${health.version || 'unknown'}`);
     }
     const canonicalDirectory = await realpath(directory);
     const stateId = keyFor(path.join(canonicalDirectory, 'state.json'));

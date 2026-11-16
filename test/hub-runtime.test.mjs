@@ -22,7 +22,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   let pollMode = 'waiting', polls = 0;
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
-    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.96', state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
+    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.97', lavish_kit_page_reviews: 1, state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
     else {
       polls++;
       if (pollMode === 'feedback') { pollMode = 'waiting'; res.end(JSON.stringify({ status: 'feedback', prompts: ['Review this'], dom_snapshot: 'quoted context' })); }
@@ -39,7 +39,9 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(server.address().port), XDG_DATA_HOME: data, XDG_STATE_HOME: path.join(dir, 'xdg-state') };
   delete env.HC_TERMINAL_ID;
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
-  const owner = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const ownerScript = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; process.exitCode = await runHubOwner({ workspace: process.argv[1] }, { prepare: async (_page, options) => { if (!options.vendored) throw Error('expected vendored'); return { url: 'http://localhost:123/review' }; } });`;
+  const ownerArgs = ['--input-type=module', '-e', ownerScript, repo];
+  const owner = spawn(process.execPath, ownerArgs, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '', output = ''; owner.stderr.on('data', chunk => { stderr += chunk; }); owner.stdout.on('data', chunk => { output += chunk; });
   t.after(() => { if (owner.exitCode === null) owner.kill('SIGKILL'); });
   for (let i = 0; i < 400; i++) { try { await stat(runtime); break; } catch { if (owner.exitCode !== null) throw new Error(stderr); await delay(30); } }
@@ -123,7 +125,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await assert.rejects(stat(path.join(env.XDG_STATE_HOME, 'lavish-kit', 'relay.json')), { code: 'ENOENT' });
 
   await rm(repo, { recursive: true, force: true });
-  const restarted = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const restarted = spawn(process.execPath, ownerArgs, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let restartError = ''; restarted.stderr.on('data', chunk => { restartError += chunk; });
   t.after(() => { if (restarted.exitCode === null) restarted.kill('SIGKILL'); });
   for (let i = 0; i < 100; i++) { try { await stat(runtime); break; } catch { if (restarted.exitCode !== null) throw new Error(restartError); await delay(30); } }

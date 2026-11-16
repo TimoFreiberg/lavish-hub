@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 import { ensureRelay, quote, recordTarget } from './relay.mjs';
 
@@ -30,11 +31,17 @@ async function registerArtifact(payload) {
   return false;
 }
 
-export async function prepareReview(file, { reopen = false, log = console.log } = {}) {
+export async function prepareReview(file, { reopen = false, log = console.log, vendored = false } = {}) {
   file = path.resolve(file);
   let result;
-  try { result = await exec('lavish-axi', [file, '--no-open', ...(reopen ? ['--reopen'] : [])]); }
-  catch (error) { throw new Error(error.stderr?.trim() || `lavish-axi failed: ${error.message}`); }
+  const cli = new URL('../vendor/lavish/dist/cli.mjs', import.meta.url);
+  try {
+    if (vendored) await readFile(cli, { flag: 'r' });
+    result = await exec(vendored ? process.execPath : 'lavish-axi', [...(vendored ? [fileURLToPath(cli)] : []), file, '--no-open', ...(reopen ? ['--reopen'] : [])]);
+  } catch (error) {
+    if (vendored && error.code === 'ENOENT') throw new Error('Vendored Lavish build missing; run pnpm --dir vendor/lavish install --frozen-lockfile and pnpm --dir vendor/lavish build');
+    throw new Error(error.stderr?.trim() || `lavish-axi failed: ${error.message}`);
+  }
   if (/^\s*status:\s*user-ended\s*$/m.test(result.stdout)) {
     log(`The user ended the Lavish review of ${file}; pass --reopen only if they ask to see it again.`);
     return { ended: true };
