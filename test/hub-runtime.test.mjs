@@ -124,8 +124,23 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal((await request('status')).selected, 'changes');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
   await siblingPage.getByLabel('Frame draft').fill('Authored draft');
-  await siblingPage.getByRole('link', { name: 'Tasks', exact: true }).click();
+  let refreshes = 0;
+  siblingPage.on('response', response => {
+    if (response.request().postDataJSON()?.operation === 'documents' && response.ok()) refreshes++;
+  });
+  const tasksLink = siblingPage.getByRole('link', { name: 'Tasks', exact: true });
+  await tasksLink.focus();
+  await siblingPage.evaluate(() => { window.focusedNavigationLink = document.activeElement; });
+  for (let i = 0; i < 200 && refreshes < 2; i++) await delay(30);
+  assert.ok(refreshes >= 2, 'expected two completed navigation refreshes');
+  assert.equal(await siblingPage.evaluate(() => document.activeElement === window.focusedNavigationLink && window.focusedNavigationLink.isConnected), true);
+  await tasksLink.click();
+  await siblingPage.getByRole('button', { name: 'Keep editing' }).waitFor();
+  const beforeDialogRefresh = refreshes;
+  for (let i = 0; i < 200 && refreshes === beforeDialogRefresh; i++) await delay(30);
+  assert.ok(refreshes > beforeDialogRefresh, 'expected a refresh while the dialog is open');
   await siblingPage.getByRole('button', { name: 'Keep editing' }).click();
+  assert.equal(await siblingPage.evaluate(() => document.activeElement === window.focusedNavigationLink && window.focusedNavigationLink.isConnected), true);
   assert.equal(await siblingPage.getByLabel('Frame draft').inputValue(), 'Authored draft');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
   await delay(2300);
@@ -154,6 +169,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(replacementMetadata, JSON.stringify({ reviewedRepository: 'Replacement' }));
   const existingPage = await browser.newPage();
   await existingPage.goto(`file://${path.join(identity.directory, sibling)}`);
+  await existingPage.getByRole('link', { name: 'Tasks', exact: true }).focus();
+  await existingPage.evaluate(() => { window.focusedNavigationLink = document.activeElement; });
   const newDocument = path.join(dir, 'new.html');
   await writeFile(newDocument, '<p>new document</p>');
   await writeFile(path.join(identity.directory, sibling), `${await readFile(path.join(identity.directory, sibling), 'utf8')}<!-- local edit -->`);
@@ -161,6 +178,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await run(process.execPath, [cli, 'hub', 'publish', newDocument, '--id', 'new', '--title', 'New document', '--workspace', repo], { env });
   await request('navigate', { id: 'inside' });
   await existingPage.getByRole('link', { name: 'New document' }).waitFor();
+  assert.equal(await existingPage.evaluate(() => document.activeElement === window.focusedNavigationLink && window.focusedNavigationLink.isConnected), true);
   assert.equal(await readFile(path.join(identity.directory, sibling), 'utf8'), editedInside);
   await existingPage.close();
   await writeFile(outsideSibling, 'target edit');
