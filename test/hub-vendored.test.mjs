@@ -12,6 +12,13 @@ import { resolveWorkspace } from '../src/hub-workspace.mjs';
 import { chromium } from 'playwright-core';
 
 const run = promisify(execFile);
+async function warmDeps(dir, env) {
+  const npm = path.join(dir, 'npm');
+  await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
+  const deps = new URL('../src/deps.mjs', import.meta.url).href;
+  // Dependency installation and bundling are not part of hub startup checks.
+  await run(process.execPath, ['--input-type=module', '-e', `import { ensureDeps } from ${JSON.stringify(deps)}; await ensureDeps();`], { env: { ...env, PATH: `${dir}:${env.PATH}`, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
+}
 test('hub opens with the vendored server rather than PATH and polls its protocol', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-vendored-'));
   const repo = path.join(dir, 'repo'), state = path.join(dir, 'state');
@@ -25,6 +32,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await writeFile(trap, `#!/bin/sh\ntouch "$PATH_TRAP"\nexit 1\n`); await chmod(trap, 0o700);
   const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, PATH_TRAP: path.join(dir, 'used'), LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
   delete env.HC_TERMINAL_ID;
+  try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const child = spawn(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '', stdout = ''; child.stderr.on('data', chunk => { stderr += chunk; });
@@ -133,6 +141,7 @@ test('CLI recovers published HTML after SIGKILL and refuses edited generated fil
   const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
   const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
   delete env.HC_TERMINAL_ID;
+  try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   const cli = path.resolve('bin/lavish-kit');
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const children = [];

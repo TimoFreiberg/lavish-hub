@@ -53,6 +53,10 @@ async function setup(t) {
     await until(async () => !await exists(path.join(daemonDir, 'daemon.lock')), 'daemon did not exit');
     await rm(daemonDir, { recursive: true, force: true }); await rm(dir, { recursive: true, force: true });
   });
+  // Dependency installation and bundling are not part of daemon startup checks.
+  const npm = path.join(bin, 'npm'); await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o755);
+  const init = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(deps)}).then(m=>m.ensureDeps())`], { env: { ...env, FIXTURE: fixture }, encoding: 'utf8', timeout: 40000 });
+  assert.equal(init.status, 0, init.stderr);
   return { dir, bin, env, pages, page, list, launch, daemonDir };
 }
 
@@ -81,9 +85,6 @@ test('launcher death after worker spawn before bind permits recovery without a s
 
 test('concurrent CLI invocations register pages in one daemon', { timeout: 60000 }, async t => {
   const x = await setup(t), first = await x.page('first'), second = await x.page('second'); await x.list([first, second]);
-  const npm = path.join(x.bin, 'npm'); await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o755);
-  const init = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(deps)}).then(m=>m.ensureDeps())`], { env: { ...x.env, FIXTURE: fixture }, encoding: 'utf8', timeout: 40000 });
-  assert.equal(init.status, 0, init.stderr);
   const results = await Promise.all([first, second, first, second].map(file => success(run([cli, file], x.env))));
   for (const result of results) assert.match(result.stdout, /Lavish review/);
   const owner = await readFile(path.join(x.daemonDir, 'daemon.lock', 'pid'), 'utf8');
