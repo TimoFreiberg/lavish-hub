@@ -53,8 +53,12 @@ command. An explicitly ended review needs `--reopen` to open again.
 
 Workspace identity and owner metadata live under the private XDG data directory,
 scoped by workspace and Lavish state directory. The loopback endpoint requires a
-per-instance secret; do not share its runtime metadata. This experimental owner
-is not yet the full hub described in the project plan.
+per-instance secret; do not share its runtime metadata. If a recorded workspace
+is removed, start its owner with the original explicit `--workspace` path to read
+surviving registered documents. Saves and repository actions remain disabled, including if
+a different checkout later appears at that path; the hub does not retarget it.
+Sources removed with the workspace cannot be read. This experimental owner is
+not yet the full hub described in the project plan.
 
 The authenticated action endpoint supports `snapshot` and `describe` for the
 workspace views. A snapshot pins its commit metadata, endpoints, patch,

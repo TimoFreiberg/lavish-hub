@@ -25,11 +25,16 @@ function alive(pid) {
   catch (error) { return error.code !== 'ESRCH'; }
 }
 async function workspace(dir) {
-  try { return await resolveWorkspace(dir); }
+  let current;
+  try { current = await resolveWorkspace(dir); }
   catch (error) {
     if (!dir) throw error;
     try { return await resolveRecordedWorkspace(dir); } catch { throw error; }
   }
+  // A checkout path may have been replaced since this hub was created. Keep
+  // its recorded identity so actions cannot silently move to the new repo.
+  try { return await resolveRecordedWorkspace(current.root); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; return current; }
 }
 async function acquire(identity, instance) {
   await mkdir(identity.directory, { recursive: true, mode: 0o700 });
@@ -70,7 +75,7 @@ export async function runHubOwner(options = {}) {
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) process.once(signal, stop);
   try {
-    if (!(await workspaceMatches(identity))) throw new Error('Workspace no longer matches its recorded repository');
+    if (!(await workspaceMatches(identity))) console.error('Workspace is unavailable or has changed; repository actions are disabled.');
     await recordWorkspace(identity);
     const page = path.join(identity.directory, 'hub.html');
     const jj = createHubJj(identity.root, { validate: () => workspaceMatches(identity) });
@@ -85,7 +90,10 @@ export async function runHubOwner(options = {}) {
     };
     transport = await createHubTransport({
       navigate: body => select(body.id),
-      launchPr,
+      launchPr: async body => {
+        if (!(await workspaceMatches(identity))) throw new Error('Workspace is unavailable or has changed; launching is disabled');
+        return launchPr(body);
+      },
       configurePr: async body => { if (body.rev !== undefined) await jj.prHead(body.rev); return documents.attach({ ...body, kind: 'pr' }); },
       executeCommand: body => commands.execute(body),
       commandStatus: body => commands.status(body),
@@ -94,7 +102,10 @@ export async function runHubOwner(options = {}) {
       publish: async body => { const document = await documents.publish(body); select(document.id); return document; },
       attach: body => documents.attach(body),
       readDocument: body => documents.read(body),
-      saveDocument: body => documents.save(body),
+      saveDocument: async body => {
+        if (!(await workspaceMatches(identity))) throw new Error('Workspace is unavailable or has changed; saving is disabled');
+        return documents.save(body);
+      },
       status: async () => ({ workspace: identity.root, instance, selected, available: await workspaceMatches(identity) }),
       snapshot: () => jj.snapshot(),
       describe: body => jj.describe(body),

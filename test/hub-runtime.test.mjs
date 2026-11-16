@@ -18,10 +18,16 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await mkdir(repo); await mkdir(state);
   execFileSync('jj', ['git', 'init', repo]);
   const canonicalState = await realpath(state);
+  let pollMode = 'waiting', polls = 0;
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
     if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.96', state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
-    else setTimeout(() => res.end(JSON.stringify({ status: 'waiting' })), 50);
+    else {
+      polls++;
+      if (pollMode === 'feedback') { pollMode = 'waiting'; res.end(JSON.stringify({ status: 'feedback', prompts: ['Review this'], dom_snapshot: 'quoted context' })); }
+      else if (pollMode === 'truncated') { res.write('{"status":"feedback"'); res.destroy(); }
+      else setTimeout(() => res.end(JSON.stringify({ status: 'waiting' })), 50);
+    }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.closeAllConnections() || server.close());
@@ -31,11 +37,12 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   delete env.HC_TERMINAL_ID;
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const owner = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stderr = ''; owner.stderr.on('data', chunk => { stderr += chunk; });
+  let stderr = '', output = ''; owner.stderr.on('data', chunk => { stderr += chunk; }); owner.stdout.on('data', chunk => { output += chunk; });
   t.after(() => { if (owner.exitCode === null) owner.kill('SIGKILL'); });
   for (let i = 0; i < 100; i++) { try { await stat(runtime); break; } catch { if (owner.exitCode !== null) throw new Error(stderr); await delay(30); } }
   assert.equal((await stat(runtime)).mode & 0o777, 0o600);
-  const run = promisify(execFile);
+  const execute = promisify(execFile);
+  const run = (file, args, options) => execute(file, args, { ...options, timeout: 5000 });
   await assert.rejects(run(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env }), /hub owner is already running/i);
   const { stdout } = await run(process.execPath, [cli, 'hub', '--workspace', repo], { env });
   assert.match(stdout, /Hub owner running/);
@@ -49,11 +56,55 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
   assert.equal((await request('status')).selected, 'tasks');
   const document = path.join(dir, 'review.md'); await writeFile(document, '# Review\n');
-  await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--workspace', repo], { env });
+  const metadata = path.join(dir, 'metadata.json');
+  await writeFile(metadata, JSON.stringify({ reviewedRepository: 'Reviewed repo', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40) }));
+  await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env });
   assert.equal((await request('status')).selected, 'review');
+  assert.equal((await request('documents')).documents[0].metadata.reviewedRepository, 'Reviewed repo');
+  await writeFile(metadata, JSON.stringify({ unknown: 'invalid' }));
+  await assert.rejects(run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env }), /metadata/i);
+  assert.equal((await request('documents')).documents[0].metadata.reviewedRepository, 'Reviewed repo');
+  await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--workspace', repo], { env });
+  assert.deepEqual((await request('documents')).documents[0].metadata, {});
+  assert.equal(output, '');
+  pollMode = 'feedback';
+  for (let i = 0; i < 100 && !output.includes('\n'); i++) await delay(30);
+  const notification = JSON.parse(output.trim());
+  assert.equal(notification.type, 'agent-notification');
+  assert.deepEqual(notification.prompts, ['Review this']);
+  assert.equal(notification.context, 'quoted context');
+  assert.match(notification.reply, /lavish-axi reply/);
+  const ownerExit = new Promise(resolve => owner.once('exit', resolve));
   await run(process.execPath, [cli, 'hub', 'stop', '--workspace', repo], { env });
-  const exit = await new Promise(resolve => owner.once('exit', resolve));
+  const exit = await ownerExit;
   assert.equal(exit, 0, stderr);
   await assert.rejects(readFile(runtime), { code: 'ENOENT' });
   await assert.rejects(stat(path.join(env.XDG_STATE_HOME, 'lavish-kit', 'relay.json')), { code: 'ENOENT' });
+
+  await rm(repo, { recursive: true, force: true });
+  const restarted = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let restartError = ''; restarted.stderr.on('data', chunk => { restartError += chunk; });
+  t.after(() => { if (restarted.exitCode === null) restarted.kill('SIGKILL'); });
+  for (let i = 0; i < 100; i++) { try { await stat(runtime); break; } catch { if (restarted.exitCode !== null) throw new Error(restartError); await delay(30); } }
+  const second = JSON.parse(await readFile(runtime, 'utf8'));
+  const secondRequest = async (operation, body = {}) => {
+    const response = await fetch(`${second.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': second.capability }, body: JSON.stringify({ operation, ...body }) });
+    return { status: response.status, ...(await response.json()) };
+  };
+  assert.equal((await secondRequest('status')).result.selected, 'commits');
+  assert.equal((await secondRequest('status')).result.available, false);
+  assert.equal((await secondRequest('readDocument', { id: 'review' })).result.text, '# Review\n');
+  await mkdir(repo); execFileSync('jj', ['git', 'init', repo]);
+  assert.equal((await secondRequest('status')).result.available, false);
+  assert.notEqual((await secondRequest('snapshot')).status, 200);
+  assert.notEqual((await secondRequest('saveDocument', { id: 'review', text: 'changed' })).status, 200);
+  assert.equal(await readFile(document, 'utf8'), '# Review\n');
+  const restartExit = new Promise(resolve => restarted.once('exit', resolve));
+  pollMode = 'truncated';
+  assert.notEqual(await restartExit, 0, restartError);
+  const stoppedPolls = polls;
+  await delay(150);
+  assert.equal(polls, stoppedPolls, 'ambiguous poll must not be retried');
+  await assert.rejects(readFile(runtime), { code: 'ENOENT' });
+  await assert.rejects(run(process.execPath, [cli, 'hub', '--workspace', repo], { env }), /No live hub owner/);
 });
