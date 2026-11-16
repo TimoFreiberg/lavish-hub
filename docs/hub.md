@@ -2,8 +2,8 @@
 
 `lavish-kit hub listen [--workspace DIR] [--open] [--reopen]` runs a foreground
 owner for one jj workspace. It opens a stable Lavish page without starting the
-standalone feedback relay. The experimental page shows commit descriptions and a
-plain-text patch, and provides direct Markdown editors for tasks, PR drafts, and
+standalone feedback relay. The page shows commit descriptions and an annotated
+diff, and provides direct Markdown editors for tasks, PR drafts, and
 registered Markdown documents. Description and file saves report conflicts and
 keep the draft on the page. Actions require the local owner; if it is unreachable,
 the page reports the error without discarding edits. Drafts are not persisted across
@@ -79,12 +79,12 @@ selected view, unless unsaved edits pause the switch. The hub asks before leavin
 for a published HTML page when a hub draft or an unqueued diff comment is
 unsaved. Published pages similarly ask after user input or changes outside the
 navigation, and pause automatic switches. In the in-page confirmation, choose
-Keep editing or press Escape to
-keep the current page and its edits; choose Leave page to discard them.
-These guards do not persist drafts: accepting a prompt, a browser crash, or forced
-closure can discard them. Published pages with custom editors that do not emit
-trusted input or change events may not be detected. A published page remains
-marked edited even if its own save control has saved the data.
+Keep editing or press Escape to keep the current page and its edits. Choose Leave
+page to discard them. These guards do not persist drafts: leaving the page, a
+browser crash, or forced closure can discard them. Published pages with custom
+editors that do not emit trusted input or change events may not be detected. A
+published page remains marked edited even if its own save control has saved the
+data.
 
 The owner serves files under the published document's directory, including its
 subdirectories, but rejects traversal and symlinks outside that directory. Like
@@ -166,6 +166,7 @@ stderr. An explicit head reports whether it is the working-copy commit instead.
 The owner rereads `createPr` from the config file on each launch. When the owner
 has a live herdr terminal, it attempts to open an interactive tab; otherwise it
 shows a quoted command to run manually. A durable request record prevents the
-same submission from launching twice. If acknowledgement is lost or the owner
-is interrupted, check the terminal before trying again. A successful launch
+same request ID from launching twice; a new submission uses a new ID. If
+acknowledgement is lost or the owner is interrupted, check the terminal before
+trying again. A successful launch
 only opens the command; it does not confirm that a PR was created.
