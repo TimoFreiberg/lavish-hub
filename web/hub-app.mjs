@@ -27,7 +27,7 @@ function renderNav() {
 let navigationRevision = 0;
 async function select(id) {
   const revision = ++navigationRevision;
-  try { await action('navigate', { id }); if (revision !== navigationRevision) return; selected = id; renderNav(); await renderView(); }
+  try { await action('navigate', { id }); if (revision !== navigationRevision) return; const doc = documents.find(item => item.id === id); if (doc?.sibling && doc.source?.toLowerCase().endsWith('.html')) { location.href = new URL(doc.sibling, location.href).href; return; } selected = id; renderNav(); await renderView(); }
   catch (error) { status(error.message); }
 }
 async function refresh() {
@@ -38,6 +38,8 @@ async function refresh() {
     const oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSnapshot = JSON.stringify(snapshot);
     documents = list.documents;
     if (state.selected && navigationAtStart === navigationRevision) selected = state.selected;
+    const selectedDoc = documents.find(item => item.id === selected);
+    if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { location.href = new URL(selectedDoc.sibling, location.href).href; return; }
     try { snapshot = await action('snapshot'); status(state.available ? 'Connected' : 'Workspace unavailable'); }
     catch (error) { snapshot = undefined; status(error.message); }
     let documentChanged = false;

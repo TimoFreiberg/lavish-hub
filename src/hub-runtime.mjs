@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
@@ -71,6 +71,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
   const lock = await acquire(identity, instance);
   const abort = new AbortController();
   let transport, commands, stopping = false;
+  const generatedSiblings = new Set();
   const stop = () => { stopping = true; abort.abort(); };
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) process.once(signal, stop);
@@ -93,6 +94,28 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     commands = await createHubCommands(identity.directory, identity.root, () => workspaceMatches(identity));
     const launchPr = await createHubPr(identity.directory, identity.root, documents, jj);
     let reviewUrl;
+    const siblingName = id => `document-${createHash('sha256').update(id).digest('hex')}.html`;
+    const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+    async function writeSiblings() {
+      const docs = documents.list().documents;
+      const htmlDocs = docs.filter(doc => doc.source.toLowerCase().endsWith('.html'));
+      for (const doc of htmlDocs) {
+        let authored;
+        try { await guardSource(doc.source); authored = await readFile(doc.source, 'utf8'); }
+        catch { authored = '<!doctype html><html><head><title>Document unavailable</title></head><body><p>Document source is unavailable.</p></body></html>'; }
+        const base = `${transport.url}/resources/${transport.resourceKey}/${encodeURIComponent(doc.id)}/${encodeURIComponent(path.basename(doc.source))}`;
+        const nav = `<nav aria-label="Hub navigation" data-lavish-action style="position:relative;z-index:2147483647;padding:8px;background:#171923;color:white;font:14px system-ui;display:flex;gap:12px;flex-wrap:wrap"><a style="color:white" href="hub.html">Workspace hub</a>${htmlDocs.map(item => `<a style="color:white" href="${siblingName(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}>${escapeHtml(item.title)}</a>`).join('')}</nav>`;
+        const baseTag = `<base href="${escapeHtml(base)}">`;
+        const navConfig = JSON.stringify({ url: transport.url, capability: transport.capability }).replaceAll('<', '\\u003c');
+        const navigation = `${nav}<script>{const c=${navConfig};for(const a of document.querySelectorAll('nav[aria-label="Hub navigation"] a')){a.href=new URL(a.getAttribute('href'),location.href).href;if(a.textContent==='Workspace hub')a.addEventListener('click',async e=>{e.preventDefault();try{await fetch(c.url+'/action',{method:'POST',headers:{'content-type':'application/json','x-lavish-capability':c.capability},body:JSON.stringify({operation:'navigate',id:'commits'})})}finally{location.href=a.href}})}}</script>`;
+        authored = /<head\b[^>]*>/i.test(authored) ? authored.replace(/<head\b[^>]*>/i, match => match + baseTag) : baseTag + authored;
+        authored = /<body\b[^>]*>/i.test(authored) ? authored.replace(/<body\b[^>]*>/i, match => match + navigation) : navigation + authored;
+        const target = path.join(identity.directory, siblingName(doc.id));
+        generatedSiblings.add(target);
+        await writeFile(target, authored, { mode: 0o600 });
+        await chmod(target, 0o600);
+      }
+    }
     let selected = 'commits';
     const select = id => {
       if (!['commits', 'changes', 'tasks', 'pr'].includes(id) && !documents.list().documents.some(doc => doc.id === id)) throw new Error('Unknown view');
@@ -110,8 +133,8 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       executeCommand: body => commands.execute(body),
       commandStatus: body => commands.status(body),
       cancelCommand: body => commands.cancel(body),
-      documents: () => documents.list(),
-      publish: async body => { const document = await documents.publish(body); select(document.id); return document; },
+      documents: () => { const list = documents.list(); return { ...list, documents: list.documents.map(doc => ({ ...doc, sibling: siblingName(doc.id) })) }; },
+      publish: async body => { const document = await documents.publish(body); await writeSiblings(); select(document.id); return document; },
       attach: body => documents.attach(body),
       readDocument: body => documents.read(body),
       saveDocument: async body => {
@@ -126,6 +149,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const web = new URL('../web/', import.meta.url);
     const { dist } = await ensureDeps();
     const [script, style, diffScript, diffStyle, markdownScript, documentStyle] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8'), readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'), readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8')]);
+    await writeSiblings();
     const config = JSON.stringify({ url: transport.url, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root }).replaceAll('<', '\\u003c');
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><style>${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style></head><body><div id="app"></div><script>globalThis.hubConfig=${config};</script><script>${diffScript.replaceAll('</script', '<\\/script')}</script><script>${markdownScript.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
@@ -152,6 +176,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     for (const signal of signals) process.removeListener(signal, stop);
     if (commands) commands.close();
     if (transport) await transport.close();
+    await Promise.all([...generatedSiblings].map(file => rm(file, { force: true })));
     await release(lock, instance);
   }
 }

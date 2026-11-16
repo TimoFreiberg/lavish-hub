@@ -8,6 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveWorkspace } from '../src/hub-workspace.mjs';
+import { chromium } from 'playwright-core';
 
 const run = promisify(execFile);
 test('hub opens with the vendored server rather than PATH and polls its protocol', async t => {
@@ -39,6 +40,24 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   assert.equal(await realpath(health.state_dir), await realpath(state));
   assert.ok(record.page.endsWith('hub.html'));
   await assert.rejects(stat(env.PATH_TRAP), { code: 'ENOENT' });
+  const source = path.join(dir, 'review.html');
+  await writeFile(source, '<!doctype html><html><head><link rel="stylesheet" href="review.css"></head><body><h1 id="authored">Published review</h1><script src="review.js"></script></body></html>');
+  await writeFile(path.join(dir, 'review.css'), '#authored { color: rgb(1, 2, 3) }');
+  await writeFile(path.join(dir, 'review.js'), 'document.querySelector("#authored").dataset.ran="yes"');
+  await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
+  const url = stderr.match(/ready: (https?:\/\/\S+)/)?.[1];
+  assert.ok(url, stderr);
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.goto(url);
+  const authored = page.frameLocator('#artifact').locator('#authored');
+  await authored.waitFor({ timeout: 20000 });
+  assert.equal(await authored.getAttribute('data-ran'), 'yes');
+  assert.equal(await authored.evaluate(node => getComputedStyle(node).color), 'rgb(1, 2, 3)');
+  assert.match(page.frames().find(frame => frame.url().includes('document-'))?.url() || '', /document-.*\.html/);
+  await page.frameLocator('#artifact').getByRole('link', { name: 'Workspace hub' }).click();
+  await page.frameLocator('#artifact').getByRole('heading', { name: 'Commits', exact: true }).waitFor();
   await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
   assert.equal(exit, 0, stderr);

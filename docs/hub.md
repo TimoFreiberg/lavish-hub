@@ -65,8 +65,9 @@ Draft feedback survives navigation and refresh within the page, but not a reload
 Tasks have a checklist and a Markdown source editor; changes are written only when
 saved. Published Markdown has Edit and Preview controls; the preview includes
 unsaved edits and resolves relative links and images from the source directory.
-Published HTML is displayed in a nested sandbox and can load scripts, styles,
-and images relative to its source file.
+Published HTML opens as a sibling page in the same Lavish review, where it can
+be annotated directly. Scripts, styles, and images resolve relative to its source
+file. Use the page's hub navigation to return to the built-in views.
 
 The owner serves files under the published document's directory, including its
 subdirectories, but rejects traversal and symlinks outside that directory. Like
@@ -77,9 +78,8 @@ keep it private. It is separate from the action capability and does not authoriz
 local actions. Published HTML can run scripts and make network requests, so only
 publish trusted content. This local resource server requires the owner and a
 browser able to reach its loopback address; remote viewers cannot load these
-resources. Replacing a document changes its source directory. A nested document
-does not currently receive an action SDK, and its annotations are not integrated
-with the hub.
+resources. Replacing a document changes its source directory. Published HTML
+does not currently receive a hub action SDK.
 
 Run `lavish-kit hub [--workspace DIR]` to check the owner, add `--view VIEW` to
 select a built-in view or published document ID, or run `lavish-kit hub stop
@@ -89,10 +89,10 @@ when available). Publishing selects the document. Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. An open hub checks for selection, repository, and source changes about
 every two seconds after each completed check; slow or unavailable actions can delay
-updates. Clean documents update automatically, while unsaved drafts remain in the
-page. Published HTML stays mounted across navigation and ordinary refreshes, but
-republishing or changing its source reloads it and resets its internal state.
-Reloading the hub page also resets that state. The owner exits on stop, SIGINT,
+updates. Clean Markdown documents update automatically, while unsaved drafts remain
+in the page. Published HTML is generated when the owner starts or a document is
+published; republish after changing its source. Navigating away or reloading resets
+its internal state. The owner exits on stop, SIGINT,
 SIGTERM, an ended Lavish session, or a listener error. It does not start a
 background daemon. A second owner is refused; an unreachable live process is
 not replaced. A stale record is reclaimed only when its recorded process is
