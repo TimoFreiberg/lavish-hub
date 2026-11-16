@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, rename, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { resolveWorkspace, workspaceMatches } from '../src/hub-workspace.mjs';
+import { createHubTransport } from '../src/hub-transport.mjs';
+
+test('hub workspace identity distinguishes workspaces and detects replacement', async t => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-workspace-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const root = path.join(dir, 'repo'), second = path.join(dir, 'second');
+  await mkdir(root); execFileSync('jj', ['git', 'init'], { cwd: root, stdio: 'ignore' });
+  await mkdir(path.join(root, 'sub'));
+  execFileSync('jj', ['workspace', 'add', second], { cwd: root, stdio: 'ignore' });
+  const env = { XDG_DATA_HOME: path.join(dir, 'data'), LAVISH_AXI_STATE_DIR: path.join(dir, 'state') };
+  const a = await resolveWorkspace(root, env), sub = await resolveWorkspace(path.join(root, 'sub'), env), b = await resolveWorkspace(second, env);
+  assert.equal(a.directory, sub.directory); assert.notEqual(a.directory, b.directory);
+  assert.equal(a.repo, b.repo); assert.equal(await workspaceMatches(a), true);
+  assert.notEqual(a.directory, (await resolveWorkspace(root, { ...env, LAVISH_AXI_STATE_DIR: path.join(dir, 'other') })).directory);
+  await rename(root, path.join(dir, 'old')); await mkdir(root);
+  execFileSync('jj', ['git', 'init'], { cwd: root, stdio: 'ignore' });
+  assert.equal(await workspaceMatches(a), false);
+});
+
+test('hub transport requires capability even after opaque-origin preflight', async t => {
+  let calls = 0;
+  const hub = await createHubTransport({ echo: body => { calls++; return body.value; } });
+  t.after(() => hub.close());
+  const endpoint = `${hub.url}/action`;
+  const preflight = await fetch(endpoint, { method: 'OPTIONS', headers: { origin: 'null', 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type, x-lavish-capability' } });
+  assert.equal(preflight.status, 204); assert.equal(preflight.headers.get('access-control-allow-origin'), 'null');
+  const send = (headers, body = JSON.stringify({ operation: 'echo', value: 'ok' })) => fetch(endpoint, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json', ...headers }, body });
+  assert.equal((await send({})).status, 403);
+  assert.equal((await send({ 'x-lavish-capability': 'wrong' })).status, 403);
+  assert.equal((await send({ 'x-lavish-capability': hub.capability, origin: 'https://example.com' })).status, 403);
+  assert.equal((await send({ 'x-lavish-capability': hub.capability }, 'x'.repeat(65537))).status, 413);
+  assert.equal(calls, 0);
+  const result = await send({ 'x-lavish-capability': hub.capability });
+  assert.equal(result.status, 200); assert.deepEqual(await result.json(), { result: 'ok' }); assert.equal(calls, 1);
+  const other = await createHubTransport({ echo: () => { calls++; } });
+  t.after(() => other.close());
+  assert.equal((await fetch(`${other.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': hub.capability }, body: '{"operation":"echo"}' })).status, 403);
+  assert.equal(calls, 1);
+});

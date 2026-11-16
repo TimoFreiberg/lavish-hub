@@ -1,0 +1,48 @@
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import http from 'node:http';
+
+const limit = 64 * 1024;
+const allowedHeaders = new Set(['content-type', 'x-lavish-capability']);
+
+// The caller owns the capability and must keep it out of URLs and logs.
+export async function createHubTransport(operations) {
+  const capability = randomBytes(32).toString('hex');
+  const server = http.createServer(async (req, res) => {
+    const respond = (status, value) => {
+      res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...(req.headers.origin === 'null' ? { 'access-control-allow-origin': 'null', vary: 'Origin' } : {}) });
+      res.end(JSON.stringify(value));
+    };
+    const address = server.address();
+    if (req.headers.host !== `127.0.0.1:${address.port}` || !['127.0.0.1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return respond(403, { error: 'Invalid host' });
+    if (req.headers.origin && req.headers.origin !== 'null') return respond(403, { error: 'Invalid origin' });
+    if (req.method === 'OPTIONS') {
+      const headers = (req.headers['access-control-request-headers'] || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+      if (req.headers.origin !== 'null' || req.headers['access-control-request-method'] !== 'POST' || headers.some(header => !allowedHeaders.has(header))) return respond(403, { error: 'Invalid preflight' });
+      res.writeHead(204, { 'access-control-allow-origin': 'null', 'access-control-allow-methods': 'POST', 'access-control-allow-headers': 'content-type, x-lavish-capability', 'cache-control': 'no-store', vary: 'Origin' });
+      return res.end();
+    }
+    const supplied = Buffer.from(req.headers['x-lavish-capability'] || '');
+    const expected = Buffer.from(capability);
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return respond(403, { error: 'Unauthorized' });
+    if (req.method !== 'POST' || req.url !== '/action' || !/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) return respond(400, { error: 'Invalid request' });
+    let size = 0, chunks = [];
+    try {
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > limit) return respond(413, { error: 'Request too large' });
+        chunks.push(chunk);
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (!body || Array.isArray(body) || typeof body !== 'object' || typeof body.operation !== 'string' || !Object.hasOwn(operations, body.operation)) return respond(400, { error: 'Unknown operation' });
+      const result = await operations[body.operation](body);
+      respond(200, { result });
+    } catch {
+      if (!res.headersSent) respond(400, { error: 'Action failed' });
+    }
+  });
+  server.requestTimeout = 15000;
+  server.headersTimeout = 10000;
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  return { url, capability, close: () => new Promise((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); }) };
+}

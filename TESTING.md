@@ -82,6 +82,9 @@ Chromium. Fake-executable suites explicitly select CLI transport; real server
 tests use the default HTTP transport.
 
 To run a single file: `node --test --test-concurrency=1 test/cli.test.mjs`.
+`test/hub-foundation.test.mjs` exercises canonical jj workspace identity,
+repository replacement detection, and capability-protected loopback requests.
+It does not test a hub runtime, browser integration, or feedback delivery.
 
 Temporary tests are useful during implementation. Before pushing, consider
 whether the behavior is likely to regress and whether existing checks would catch
