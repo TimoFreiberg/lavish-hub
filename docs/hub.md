@@ -53,7 +53,10 @@ registration and selects it. `--metadata-file` accepts a JSON object of at most
 16 KiB with optional `reviewedRepository` (nonempty display name), `baseCommit`
 and `headCommit` (full 40- or 64-digit hex IDs), and `sourceUrl` (HTTP(S) URL).
 Unknown fields are rejected. Each publication replaces all previous metadata;
-omitting it clears the old scope. Scope is recorded as supplied, not updated if
+omitting it clears the old scope. If generating the published HTML pages fails,
+publication retains the previous registration, metadata, selection, and generated
+pages when rollback succeeds. A process interruption or filesystem error during
+rollback can leave generated pages out of sync. Scope is recorded as supplied, not updated if
 commits are rewritten. The displayed scope therefore describes the review at
 publication time, not necessarily the current checkout.
 

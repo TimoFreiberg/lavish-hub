@@ -99,13 +99,15 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const siblingSources = new Map();
     const siblingName = doc => `document-${createHash('sha256').update(JSON.stringify([doc.id, doc.source])).digest('hex')}.html`;
     const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
-    async function writeSiblings() {
-      const docs = documents.list().documents;
+    async function writeSiblings(docs = documents.list().documents, commit = async () => {}, requiredId = null) {
       const htmlDocs = docs.filter(doc => doc.source.toLowerCase().endsWith('.html'));
+      const staged = [];
+      try {
       for (const doc of htmlDocs) {
         let authored;
         try { await guardSource(doc.source); authored = await readFile(doc.source, 'utf8'); }
         catch (error) {
+          if (doc.id === requiredId) throw error;
           console.error(`Document source is unavailable for ${doc.id}: ${error.message}`);
           continue;
         }
@@ -118,15 +120,35 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         const navigation = `${nav}${reviewedScope}<script>{const c=${navConfig};let navigating=false,dirty=false,leaving=false;for(const type of ['input','change'])document.addEventListener(type,e=>{if(e.isTrusted&&!e.target.closest('[data-lavish-action]'))dirty=true},true);window.addEventListener('beforeunload',e=>{if(dirty&&!leaving){e.preventDefault();e.returnValue=''}});const action=async(operation,body={})=>{const r=await fetch(c.url+'/action',{method:'POST',headers:{'content-type':'application/json','x-lavish-capability':c.capability},body:JSON.stringify({...body,operation})});if(!r.ok)throw Error('Hub action failed');return(await r.json()).result};for(const a of document.querySelectorAll('nav[aria-label="Hub navigation"] a')){a.href=new URL(a.getAttribute('href'),location.href).href;a.addEventListener('click',async e=>{e.preventDefault();if(dirty&&!confirm('Leave this page and discard unsaved document edits?'))return;navigating=true;try{await action('navigate',{id:a.dataset.hubId});leaving=true;location.href=a.href}catch{navigating=false}})}async function refresh(){try{const [state,list]=await Promise.all([action('status'),action('documents')]);if(!navigating&&!dirty&&state.selected!==c.id){const doc=list.documents.find(d=>d.id===state.selected);location.href=new URL(doc&&doc.source.toLowerCase().endsWith('.html')?doc.sibling:'hub.html',location.href).href;return}}catch{}setTimeout(refresh,2000)}setTimeout(refresh,2000)}</script>`;
         authored = composeHubHtml(authored, base, navigation);
         const name = siblingName(doc);
-        siblingSources.set(name, doc.source);
         const target = path.join(identity.directory, name);
         const previous = siblingContents.get(target);
         const current = await readFile(target, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
         if (current !== null && current !== previous) throw new Error(`Published document ${doc.id} already exists or was edited; refusing to overwrite it`);
-        generatedSiblings.add(target);
-        await writeFile(target, authored, { mode: 0o600 });
-        siblingContents.set(target, authored);
-        await chmod(target, 0o600);
+        const temp = `${target}.${randomUUID()}.tmp`;
+        staged.push({ target, temp, current, authored, name, source: doc.source, installed: false });
+        await writeFile(temp, authored, { mode: 0o600, flag: 'wx' });
+      }
+      for (const item of staged) {
+        await rename(item.temp, item.target);
+        item.installed = true;
+      }
+      await commit();
+      for (const item of staged) {
+        generatedSiblings.add(item.target);
+        siblingContents.set(item.target, item.authored);
+        siblingSources.set(item.name, item.source);
+      }
+      } catch (error) {
+        for (const item of staged.filter(item => item.installed).reverse()) {
+          if (item.current === null) await rm(item.target, { force: true });
+          else {
+            await writeFile(item.temp, item.current, { mode: 0o600, flag: 'wx' });
+            await rename(item.temp, item.target);
+          }
+        }
+        throw error;
+      } finally {
+        await Promise.all(staged.map(item => rm(item.temp, { force: true })));
       }
     }
     let selected = 'commits';
@@ -147,7 +169,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       commandStatus: body => commands.status(body),
       cancelCommand: body => commands.cancel(body),
       documents: () => { const list = documents.list(); return { ...list, documents: list.documents.map(doc => ({ ...doc, sibling: siblingName(doc) })) }; },
-      publish: async body => { const document = await documents.publish(body); await writeSiblings(); select(document.id); return document; },
+      publish: async body => { const document = await documents.publish(body, (docs, commit) => writeSiblings(docs, commit, body.id)); select(document.id); return document; },
       attach: body => documents.attach(body),
       readDocument: body => documents.read(body),
       saveDocument: async body => {

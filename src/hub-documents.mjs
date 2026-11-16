@@ -68,14 +68,15 @@ export async function createHubDocuments(directory, { guardSource = async () => 
   };
   return {
     list: () => ({ documents: Object.values(state.documents), attachments: { ...state.attachments } }),
-    publish: body => locked(async () => {
+    publish: (body, generate = async (_documents, commit) => commit()) => locked(async () => {
       if (typeof body.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(body.id) || builtins.has(body.id)) throw new Error('Invalid document ID');
       if (body.title !== undefined && (typeof body.title !== 'string' || !body.title.trim() || body.title.length > 512)) throw new Error('Invalid document title');
       const file = await source(body.file, ['.md', '.markdown', '.html']);
       const metadata = body.metadata === undefined ? {} : validateMetadata(body.metadata);
       if (Buffer.byteLength(JSON.stringify(metadata)) > maxMetadata) throw new Error('Metadata exceeds 16 KiB');
       const document = { id: body.id, title: body.title || path.basename(file), source: file, metadata, version: randomUUID() };
-      await persist({ ...state, documents: { ...state.documents, [body.id]: document } });
+      const next = { ...state, documents: { ...state.documents, [body.id]: document } };
+      await generate(Object.values(next.documents), () => persist(next));
       return document;
     }),
     attach: body => locked(async () => {
