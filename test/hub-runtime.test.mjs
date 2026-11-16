@@ -100,6 +100,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.deepEqual((await request('documents')).documents.find(doc => doc.id === 'review').metadata, {});
   const reviewedScope = { reviewedRepository: 'Reviewed repo', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), sourceUrl: 'https://example.com/review' };
   await writeFile(metadata, JSON.stringify(reviewedScope));
+  await run(process.execPath, [cli, 'hub', 'publish', outsideHtml, '--id', 'outside', '--metadata-file', metadata, '--workspace', repo], { env });
   await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env });
   assert.deepEqual((await request('documents')).documents.find(doc => doc.id === 'review').metadata, reviewedScope);
   assert.equal(output, '');
@@ -130,7 +131,12 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal((await secondRequest('status')).result.selected, 'commits');
   assert.equal((await secondRequest('status')).result.available, false);
   assert.equal((await secondRequest('readDocument', { id: 'review' })).result.text, '# Review\n');
-  assert.deepEqual((await secondRequest('documents')).result.documents.find(doc => doc.id === 'review').metadata, reviewedScope);
+  const restartedDocuments = (await secondRequest('documents')).result.documents;
+  assert.deepEqual(restartedDocuments.find(doc => doc.id === 'review').metadata, reviewedScope);
+  const outsideSibling = restartedDocuments.find(doc => doc.id === 'outside').sibling;
+  const siblingHtml = await readFile(path.join(identity.directory, outsideSibling), 'utf8');
+  assert.match(siblingHtml, /aria-label="Reviewed scope"/);
+  for (const value of Object.values(reviewedScope)) assert.ok(siblingHtml.includes(value));
   assert.notEqual((await secondRequest('readDocument', { id: 'inside' })).status, 200);
   await mkdir(repo); execFileSync('jj', ['git', 'init', repo]);
   await writeFile(inside, '<p>replacement</p>');
