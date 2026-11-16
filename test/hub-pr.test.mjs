@@ -21,10 +21,11 @@ test('PR launch saves, pins the head and checkpoints before herdr', async () => 
     await writeFile(path.join(config, 'lavish-kit', 'config.json'), JSON.stringify({ createPr: ['first'] }));
     const docs = await createHubDocuments(state), vcs = createHubJj(repo);
     const initial = await docs.read({ id: 'pr' });
-    let launched;
-    const launch = await createHubPr(state, repo, docs, vcs, { env: { XDG_CONFIG_HOME: config, HC_TERMINAL_ID: 'terminal' }, log: () => {}, run: async (cmd, args) => {
+    let launched; const warnings = [];
+    const launch = await createHubPr(state, repo, docs, vcs, { env: { XDG_CONFIG_HOME: config, HC_TERMINAL_ID: 'terminal' }, log: message => warnings.push(message), run: async (cmd, args) => {
       if (cmd === 'hc') return { stdout: JSON.stringify({ state: 'live', labels: { 'herdr.space': 'space' } }) };
-      assert.equal(JSON.parse(await readFile(path.join(state, 'attempts', 'request.json'), 'utf8')).status, 'interrupted-or-running');
+      const requestId = launched ? 'explicit' : 'request';
+      assert.equal(JSON.parse(await readFile(path.join(state, 'attempts', `${requestId}.json`), 'utf8')).status, 'interrupted-or-running');
       assert.equal(await readFile(initial.source, 'utf8'), '# Title\nBody');
       launched = JSON.parse(args[2]);
       jj(repo, 'describe', '-r', '@-', '-m', 'rewritten');
@@ -34,10 +35,16 @@ test('PR launch saves, pins the head and checkpoints before herdr', async () => 
     const body = { id: 'request', version: initial.version, baseHash: initial.hash, text: '# Title\nBody' };
     const result = await launch(body);
     assert.equal(result.status, 'launched'); assert.match(result.warning, /excluded/);
+    assert.deepEqual(warnings, [result.warning]);
     assert.equal(launched.argv[0], 'second'); assert.equal(launched.argv[2], result.revision);
     assert.notEqual(jj(repo, 'log', '-r', '@-', '--no-graph', '-T', 'commit_id'), result.revision);
     assert.deepEqual(await launch(body), result);
-    const explicit = await vcs.prHead('@'); assert.equal(explicit.revision, jj(repo, 'log', '-r', '@', '--no-graph', '-T', 'commit_id')); assert.match(explicit.warning, /working-copy commit/);
+    await docs.attach({ kind: 'pr', rev: '@' });
+    const current = await docs.read({ id: 'pr' });
+    const expected = jj(repo, 'log', '-r', '@', '--no-graph', '-T', 'commit_id');
+    const explicit = await launch({ id: 'explicit', version: current.version, baseHash: current.hash, text: current.text });
+    assert.equal(explicit.revision, expected); assert.equal(launched.argv[2], expected);
+    assert.match(explicit.warning, /working-copy commit/); assert.equal(warnings.at(-1), explicit.warning);
     await assert.rejects(vcs.prHead('none()'), /exactly one/);
     jj(repo, 'new'); assert.equal((await vcs.prHead()).warning, null);
   } finally { await rm(dir, { recursive: true, force: true }); }

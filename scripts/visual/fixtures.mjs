@@ -13,6 +13,7 @@ const fixtures = path.join(root, 'test/visual/fixtures');
 const deps = createRequire(import.meta.url);
 export const variants = [
   { kind: 'html', name: 'document' }, { kind: 'markdown', name: 'document' },
+  ...['empty', 'stack', 'dirty', 'conflict', 'disconnected', 'changes', 'tasks', 'pr', 'markdown', 'html'].map(name => ({ kind: 'hub', name })),
   { kind: 'diff', name: 'jj' }, { kind: 'diff', name: 'empty' },
   ...['short', 'long', 'empty'].flatMap(name => ['edit', 'rendered'].map(view => ({ kind: 'task', name, view }))),
   { kind: 'task', name: 'changed-on-disk', view: 'edit' },
@@ -40,7 +41,27 @@ export async function scratchDiff(dir) {
 
 export async function makePage(variant, dir, dist, diff, { portable = false } = {}) {
   const file = path.join(dir, 'page', 'index.html'); await mkdir(path.dirname(file), { recursive: true });
-  if (variant.kind === 'html') {
+  if (variant.kind === 'hub') {
+    const [script, style, diffScript, diffStyle, markdown, documentStyle] = await Promise.all([
+      readFile(path.join(root, 'web/hub-app.mjs'), 'utf8'), readFile(path.join(root, 'web/hub.css'), 'utf8'),
+      readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'),
+      readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8'),
+    ]);
+    const name = variant.name;
+    const selected = ['changes', 'tasks', 'pr', 'markdown', 'html'].includes(name) ? name : 'commits';
+    const commits = name === 'empty' ? [] : Array.from({ length: name === 'stack' ? 8 : 1 }, (_, i) => ({ changeId: String(i + 1).repeat(32), commitId: String(i + 1).repeat(40), description: name === 'stack' ? `Long description ${i + 1}\n\n${'A detailed explanation of this change and its consequences. '.repeat(5)}` : 'Improve the workspace review\n\nKeep the description readable.', immutable: false, divergent: false }));
+    const data = { selected, commits, patch: diff.patch, stat: '4 files changed, 28 insertions(+), 7 deletions(-)', documents: [{ id: 'markdown', title: 'Review notes', source: 'review.md', metadata: { reviewedRepository: 'Example repository', headCommit: 'a'.repeat(40) } }, { id: 'html', title: 'Review HTML', source: 'review.html' }] };
+    const bootstrap = `const fixture=${JSON.stringify(data).replaceAll('<', '\\u003c')}; globalThis.hubConfig={url:'',capability:'fixture',resourceKey:'fixture',workspace:'/example/workspace'}; globalThis.fetch=async (_url,options)=>{const {operation,id}=JSON.parse(options.body); const result=operation==='status'?{available:true,selected:fixture.selected}:operation==='documents'?{documents:fixture.documents}:operation==='snapshot'?{base:'a'.repeat(40),head:'b'.repeat(40),stat:fixture.stat,patch:fixture.patch,commits:fixture.commits}:operation==='readDocument'?{text:id==='tasks'?'- [ ] Review the changes\\n- [x] Run the tests\\n':id==='pr'?'# Improve workspace review\\n\\nDescribe the changes and testing.\\n':'# Review notes\\n\\nA published Markdown document.\\n',hash:'fixture',version:'fixture'}:operation==='describe'?{status:'conflict',reason:'changed on disk',current:[{description:'External update'}]}:{}; return {ok:true,json:async()=>({result})};};`;
+    const safe = value => value.replaceAll('</script', '<\\/script');
+    await Promise.all([
+      writeFile(path.join(path.dirname(file), 'hub.css'), `${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }`),
+      writeFile(path.join(path.dirname(file), 'diff.js'), diffScript), writeFile(path.join(path.dirname(file), 'markdown.js'), markdown),
+      writeFile(path.join(path.dirname(file), 'hub.js'), script),
+    ]);
+    const styles = portable ? '<link rel="stylesheet" href="hub.css">' : `<style>${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style>`;
+    const scripts = portable ? '<script src="diff.js"></script><script src="markdown.js"></script><script type="module" src="hub.js"></script>' : `<script>${safe(diffScript)}</script><script>${safe(markdown)}</script><script type="module">${safe(script)}</script>`;
+    await writeFile(file, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub fixture</title>${styles}</head><body><div id="app"></div><script>${safe(bootstrap)}</script>${scripts}</body></html>`);
+  } else if (variant.kind === 'html') {
     if (portable) {
       const html = await readFile(path.join(fixtures, 'clean.html'), 'utf8');
       await writeFile(file, html.replace('</body>', '<style>:root[data-theme="dark"] body { color: #e6edf3; background: #0d1117; color-scheme: dark; }</style><script src="../../assets/preview.js"></script></body>'));

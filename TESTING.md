@@ -88,9 +88,9 @@ lookup, and capability-protected loopback requests. `test/hub-opening.test.mjs`
 checks the opening helpers independently of the standalone relay. The other
 `test/hub-*.test.mjs` suites cover runtime lifecycle, documents and metadata,
 jj snapshots and edits, commands, PR launch, browser UI, refresh, and feedback.
-The existing screenshot matrix below covers standalone pages, not a hub visual
-matrix; inspect a live hub separately when reviewing its appearance. A disposable
-review-prep check should publish a synthetic durable document with metadata to the
+The screenshot matrix below includes simulated hub states; inspect a live hub
+separately when reviewing its behavior. A disposable review-prep check should
+publish a synthetic durable document with metadata to the
 invocation workspace, remove the reviewed checkout, and verify the published
 scope and source remain available. Never use private review material as a fixture.
 
@@ -135,7 +135,7 @@ real Lavish sessions on a private Lavish server (temporary state, config, and
 data directories, its own port, no workers). It replaces the gitignored
 `shots/` directory with:
 
-- eight wide (1440×900), dark viewport PNGs: static HTML, Markdown, populated diff, long task edit, and configured PR rendered; real-Lavish populated diff, changed-on-disk task edit, and configured PR edit,
+- 18 wide (1440×900), dark viewport PNGs: static HTML, Markdown, populated diff, long task edit, and configured PR rendered; real-Lavish populated diff, changed-on-disk task edit, configured PR edit, and ten hub states,
 - full-page and scrolled-pane captures for selected pages that scroll,
 - `preview/`, the generated interactive static artifact used for static checks,
 - `report.json` (schema version 2) with static and integration check records, timings, and cleanup result; unlike version 1, records distinguish their source and diagnostic-only cases need not have a PNG,
@@ -146,7 +146,10 @@ Fixtures cover HTML, Markdown with highlighted code and frontmatter, a jj diff
 short, long, and empty task files in both views, the unsaved-edit/disk-change
 banner, and PR drafts in both views with and without `createPr`. Git diffs use
 the same renderer, so there is no git matrix. Diff and PR metadata use fixed
-values so temporary paths don't change the layout.
+values so temporary paths don't change the layout. The simulated hub fixtures are
+`hub-empty`, `hub-stack`, `hub-dirty`, `hub-conflict`, `hub-disconnected`,
+`hub-changes`, `hub-tasks`, `hub-pr`, `hub-markdown`, and `hub-html`. They use
+the hub UI and deterministic action responses, not a live workspace owner.
 
 Every fixture is checked at both viewport sizes and themes, separately for the
 static artifact and real Lavish. Only selected cases produce primary PNGs.

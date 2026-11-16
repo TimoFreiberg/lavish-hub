@@ -83,6 +83,10 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal((await request('documents')).documents.find(doc => doc.id === 'review').metadata.reviewedRepository, 'Reviewed repo');
   await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--workspace', repo], { env });
   assert.deepEqual((await request('documents')).documents.find(doc => doc.id === 'review').metadata, {});
+  const reviewedScope = { reviewedRepository: 'Reviewed repo', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), sourceUrl: 'https://example.com/review' };
+  await writeFile(metadata, JSON.stringify(reviewedScope));
+  await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env });
+  assert.deepEqual((await request('documents')).documents.find(doc => doc.id === 'review').metadata, reviewedScope);
   assert.equal(output, '');
   pollMode = 'feedback';
   for (let i = 0; i < 100 && !output.includes('\n'); i++) await delay(30);
@@ -111,6 +115,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal((await secondRequest('status')).result.selected, 'commits');
   assert.equal((await secondRequest('status')).result.available, false);
   assert.equal((await secondRequest('readDocument', { id: 'review' })).result.text, '# Review\n');
+  assert.deepEqual((await secondRequest('documents')).result.documents.find(doc => doc.id === 'review').metadata, reviewedScope);
   assert.notEqual((await secondRequest('readDocument', { id: 'inside' })).status, 200);
   await mkdir(repo); execFileSync('jj', ['git', 'init', repo]);
   await writeFile(inside, '<p>replacement</p>');

@@ -35,6 +35,25 @@ async function ready(page, variant, artifact, source) {
       }
       await frame.getByRole('button', { name: 'Keep mine', exact: true }).waitFor();
     }
+  } else if (variant.kind === 'hub') {
+    await frame.getByText('Connected', { exact: true }).waitFor();
+    if (['dirty', 'conflict', 'disconnected'].includes(variant.name)) {
+      await frame.getByRole('textbox', { name: /Description/ }).fill('An unsaved description draft');
+      if (variant.name === 'conflict') {
+        await frame.getByRole('button', { name: 'Save description' }).click();
+        await frame.getByText(/Conflict: changed on disk/).waitFor();
+      }
+      if (variant.name === 'disconnected') {
+        await frame.evaluate(() => { globalThis.fetch = async () => { throw new Error('offline'); }; });
+        await frame.getByRole('button', { name: 'Refresh', exact: true }).click();
+        await frame.getByText(/Hub actions are unreachable/).waitFor();
+      }
+    }
+    if (variant.name === 'tasks') await frame.getByRole('textbox', { name: 'Tasks Markdown' }).waitFor();
+    if (variant.name === 'pr') await frame.getByRole('textbox', { name: 'PR Markdown' }).waitFor();
+    if (variant.name === 'markdown') await frame.getByRole('textbox', { name: 'Document Markdown' }).waitFor();
+    if (variant.name === 'html') await frame.locator('iframe[title="Review HTML"]').waitFor();
+    if (variant.name === 'changes') await frame.locator('.hub-diff .sidebar').waitFor();
   } else await frame.waitForSelector('h1');
   await frame.evaluate(async () => { await document.fonts.ready; await Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))); });
   return frame;
@@ -132,6 +151,7 @@ try {
     try {
       if (source === 'integration') await offlineRoutes(page);
       else await page.route('**/*', route => route.request().url().startsWith(base) && route.request().method() === 'GET' ? route.continue() : route.abort());
+      if (variant.kind === 'hub' && variant.name === 'html') await page.route('**/resources/fixture/html/review.html', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="en"><head><title>Review</title></head><body><h1>Published review</h1><p>Review findings and context.</p></body></html>' }));
       await page.goto(source === 'static' ? `${base}${url}?theme=${colorScheme}` : lavish.open(artifact.file));
       const frame = await ready(page, variant, artifact, source);
       if (source === 'integration') shot.checks.lavishLayout = await readLayoutIssues(page);
