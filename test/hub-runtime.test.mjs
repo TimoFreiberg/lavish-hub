@@ -38,6 +38,11 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(opener, `#!/bin/sh\nprintf '%s\\n' "$1" >> "${dir}/opened"\n`); await chmod(opener, 0o700);
   const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(server.address().port), XDG_DATA_HOME: data, XDG_STATE_HOME: path.join(dir, 'xdg-state') };
   delete env.HC_TERMINAL_ID;
+  const npm = path.join(dir, 'npm');
+  await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
+  const execute = promisify(execFile);
+  const depsModule = new URL('../src/deps.mjs', import.meta.url).href;
+  await execute(process.execPath, ['--input-type=module', '-e', `import { ensureDeps } from ${JSON.stringify(depsModule)}; await ensureDeps();`], { env: { ...env, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const ownerScript = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; process.exitCode = await runHubOwner({ workspace: process.argv[1] }, { prepare: async (_page, options) => { if (!options.vendored) throw Error('expected vendored'); return { url: 'http://localhost:123/review' }; } });`;
   const ownerArgs = ['--input-type=module', '-e', ownerScript, repo];
@@ -46,7 +51,6 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   t.after(() => { if (owner.exitCode === null) owner.kill('SIGKILL'); });
   for (let i = 0; i < 400; i++) { try { await stat(runtime); break; } catch { if (owner.exitCode !== null) throw new Error(stderr); await delay(30); } }
   assert.equal((await stat(runtime)).mode & 0o777, 0o600);
-  const execute = promisify(execFile);
   const run = (file, args, options) => execute(file, args, { ...options, timeout: 5000 });
   await assert.rejects(run(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env }), /hub owner is already running/i);
   const { stdout } = await run(process.execPath, [cli, 'hub', '--workspace', repo], { env });
@@ -87,8 +91,11 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await browserPage.getByRole('button', { name: 'inside.html', exact: true }).click();
   await browserPage.getByRole('button', { name: 'Keep editing' }).click();
   assert.equal(await taskDraft.inputValue(), 'Unsaved task');
-  browserPage.once('dialog', dialog => { assert.equal(dialog.type(), 'beforeunload'); return dialog.dismiss(); });
-  await browserPage.reload().catch(() => {});
+  const taskDialog = browserPage.waitForEvent('dialog');
+  void browserPage.reload().catch(() => {});
+  const taskBeforeUnload = await taskDialog;
+  assert.equal(taskBeforeUnload.type(), 'beforeunload');
+  await taskBeforeUnload.dismiss();
   assert.equal(await taskDraft.inputValue(), 'Unsaved task');
   await writeFile(path.join(repo, 'change.txt'), 'A changed line\n');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'changes'], { env });
@@ -102,8 +109,11 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await diffPage.getByRole('button', { name: 'inside.html', exact: true }).click();
   await diffPage.getByRole('button', { name: 'Keep editing' }).click();
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
-  diffPage.once('dialog', dialog => { assert.equal(dialog.type(), 'beforeunload'); return dialog.dismiss(); });
-  await diffPage.reload().catch(() => {});
+  const diffDialog = diffPage.waitForEvent('dialog');
+  void diffPage.reload().catch(() => {});
+  const diffBeforeUnload = await diffDialog;
+  assert.equal(diffBeforeUnload.type(), 'beforeunload');
+  await diffBeforeUnload.dismiss();
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
   await diffPage.getByText('Navigation paused: unsaved drafts remain on this page.').waitFor();
