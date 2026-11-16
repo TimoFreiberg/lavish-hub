@@ -8,6 +8,8 @@ leave the session blocked. Never assume a goal exists. Read the assignment with
 `node scripts/maintenance.mjs job ID`. Before working or resuming, run
 `node scripts/maintenance.mjs claim ID` and retain the returned TOKEN. If claiming
 fails, stop; do not report an outcome without a claim. Review dependencies before cleanup.
+For every assignment, perform the vendored Lavish review in `docs/maintenance.md`,
+including upstream release and security checks; record incomplete checks as such.
 Research release provenance, advisories, supply-chain evidence and install scripts
 before installing any candidate. No research can guarantee safety; never install a
 suspicious release. All version upgrades, including pinned versions, are eligible
