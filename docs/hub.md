@@ -56,9 +56,9 @@ Unknown fields are rejected. Each publication replaces all previous metadata;
 omitting it clears the old scope. If generating the published HTML pages fails,
 publication retains the previous registration, metadata, selection, and generated
 pages when rollback succeeds. A process interruption or filesystem error during
-rollback can leave generated pages out of sync. Scope is recorded as supplied, not updated if
-commits are rewritten. The displayed scope therefore describes the review at
-publication time, not necessarily the current checkout.
+rollback can leave generated pages out of sync. Scope is recorded as supplied and
+is not updated if commits are rewritten. The displayed scope describes the review
+at publication time, not necessarily the current checkout.
 
 Each view has a feedback field. Queue feedback to include the view, the full
 revision range at the time you started writing, and any published review scope;
@@ -76,9 +76,10 @@ the source directory as described below. Use the page's hub navigation to open
 built-in views or published documents.
 Explicit view and publish commands also switch an open published HTML page to the
 selected view, unless unsaved edits pause the switch. The hub asks before leaving
-for a published HTML page when a hub draft or an unqueued diff comment is unsaved. Published pages similarly
-ask after user input or changes outside the navigation, and pause automatic
-switches. In the in-page confirmation, choose Keep editing or press Escape to
+for a published HTML page when a hub draft or an unqueued diff comment is
+unsaved. Published pages similarly ask after user input or changes outside the
+navigation, and pause automatic switches. In the in-page confirmation, choose
+Keep editing or press Escape to
 keep the current page and its edits; choose Leave page to discard them.
 These guards do not persist drafts: accepting a prompt, a browser crash, or forced
 closure can discard them. Published pages with custom editors that do not emit
