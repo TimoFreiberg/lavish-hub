@@ -37,6 +37,19 @@ test('running commands can be cancelled', async () => {
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('commands time out and retain the result', { timeout: 40000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-command-'));
+  try {
+    const commands = await createHubCommands(dir, dir);
+    const body = { id: 'timeout', argv: [process.execPath, '-e', 'setInterval(() => {}, 1000)'] };
+    const result = await commands.execute(body);
+    assert.equal(result.timedOut, true);
+    assert.equal(result.signal, 'SIGKILL');
+    assert.deepEqual(await commands.status(body), result);
+    assert.deepEqual(await commands.execute(body), result);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('metadata input is bounded at 16 KiB', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-metadata-'));
   try {

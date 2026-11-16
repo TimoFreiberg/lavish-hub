@@ -178,6 +178,32 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await run(process.execPath, [cli, 'hub', 'publish', outsideHtml, '--id', 'outside', '--metadata-file', metadata, '--workspace', repo], { env });
   await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env });
   assert.deepEqual((await request('documents')).documents.find(doc => doc.id === 'review').metadata, reviewedScope);
+  const original = await request('readDocument', { id: 'review' });
+  assert.equal((await request('saveDocument', { id: 'review', version: original.version, baseHash: original.hash, text: '# Saved directly\n' })).reply, 'Saved');
+  assert.equal(await readFile(document, 'utf8'), '# Saved directly\n');
+  const saved = await request('readDocument', { id: 'review' });
+  assert.equal((await request('saveDocument', { id: 'review', version: saved.version, baseHash: saved.hash, text: '# Review\n' })).reply, 'Saved');
+
+  const marker = path.join(dir, 'command-marker');
+  const command = { id: 'lost-response', argv: [process.execPath, '-e', "require('fs').appendFileSync(process.argv[1], 'x'); setTimeout(() => process.stdout.write('done'), 500)", marker] };
+  const controller = new AbortController();
+  const lost = fetch(`${connection.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': connection.capability }, body: JSON.stringify({ operation: 'executeCommand', ...command }), signal: controller.signal });
+  for (let i = 0; i < 100; i++) { try { await stat(marker); break; } catch { await delay(20); } }
+  assert.equal((await request('executeCommand', command)).status, 'interrupted-or-running');
+  controller.abort();
+  await assert.rejects(lost, { name: 'AbortError' });
+  let recovered;
+  for (let i = 0; i < 100; i++) { recovered = await request('commandStatus', { id: command.id }); if (recovered.status === 'finished') break; await delay(20); }
+  assert.equal(recovered.stdout, 'done');
+  assert.deepEqual(await request('executeCommand', command), recovered);
+  assert.equal(await readFile(marker, 'utf8'), 'x');
+
+  const cancellation = { id: 'cancel-owner-command', argv: [process.execPath, '-e', 'setInterval(() => {}, 1000)'] };
+  const pending = request('executeCommand', cancellation);
+  let cancelled;
+  for (let i = 0; i < 100; i++) { cancelled = await request('cancelCommand', { id: cancellation.id }); if (cancelled.cancelled) break; await delay(20); }
+  assert.equal(cancelled.cancelled, true);
+  assert.equal((await pending).cancelled, true);
   assert.equal(output, '');
   pollMode = 'feedback';
   for (let i = 0; i < 100 && !output.includes('\n'); i++) await delay(30);
@@ -186,8 +212,16 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.deepEqual(notification.prompts, ['Review this']);
   assert.equal(notification.context, 'quoted context');
   assert.match(notification.reply, /lavish-axi reply/);
+  const shutdownMarker = path.join(dir, 'shutdown-marker');
+  const shutdownCommand = { id: 'owner-shutdown', argv: [process.execPath, '-e', "require('fs').writeFileSync(process.argv[1], 'started'); setTimeout(() => require('fs').writeFileSync(process.argv[1], 'escaped'), 1500)", shutdownMarker] };
+  const shutdownRequest = request('executeCommand', shutdownCommand).catch(() => null);
+  for (let i = 0; i < 100; i++) { try { await stat(shutdownMarker); break; } catch { await delay(20); } }
+  assert.equal(await readFile(shutdownMarker, 'utf8'), 'started');
   const ownerExit = new Promise(resolve => owner.once('exit', resolve));
   await run(process.execPath, [cli, 'hub', 'stop', '--workspace', repo], { env });
+  await shutdownRequest;
+  await delay(1600);
+  assert.equal(await readFile(shutdownMarker, 'utf8'), 'started');
   const exit = await ownerExit;
   assert.equal(exit, 0, stderr);
   await assert.rejects(readFile(runtime), { code: 'ENOENT' });
