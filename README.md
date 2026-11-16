@@ -37,6 +37,15 @@ its last open page stops.
 
 ## Features
 
+### Workspace hub
+
+Run `lavish-kit hub listen --open` in a long-running terminal or agent job for
+one jj workspace. The hub combines commits, changes, tasks, a PR draft, and
+published Markdown or HTML in one review. Short `lavish-kit hub` commands connect
+to that owner; they do not start a daemon. The owner prints feedback for the
+agent and stops when its command exits. See [the hub guide](docs/hub.md) for
+publication, action connectivity, and lifecycle details.
+
 ### HTML pages
 
 `lavish-kit page.html` opens an HTML file in Lavish where it is, with Lavish's

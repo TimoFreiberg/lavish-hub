@@ -1,7 +1,9 @@
 # PR drafts
 
 This covers `lavish-kit pr FILE`, which edits a PR title and body kept in a
-file, and the Create PR button with its `createPr` config.
+file, and the Create PR button with its `createPr` config. For the hub's direct
+save and launch flow, including its fixed submitted revision and launch uncertainty,
+see [hub.md](hub.md). Both use the same draft format and `createPr` config.
 
 ```sh
 lavish-kit pr "$HOME/tasks/example-pr.md" -r @-

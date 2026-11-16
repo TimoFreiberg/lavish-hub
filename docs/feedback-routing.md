@@ -1,7 +1,10 @@
 # Feedback routing
 
-This explains how a page's background worker gets Lavish feedback to the agent
+This explains how a standalone page's background worker gets Lavish feedback to the agent
 inside herdr, what happens outside herdr, and what to do when delivery fails.
+The [workspace hub](hub.md) intentionally does not use this relay: its foreground
+`hub listen` owner is the exclusive Lavish listener and emits JSON feedback on
+stdout, without `hc send`. Direct hub saves do not send agent feedback.
 
 Every opening command registers its page with a shared background process for
 the current user and Lavish state directory. Each page has its own worker in

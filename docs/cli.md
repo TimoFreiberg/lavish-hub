@@ -11,6 +11,12 @@ lavish-kit diff [-r REV | --from A --to B] [--git] [--title T] [--out FILE] [--o
 lavish-kit diff - [--repo-root DIR] [--title T] [--out FILE] [--open] [--reopen]
 lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
 lavish-kit retarget <page.html> [--terminal T]
+lavish-kit hub listen [--workspace DIR] [--open] [--reopen]
+lavish-kit hub [--workspace DIR] [--view VIEW] [--open]
+lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
+lavish-kit hub tasks --file FILE [--workspace DIR]
+lavish-kit hub pr [--file FILE] [--rev REV] [--workspace DIR]
+lavish-kit hub stop [--workspace DIR]
 lavish-kit --help
 ```
 
@@ -25,7 +31,18 @@ lavish-kit --help
 
 File extensions are matched case-insensitively. The source file must exist.
 
+The [hub guide](hub.md) describes the hub commands and their options. `listen`
+owns the foreground runtime and its exclusive feedback poll; the remaining hub
+commands require that live owner. `--workspace DIR` chooses a jj workspace,
+`--view` selects a built-in view or published ID, and `publish` registers a
+source and optional reviewed-scope metadata. `tasks` attaches a Markdown file;
+`pr` attaches a draft and/or changes the head expression; `stop` shuts down the
+owner. Hub output and lifetime differ from the standalone commands below.
+
 ## Options
+
+The following table describes standalone commands; hub options are listed above
+and in [hub.md](hub.md).
 
 | Option | Commands | Meaning |
 | --- | --- | --- |

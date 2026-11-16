@@ -3,6 +3,14 @@
 This lists every file lavish-kit writes, where its logs are, and the formats of
 the messages it sends and receives. Use it when debugging a page or a worker.
 
+The [workspace hub](hub.md) instead keeps private state under
+`${XDG_DATA_HOME:-$HOME/.local/share}/lavish-kit/hubs/`, keyed by canonical
+workspace and Lavish state directory. It stores registrations, managed documents,
+the generated hub page, and owner/launch state there. These files may contain
+local paths and runtime capability material; do not share them. The owner removes
+its runtime ownership on exit, but durable registrations and managed files remain.
+Stop the owner before manually removing its hub directory.
+
 ## Data root
 
 `${XDG_DATA_HOME:-$HOME/.local/share}/lavish-kit/`

@@ -1,4 +1,4 @@
-# Experimental hub owner
+# Workspace hub
 
 `lavish-kit hub listen [--workspace DIR] [--open] [--reopen]` runs a foreground
 owner for one jj workspace. It opens a stable Lavish page without starting the
@@ -9,12 +9,34 @@ keep the draft on the page. Actions require the local owner; if it is unreachabl
 the page reports the error without discarding edits. Drafts are not persisted across
 page reloads.
 
+Start the owner in a terminal or a long-running harness job, not inline in a
+script that must continue. Wait for its running message before using short
+commands; they never start an owner themselves. For example:
+
+```sh
+lavish-kit hub listen --workspace "$PWD" --open
+# In another terminal, after the owner is ready:
+lavish-kit hub publish "$HOME/reviews/review.html" --id review --title "Review" --metadata-file "$HOME/reviews/scope.json" --open
+lavish-kit hub --view review
+lavish-kit hub stop
+```
+
+The source must already exist and end in `.html`, `.md`, or `.markdown`. IDs
+are 1–64 ASCII letters, digits, underscores or hyphens, starting with a letter
+or digit; built-in view IDs are reserved. Publishing an existing ID replaces its
+registration and selects it. `--metadata-file` accepts a JSON object of at most
+16 KiB with optional `reviewedRepository` (nonempty display name), `baseCommit`
+and `headCommit` (full 40- or 64-digit hex IDs), and `sourceUrl` (HTTP(S) URL).
+Unknown fields are rejected. Each publication replaces all previous metadata;
+omitting it clears the old scope. Scope is recorded as supplied, not updated if
+commits are rewritten. The displayed scope therefore describes the review at
+publication time, not necessarily the current checkout.
+
 Each view has a feedback field. Queue feedback to include the view, the full
 revision range at the time you started writing, and any published review scope;
 then use Send feedback to deliver queued prompts through the hub's Lavish session.
 Draft feedback survives navigation and refresh within the page, but not a reload.
 
-This is not the complete hub: HTML action integration is not yet available.
 Tasks have a checklist and a Markdown source editor; changes are written only when
 saved. Published Markdown has Edit and Preview controls; the preview includes
 unsaved edits and resolves relative links and images from the source directory.
@@ -61,8 +83,9 @@ surviving registered documents. Saves and repository actions remain disabled, in
 a different checkout later appears at that path; the hub does not retarget it.
 Sources and HTML resources inside the unavailable workspace cannot be read, even
 if replacement files appear there; surviving sources outside it remain readable.
-This experimental owner is
-not yet the full hub described in the project plan.
+Registrations, metadata, and managed task and PR files persist across owner restarts;
+source files are not copied. Keep published sources outside disposable checkouts if
+they must remain available. Remove unwanted hub data only after stopping its owner.
 
 The authenticated action endpoint supports `snapshot` and `describe` for the
 workspace views. A snapshot pins its commit metadata, endpoints, patch,
