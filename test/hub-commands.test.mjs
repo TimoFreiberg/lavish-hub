@@ -22,6 +22,20 @@ test('command attempts are checkpointed, bounded and not replayed', async () => 
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('missing executable produces a durable receipt without stopping the owner', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-command-'));
+  try {
+    const commands = await createHubCommands(dir, dir);
+    const body = { id: 'missing', argv: [path.join(dir, 'does-not-exist')] };
+    const result = await commands.execute(body);
+    assert.equal(result.status, 'finished');
+    assert.match(result.error, /ENOENT/);
+    assert.deepEqual(await commands.status(body), result);
+    assert.deepEqual(await commands.execute(body), result);
+    assert.equal((await commands.execute({ id: 'after', argv: [process.execPath, '-e', ''] })).code, 0);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('running commands can be cancelled', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-command-'));
   try {

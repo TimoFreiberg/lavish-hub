@@ -20,7 +20,7 @@ export async function createHubCommands(directory, cwd, validate = async () => t
     try { return JSON.parse(await readFile(fileFor(id), 'utf8')); }
     catch (error) { if (error instanceof SyntaxError) return { id, status: 'interrupted-or-running' }; throw error; }
   };
-  const kill = child => { try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } };
+  const kill = child => { if (!Number.isSafeInteger(child.pid) || child.pid < 1) return; try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } };
   return {
     async execute(body) {
       const file = fileFor(body.id);
