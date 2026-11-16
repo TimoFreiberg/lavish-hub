@@ -15,5 +15,10 @@ test('preview capture selection has exactly the requested wide dark cases', () =
     'static:diff-jj:1440x900:dark', 'static:task-long-edit:1440x900:dark',
     'static:pr-configured-rendered:1440x900:dark', 'integration:diff-jj:1440x900:dark',
     'integration:task-changed-on-disk-edit:1440x900:dark', 'integration:pr-configured-edit:1440x900:dark',
+    'integration:hub-empty:1440x900:dark', 'integration:hub-stack:1440x900:dark',
+    'integration:hub-dirty:1440x900:dark', 'integration:hub-conflict:1440x900:dark',
+    'integration:hub-disconnected:1440x900:dark', 'integration:hub-changes:1440x900:dark',
+    'integration:hub-tasks:1440x900:dark', 'integration:hub-pr:1440x900:dark',
+    'integration:hub-markdown:1440x900:dark', 'integration:hub-html:1440x900:dark',
   ].sort());
 });

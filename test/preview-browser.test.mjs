@@ -55,7 +55,7 @@ test('preview simulates saves and conflicts without external requests', async ()
       assert.equal(await link.count(), 1, entry.id);
       await link.click();
       assert.equal(new URL(page.url()).pathname, new URL(entry.url, base).pathname, entry.id);
-      await page.getByRole('complementary', { name: 'Preview controls' }).waitFor();
+      await page.getByRole('complementary', { name: 'Preview controls' }).waitFor().catch(error => { throw new Error(`Preview controls missing for ${entry.id}`, { cause: error }); });
       assert.equal(await page.evaluate(() => !!window.lavishPreview && window.lavish === window.lavishPreview), true, `${entry.id} uses the preview adapter`);
       if (entry.kind === 'diff') {
         await page.locator('.sidebar').waitFor();
