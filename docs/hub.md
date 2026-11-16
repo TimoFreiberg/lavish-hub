@@ -14,13 +14,14 @@ revision range at the time you started writing, and any published review scope;
 then use Send feedback to deliver queued prompts through the hub's Lavish session.
 Draft feedback survives navigation and refresh within the page, but not a reload.
 
-This is not the complete hub: the diff is not the standalone annotated diff,
-rendered Markdown documents and HTML action integration are not yet available.
+This is not the complete hub: HTML action integration is not yet available.
 Tasks have a checklist and a Markdown source editor; changes are written only when
-saved. Published HTML is displayed in a nested sandbox and can load scripts,
-styles, and images relative to its source file.
+saved. Published Markdown has Edit and Preview controls; the preview includes
+unsaved edits and resolves relative links and images from the source directory.
+Published HTML is displayed in a nested sandbox and can load scripts, styles,
+and images relative to its source file.
 
-The owner serves files under the published HTML file's directory, including its
+The owner serves files under the published document's directory, including its
 subdirectories, but rejects traversal and symlinks outside that directory. Like
 Lavish's asset serving, this makes other files in that directory readable to a
 reader who has the resource URL: publish from a directory that contains no

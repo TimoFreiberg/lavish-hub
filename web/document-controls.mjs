@@ -7,9 +7,10 @@ import { parse, stringify } from 'yaml';
 import { createDocumentEditor } from './document-editor.mjs';
 import { accessibleCodeBlocks } from '../src/markdown-accessibility.mjs';
 
+let highlighting;
 export const byId = id => document.getElementById(id);
 export const status = text => { byId('status').textContent = text; };
-export function markdownRenderer(body, preview, { hideFrontMatter = false } = {}) {
+export function markdownRenderer(body, preview, { hideFrontMatter = false, afterRender = () => {}, onError = error => status(`Syntax highlighting unavailable: ${error.message}`) } = {}) {
   const md = new MarkdownIt({ html: true, linkify: true });
   let metadata = '';
   md.use(taskLists, { label: true }).use(anchor, { permalink: anchor.permalink.linkInsideHeader({ symbol: '#' }) });
@@ -25,8 +26,9 @@ export function markdownRenderer(body, preview, { hideFrontMatter = false } = {}
       } else if (data !== null && data !== undefined) metadata = `<pre>${md.utils.escapeHtml(raw)}</pre>`;
     } catch { metadata = `<pre>${md.utils.escapeHtml(raw)}</pre>`; }
   });
-  const render = () => { metadata = ''; const html = md.render(body.value); preview.innerHTML = metadata + html; };
-  shiki({ themes: { light: 'github-light', dark: 'github-dark' }, fallbackLanguage: 'text' }).then(plugin => { md.use(plugin).use(accessibleCodeBlocks); render(); }).catch(error => status(`Syntax highlighting unavailable: ${error.message}`));
+  const render = () => { metadata = ''; const html = md.render(body.value); preview.innerHTML = metadata + html; afterRender(preview); };
+  highlighting ||= shiki({ themes: { light: 'github-light', dark: 'github-dark' }, fallbackLanguage: 'text' });
+  highlighting.then(plugin => { md.use(plugin).use(accessibleCodeBlocks); render(); }).catch(onError);
   return render;
 }
 export function documentEditor(options) {

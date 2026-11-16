@@ -43,5 +43,10 @@ await esbuild.build({
   outfile: path.join(out, 'pr-app.js'), bundle: true, format: 'iife',
   platform: 'browser', nodePaths: [path.join(deps, 'node_modules')], plugins: [languageCatalog], logLevel: 'silent',
 });
+await esbuild.build({
+  entryPoints: [path.join(root, 'web/hub-markdown.mjs')],
+  outfile: path.join(out, 'hub-markdown.js'), bundle: true, format: 'iife',
+  platform: 'browser', nodePaths: [path.join(deps, 'node_modules')], plugins: [languageCatalog], logLevel: 'silent',
+});
 await copyFile(path.join(root, 'web/document.css'), path.join(out, 'document.css'));
 await esbuild.build({ entryPoints: [path.join(root, 'web/preview.mjs')], outfile: path.join(out, 'preview.js'), bundle: true, format: 'iife', platform: 'browser', logLevel: 'silent' });

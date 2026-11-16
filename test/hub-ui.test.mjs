@@ -1,10 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
 import { chromium } from 'playwright-core';
 import { createHubTransport } from '../src/hub-transport.mjs';
 import { ensureDeps } from '../src/deps.mjs';
 import path from 'node:path';
+
+test('published Markdown previews relative assets and retains conflicting edits', { timeout: 120000 }, async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-markdown-'));
+  const source = path.join(dir, 'review.md');
+  await writeFile(source, '# Review\n\n![diagram](image.svg)\n');
+  await writeFile(path.join(dir, 'image.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="10"/>');
+  const doc = { id: 'review', title: 'Review', source };
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'review' }), documents: () => ({ documents: [doc] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    readDocument: async () => ({ text: await readFile(source, 'utf8'), hash: 'hash', version: 'version' }),
+    saveDocument: () => ({ reply: 'Conflict: source changed' }),
+  }, { resource: id => id === 'review' ? source : undefined });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); await rm(dir, { recursive: true, force: true }); });
+  const { dist } = await ensureDeps();
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const markdown = await readFile(path.join(dist, 'hub-markdown.js'), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, resourceKey: transport.resourceKey, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  const area = page.getByRole('textbox', { name: 'Document Markdown' });
+  await area.waitFor();
+  await page.getByRole('button', { name: 'Preview', exact: true }).click();
+  await page.getByRole('heading', { name: 'Review', level: 1 }).last().waitFor();
+  await page.locator('.hub-markdown img').evaluate(image => image.decode());
+  assert.equal(await page.locator('.hub-markdown img').evaluate(image => image.naturalWidth), 12);
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await area.fill('# Draft\n');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByText('Conflict: source changed').waitFor();
+  assert.equal(await area.inputValue(), '# Draft\n');
+  await page.getByRole('button', { name: 'Preview', exact: true }).click();
+  await page.getByRole('heading', { name: 'Draft' }).waitFor();
+});
 
 test('hub keeps description drafts across navigation and stale saves', { timeout: 30000 }, async t => {
   const commit = { changeId: 'a'.repeat(32), commitId: 'b'.repeat(40), description: 'Original\n', immutable: false, divergent: false };

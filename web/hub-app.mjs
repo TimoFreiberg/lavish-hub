@@ -169,7 +169,24 @@ async function renderView() {
     } catch (error) { state.message = error.message; }
     state.saving = false; save.disabled = false; info.textContent = state.message;
   });
-  view.append(area, save);
+  if (doc) {
+    const preview = el('div', null, { class: 'hub-markdown', 'aria-label': 'Rendered Markdown' });
+    const base = `${config.url}/resources/${config.resourceKey}/${encodeURIComponent(id)}/${encodeURIComponent(doc.source.split('/').pop())}`;
+    const render = globalThis.hubMarkdownRenderer(area, preview, {
+      hideFrontMatter: true,
+      afterRender: root => {
+        for (const node of root.querySelectorAll('[src], [href]')) for (const attr of ['src', 'href']) {
+          const value = node.getAttribute(attr);
+          if (value && !value.startsWith('#') && !value.startsWith('/') && !/^[a-z][a-z\d+.-]*:/i.test(value)) node.setAttribute(attr, new URL(value, base).href);
+        }
+      },
+      onError: error => { info.textContent = `Syntax highlighting unavailable: ${error.message}`; },
+    });
+    const edit = button('Edit', () => { state.preview = false; toggle(); });
+    const rendered = button('Preview', () => { state.preview = true; toggle(); });
+    const toggle = () => { area.hidden = !!state.preview; preview.hidden = !state.preview; edit.setAttribute('aria-pressed', String(!state.preview)); rendered.setAttribute('aria-pressed', String(!!state.preview)); if (state.preview) render(); };
+    view.append(edit, rendered, area, preview, save); toggle();
+  } else view.append(area, save);
   if (id === 'pr') {
     const launch = button('Launch PR command', async () => {
       const submitted = state.text; state.saving = true; launch.disabled = true; save.disabled = true; info.textContent = 'Saving and preparing launch…';
