@@ -26,7 +26,8 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   delete env.HC_TERMINAL_ID;
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const child = spawn(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk; });
+  let stderr = '', stdout = ''; child.stderr.on('data', chunk => { stderr += chunk; });
+  child.stdout.on('data', chunk => { stdout += chunk; });
   t.after(async () => {
     if (child.exitCode === null) { child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); }
     try { await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) }); } catch {}
@@ -53,9 +54,44 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await page.goto(url);
   const authored = page.frameLocator('#artifact').locator('#authored');
   await authored.waitFor({ timeout: 20000 });
+  const showAnyway = page.getByRole('button', { name: 'Show anyway' });
+  if (await showAnyway.isVisible()) await showAnyway.click();
   assert.equal(await authored.getAttribute('data-ran'), 'yes');
   assert.equal(await authored.evaluate(node => getComputedStyle(node).color), 'rgb(1, 2, 3)');
   assert.match(page.frames().find(frame => frame.url().includes('document-'))?.url() || '', /document-.*\.html/);
+  if (await page.locator('#annotation').getAttribute('aria-pressed') !== 'true') await page.locator('#annotation').click();
+  const box = await authored.evaluate(node => {
+    const range = document.createRange(); range.selectNodeContents(node);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+  const frameBox = await page.locator('#artifact').boundingBox();
+  assert.ok(frameBox);
+  box.x += frameBox.x; box.y += frameBox.y;
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 20 });
+  await page.mouse.up();
+  const card = page.frameLocator('#artifact').locator('.lavish-annotation-card');
+  await card.locator('textarea').fill('Please revise this heading');
+  await card.getByRole('button', { name: 'Queue' }).click();
+  const replacement = path.join(dir, 'replacement.html');
+  await writeFile(replacement, '<!doctype html><title>Replacement</title><p>Replacement document</p>');
+  await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', replacement, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
+  await page.getByRole('button', { name: 'Send to Agent', exact: true }).click();
+  for (let i = 0; i < 200 && !stdout.includes('\n'); i++) await delay(50);
+  assert.ok(stdout.includes('\n'), `No notification: ${stderr}`);
+  const notification = JSON.parse(stdout.trim());
+  assert.equal(notification.type, 'agent-notification');
+  assert.equal(notification.page, record.page);
+  assert.equal(notification.prompts.length, 1);
+  assert.equal(notification.prompts[0].prompt, 'Please revise this heading');
+  assert.equal(notification.prompts[0].text, 'Published review');
+  assert.equal(notification.prompts[0].target.type, 'text-range');
+  assert.equal(notification.prompts[0].document, await realpath(source));
+  assert.equal(notification.snapshotDocument, await realpath(source));
+  assert.equal(notification.snapshotPage, notification.prompts[0].page);
+  assert.match(notification.context, /Published review/);
   await page.frameLocator('#artifact').getByRole('link', { name: 'Workspace hub' }).click();
   await page.frameLocator('#artifact').getByRole('heading', { name: 'Commits', exact: true }).waitFor();
   await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'stop', '--workspace', repo], { env });

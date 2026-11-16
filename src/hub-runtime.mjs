@@ -94,7 +94,8 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     commands = await createHubCommands(identity.directory, identity.root, () => workspaceMatches(identity));
     const launchPr = await createHubPr(identity.directory, identity.root, documents, jj);
     let reviewUrl;
-    const siblingName = id => `document-${createHash('sha256').update(id).digest('hex')}.html`;
+    const siblingSources = new Map();
+    const siblingName = doc => `document-${createHash('sha256').update(JSON.stringify([doc.id, doc.source])).digest('hex')}.html`;
     const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
     async function writeSiblings() {
       const docs = documents.list().documents;
@@ -104,7 +105,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         try { await guardSource(doc.source); authored = await readFile(doc.source, 'utf8'); }
         catch { authored = '<!doctype html><html><head><title>Document unavailable</title></head><body><p>Document source is unavailable.</p></body></html>'; }
         const base = `${transport.url}/resources/${transport.resourceKey}/${encodeURIComponent(doc.id)}/${encodeURIComponent(path.basename(doc.source))}`;
-        const nav = `<nav aria-label="Hub navigation" data-lavish-action style="position:relative;z-index:2147483647;padding:8px;background:#171923;color:white;font:14px system-ui;display:flex;gap:12px;flex-wrap:wrap"><a style="color:white" href="hub.html">Workspace hub</a>${htmlDocs.map(item => `<a style="color:white" href="${siblingName(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}>${escapeHtml(item.title)}</a>`).join('')}</nav>`;
+        const nav = `<nav aria-label="Hub navigation" data-lavish-action style="position:relative;z-index:2147483647;padding:8px;background:#171923;color:white;font:14px system-ui;display:flex;gap:12px;flex-wrap:wrap"><a style="color:white" href="hub.html">Workspace hub</a>${htmlDocs.map(item => `<a style="color:white" href="${siblingName(item)}"${item.id === doc.id ? ' aria-current="page"' : ''}>${escapeHtml(item.title)}</a>`).join('')}</nav>`;
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope" data-lavish-action style="padding:8px;background:#171923;color:white;font:14px system-ui;overflow-wrap:anywhere">${scope}</aside>` : '';
         const baseTag = `<base href="${escapeHtml(base)}">`;
@@ -112,7 +113,9 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         const navigation = `${nav}${reviewedScope}<script>{const c=${navConfig};for(const a of document.querySelectorAll('nav[aria-label="Hub navigation"] a')){a.href=new URL(a.getAttribute('href'),location.href).href;if(a.textContent==='Workspace hub')a.addEventListener('click',async e=>{e.preventDefault();try{await fetch(c.url+'/action',{method:'POST',headers:{'content-type':'application/json','x-lavish-capability':c.capability},body:JSON.stringify({operation:'navigate',id:'commits'})})}finally{location.href=a.href}})}}</script>`;
         authored = /<head\b[^>]*>/i.test(authored) ? authored.replace(/<head\b[^>]*>/i, match => match + baseTag) : baseTag + authored;
         authored = /<body\b[^>]*>/i.test(authored) ? authored.replace(/<body\b[^>]*>/i, match => match + navigation) : navigation + authored;
-        const target = path.join(identity.directory, siblingName(doc.id));
+        const name = siblingName(doc);
+        siblingSources.set(name, doc.source);
+        const target = path.join(identity.directory, name);
         generatedSiblings.add(target);
         await writeFile(target, authored, { mode: 0o600 });
         await chmod(target, 0o600);
@@ -135,7 +138,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       executeCommand: body => commands.execute(body),
       commandStatus: body => commands.status(body),
       cancelCommand: body => commands.cancel(body),
-      documents: () => { const list = documents.list(); return { ...list, documents: list.documents.map(doc => ({ ...doc, sibling: siblingName(doc.id) })) }; },
+      documents: () => { const list = documents.list(); return { ...list, documents: list.documents.map(doc => ({ ...doc, sibling: siblingName(doc) })) }; },
       publish: async body => { const document = await documents.publish(body); await writeSiblings(); select(document.id); return document; },
       attach: body => documents.attach(body),
       readDocument: body => documents.read(body),
@@ -166,7 +169,9 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     while (!stopping) {
       const batch = await client.poll(page, instance, { timeoutMs: 10000 });
       if (batch.session.status === 'feedback') {
-        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts: batch.prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, failures: batch.artifact_failures || [], reply: `lavish-axi reply ${quote(page)} --agent-reply '...'` }));
+        const sourceFor = sibling => siblingSources.get(sibling) ?? null;
+        const prompts = batch.prompts.map(prompt => typeof prompt === 'object' && prompt !== null && sourceFor(prompt.page) ? { ...prompt, document: sourceFor(prompt.page) } : prompt);
+        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, snapshotDocument: sourceFor(batch.snapshot_page), failures: batch.artifact_failures || [], reply: `lavish-axi reply ${quote(page)} --agent-reply '...'` }));
       }
       if (batch.session.status === 'ended' || batch.session.session_ended) break;
     }

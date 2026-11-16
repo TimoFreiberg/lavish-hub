@@ -35,7 +35,11 @@ export function injectLavishSdk(html, key, artifactRevision, artifactLoadToken =
   }
   if (revision !== null) query += `&artifact_revision=${revision}`;
   if (token) query += `&artifact_load_token=${encodeURIComponent(token)}`;
-  const script = `<script src="/sdk.js?${query}"></script>`;
+  // Resolve against the document URL, not an artifact-authored <base> URL.
+  const sdkPath = JSON.stringify(`/sdk.js?${query}`);
+  const script = /<base\b/i.test(html)
+    ? `<script>document.write('<script src="' + new URL(${sdkPath}, location.href).href + '"><\\/script>')</script>`
+    : `<script src="/sdk.js?${query}"></script>`;
   const index = bodyCloseIndex(html);
   if (index !== -1) return `${html.slice(0, index)}${script}${html.slice(index)}`;
   return `${html}\n${script}`;

@@ -101,8 +101,11 @@ do not delete it while an owner might still be running.
 
 Diagnostics and the review URL go to stderr. Each feedback batch is one JSON
 line on stdout with `type: "agent-notification"`, `workspace`, `instance`,
-`page`, `prompts`, `context`, `failures`, and `reply` fields. Poll failures are
-not retried because delivery may have occurred. Reply using the printed Lavish
+`page`, `prompts`, `context`, `snapshotPage`, `snapshotDocument`, `failures`,
+and `reply` fields. For a published HTML document, each annotation prompt has a
+`document` source path; `snapshotDocument` identifies the source of the snapshot,
+while `snapshotPage` retains Lavish's page identity. The snapshot document is null
+when no published HTML source matches. Poll failures are not retried because delivery may have occurred. Reply using the printed Lavish
 command. An explicitly ended review needs `--reopen` to open again.
 
 Workspace identity and owner metadata live under the private XDG data directory,
