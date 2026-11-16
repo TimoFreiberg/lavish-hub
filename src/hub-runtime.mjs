@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
+import { createHubJj } from './hub-jj.mjs';
 import { resolveWorkspace, resolveRecordedWorkspace, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
@@ -68,8 +69,11 @@ export async function runHubOwner(options = {}) {
     if (!(await workspaceMatches(identity))) throw new Error('Workspace no longer matches its recorded repository');
     await recordWorkspace(identity);
     const page = path.join(identity.directory, 'hub.html');
+    const jj = createHubJj(identity.root, { validate: () => workspaceMatches(identity) });
     transport = await createHubTransport({
       status: async () => ({ workspace: identity.root, instance, available: await workspaceMatches(identity) }),
+      snapshot: () => jj.snapshot(),
+      describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },
     });
     const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Workspace hub</title><body><h1>Workspace hub</h1><p>The hub owner is running. Workspace views are not available yet.</p></body></html>`;

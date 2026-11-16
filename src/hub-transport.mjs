@@ -36,8 +36,8 @@ export async function createHubTransport(operations) {
       if (!body || Array.isArray(body) || typeof body !== 'object' || typeof body.operation !== 'string' || !Object.hasOwn(operations, body.operation)) return respond(400, { error: 'Unknown operation' });
       const result = await operations[body.operation](body);
       respond(200, { result });
-    } catch {
-      if (!res.headersSent) respond(400, { error: 'Action failed' });
+    } catch (error) {
+      if (!res.headersSent) respond(400, { error: error instanceof Error ? error.message : 'Action failed' });
     }
   });
   server.requestTimeout = 15000;
