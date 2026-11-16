@@ -41,7 +41,42 @@ npm URL pins in `src/markdown.mjs`; other CDN hosts and dynamic URLs are not
 covered. Keep the DaisyUI and Tailwind manifest and CDN pins consistent.
 Registry checks run daily and compare the latest version, including pinned
 versions. Each poll fetches `origin`'s `main` before checking its revision; fetch
-failures use the normal backoff. Registry checks are not a supply-chain safety guarantee.
+failures use the normal backoff. The watcher does not separately track the version
+in `vendor/lavish`, poll upstream releases or security advisories, or schedule a
+job solely because an advisory appears. Registry checks are not a supply-chain
+safety guarantee.
+
+## Vendored Lavish review
+
+For every maintenance assignment, independently check the upstream
+[releases](https://github.com/kunchenguid/lavish-axi/releases),
+[security advisories](https://github.com/kunchenguid/lavish-axi/security/advisories),
+and [npm package](https://www.npmjs.com/package/lavish-axi) for changes relevant to
+the vendored version and its use here. Check the vendored dependencies and lockfile
+as well as the package itself. Investigate applicability, fixed versions, release
+provenance and install scripts before installing a candidate. Record what was
+checked, when, and the disposition in the worker's evidence; a failed or incomplete
+check is not a clean result. Public sources and dependency audits cannot detect
+every vulnerability. Handle sensitive findings privately as directed by the worker
+skill.
+
+The import commit `905d0e2f0dbcfb1bb29d65aad90f8b5981a92fa3` identifies the
+vendored source as 0.1.97; the upstream
+[0.1.97 tag](https://github.com/kunchenguid/lavish-axi/releases/tag/lavish-axi-v0.1.97)
+points to `79aa0a18dba9c1a1dcec6db19d2ef4eb7643754b`. The local commit
+`70cb1ada946b295b24481bb2d14d56405cab8d31` ports page-scoped reviews from
+[upstream PR 363](https://github.com/kunchenguid/lavish-axi/pull/363); later local
+changes also touch the vendored source. These identifiers describe the recorded
+history, not a byte-for-byte verification of the import or an assertion that the
+local patch matches the PR's current head.
+
+Do not remove the patch just because the PR merges or a new version appears.
+Compare the candidate release's actual source and behavior with the local patch and
+later changes, including page-scoped feedback, routing and hub integration. Retain
+or adapt any differences still needed here. Only retire code after establishing an
+upstream equivalent and passing the applicable regression tests and full repository
+QA, including visual inspection, on the proposed replacement. Review and document
+any upgrade separately; this procedure does not itself change the pinned version.
 
 Workers record each candidate with `review-result ID TOKEN NAME VERSION
 reviewed|deferred|failed 'evidence'` and separately record a completed sweep with
