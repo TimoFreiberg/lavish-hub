@@ -106,8 +106,9 @@ is shared by the running owner and is restored on page refresh; a new owner star
 on Commits. An open hub checks for selection, repository, and source changes about
 every two seconds after each completed check; slow or unavailable actions can delay
 updates. Clean Markdown documents update automatically, while unsaved drafts remain
-in the page. Published HTML is generated when the owner starts or a document is
-published; republish after changing its source, then reload the page to see the
+in the page. Published HTML is generated when the owner starts or that document is
+published; publishing another document does not rewrite it. Its navigation updates
+while the owner is running. Republish after changing its source, then reload to see the
 new version. If a source is unavailable, the owner leaves its last generated copy
 in place and reports the error. It refuses to overwrite a generated copy edited on
 disk, including after an abrupt owner termination; preserve or remove that copy
