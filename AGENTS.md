@@ -5,6 +5,10 @@ Last verified: 2026-11-14
 Testing and test-retention guidance are in [TESTING.md](TESTING.md). User and
 agent docs are in [docs/](docs/README.md). Update them when behavior changes.
 
+Code comments explain why, not what, except for succinct type and function
+doc comments. Do not run a deslop pass on code comments. Run a deslop pass
+on changed documentation once at the end of a task, not incrementally.
+
 Use jj. Start with an empty change, review `jj diff --git`, and commit only
 files you changed. Use imperative commit messages of at most 72 characters,
 without a trailing period. Leave the working-copy change empty after
