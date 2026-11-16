@@ -37,6 +37,28 @@ test('refresh updates clean documents and retains dirty drafts and their target'
   assert.equal(await editor.inputValue(), 'Local draft\n');
 });
 
+test('unchanged snapshots preserve the focused editor and external changes render', { timeout: 30000 }, async t => {
+  let calls = 0, description = 'Original\n';
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [{ changeId: 'c'.repeat(32), commitId: 'b'.repeat(40), description }], generated: String(++calls), operationId: String(calls) }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  const editor = page.getByRole('textbox', { name: 'Description cccccccccccc' });
+  await editor.waitFor();
+  await editor.focus();
+  await page.evaluate(() => { globalThis.originalEditor = document.activeElement; });
+  await assertEventually(() => assert.ok(calls >= 2));
+  assert.equal(await page.evaluate(() => document.activeElement === globalThis.originalEditor && globalThis.originalEditor.isConnected), true);
+  description = 'External\n';
+  await assertEventually(async () => assert.equal(await editor.inputValue(), 'External\n'));
+  assert.equal(await page.evaluate(() => globalThis.originalEditor.isConnected), false);
+});
+
 async function assertEventually(check) {
   const deadline = Date.now() + 5000;
   while (true) {

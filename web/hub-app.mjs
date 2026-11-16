@@ -5,7 +5,7 @@ const diffContainer = document.createElement('div'); diffContainer.className = '
 let diffView;
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
-let refreshTimer, rendered = false;
+let refreshTimer, rendered = false, refreshRequested = false;
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks', pr: 'PR draft' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
 const button = (text, action) => { const node = el('button', text, { type: 'button' }); node.addEventListener('click', action); return node; };
@@ -54,12 +54,13 @@ async function select(id) {
   } catch (error) { status(error.message); }
   finally { navigationPending = false; }
 }
-async function refresh() {
-  if (busy) return; busy = true;
+const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch, stat: value.stat });
+async function refresh(force = false) {
+  if (busy) { if (force) refreshRequested = true; return; } busy = true;
   const navigationAtStart = navigationRevision;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
-    const oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSnapshot = JSON.stringify(snapshot);
+    const oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSnapshot = snapshotContent(snapshot);
     documents = list.documents;
     const remoteDoc = documents.find(item => item.id === state.selected);
     const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
@@ -67,7 +68,7 @@ async function refresh() {
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
     if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { location.href = new URL(selectedDoc.sibling, location.href).href; return; }
-    try { snapshot = await action('snapshot'); status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
+    try { snapshot = await action('snapshot', { force }); status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
     catch (error) { snapshot = undefined; status(error.message); }
     let documentChanged = false;
     const cached = drafts.get(`doc:${selected}`);
@@ -93,7 +94,7 @@ async function refresh() {
       } catch (error) { status(error.message); }
     }
     if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents)) renderNav();
-    if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (['commits', 'changes'].includes(selected) && oldSnapshot !== JSON.stringify(snapshot))) {
+    if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (['commits', 'changes'].includes(selected) && oldSnapshot !== snapshotContent(snapshot))) {
       const active = document.activeElement;
       const label = active?.closest('#view') && active.getAttribute('aria-label');
       const selection = label && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
@@ -106,7 +107,11 @@ async function refresh() {
       }
     }
   } catch (error) { status(error.message); }
-  finally { busy = false; clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 2000); }
+  finally {
+    busy = false; clearTimeout(refreshTimer);
+    if (refreshRequested) { refreshRequested = false; refresh(true); }
+    else refreshTimer = setTimeout(refresh, 2000);
+  }
 }
 function draft(key, initial) { if (!drafts.has(key)) drafts.set(key, initial); return drafts.get(key); }
 function editor(label, value, onInput) { const area = el('textarea', null, { 'aria-label': label, rows: '5', spellcheck: 'false' }); area.value = value; area.addEventListener('input', () => onInput(area.value)); return area; }
@@ -271,5 +276,5 @@ async function renderView() {
 }
 app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><nav id="navigation" aria-label="Workspace views"></nav><div><main id="view"></main><div id="frames"></div></div></div>';
 document.querySelector('#workspace').textContent = config.workspace;
-document.querySelector('#refresh').addEventListener('click', refresh);
+document.querySelector('#refresh').addEventListener('click', () => refresh(true));
 refresh();

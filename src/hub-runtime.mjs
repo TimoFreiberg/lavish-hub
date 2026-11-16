@@ -202,7 +202,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         return documents.save(body);
       },
       status: async () => ({ workspace: identity.root, instance, selected, available: await workspaceMatches(identity) }),
-      snapshot: () => jj.snapshot(),
+      snapshot: ({ force }) => jj.snapshot({ force: force === true }),
       describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },
     }, { resource: id => documents.list().documents.find(doc => doc.id === id)?.source, guardSource });

@@ -49,7 +49,7 @@ export async function readHubSnapshot(cwd, { afterMetadata } = {}) {
 }
 
 export function createHubJj(cwd, { validate = async () => true, beforeDescribe } = {}) {
-  let pending = Promise.resolve();
+  let pending = Promise.resolve(), cached, expires = 0, flight, generation = 0;
   async function checkWorkspace() {
     if (!await validate()) throw new Error('Workspace no longer matches its recorded repository');
   }
@@ -75,7 +75,20 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
     return { status: 'saved', current: updated[0] };
   }
   return {
-    snapshot: async () => { await checkWorkspace(); return readHubSnapshot(cwd); },
+    async snapshot({ force = false } = {}) {
+      await checkWorkspace();
+      while (true) {
+        if (flight) { await flight; force = false; continue; }
+        if (!force && cached && Date.now() < expires) return cached;
+        const started = generation;
+        const refresh = readHubSnapshot(cwd).then(value => {
+          if (generation === started) { cached = value; expires = Date.now() + 2000; }
+        });
+        flight = refresh;
+        try { await refresh; } finally { if (flight === refresh) flight = undefined; }
+        force = false;
+      }
+    },
     async prHead(expression = '@-') {
       if (typeof expression !== 'string' || !expression.trim() || expression.length > 4096 || expression.includes('\0')) throw new Error('Invalid PR revision');
       await checkWorkspace();
@@ -88,7 +101,11 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
       return { revision: heads[0].commitId, expression, operationId: op, warning };
     },
     describe(request) {
-      const result = pending.then(() => describe(request));
+      const result = pending.then(async () => {
+        generation++; cached = undefined;
+        try { return await describe(request); }
+        finally { generation++; cached = undefined; }
+      });
       pending = result.catch(() => {});
       return result;
     },

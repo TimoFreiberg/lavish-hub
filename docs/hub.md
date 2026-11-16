@@ -143,7 +143,10 @@ they must remain available. Remove unwanted hub data only after stopping its own
 
 The authenticated action endpoint supports `snapshot` and `describe` for the
 workspace views. A snapshot pins its commit metadata, endpoints, patch,
-and diff statistics to one jj operation. Description saves check the full change
+and diff statistics to one jj operation. Viewers share an owner-side snapshot for
+up to two seconds; automatic refreshes then pick up external changes. The Refresh
+button requests a new snapshot, sharing a refresh already in progress. Description
+saves invalidate the cached snapshot and check the full change
 and commit IDs and expected description, reject missing, divergent, immutable,
 or stale changes, and recheck the result. Hub saves are serialized, but other
 jj processes do not share that serialization: a small race remains between the

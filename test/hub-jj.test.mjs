@@ -36,6 +36,23 @@ test('hub_jj_snapshot pins metadata, endpoints and patch through an external rew
   assert.notEqual(next.head, snapshot.head);
 });
 
+test('snapshot requests share cached work and refresh after an external rewrite', async t => {
+  const cwd = await repo(t), jj = createHubJj(cwd);
+  const [first, second] = await Promise.all([jj.snapshot(), jj.snapshot()]);
+  assert.strictEqual(first, second);
+  assert.strictEqual(await jj.snapshot(), first);
+  await writeFile(path.join(cwd, 'file'), 'external rewrite\n');
+  run(cwd, 'jj', 'describe', '-m', 'external');
+  const refreshed = await jj.snapshot({ force: true });
+  assert.notEqual(refreshed.head, first.head);
+  assert.match(refreshed.patch, /external rewrite/);
+  assert.strictEqual(await jj.snapshot(), refreshed);
+  await writeFile(path.join(cwd, 'file'), 'another external rewrite\n');
+  await new Promise(resolve => setTimeout(resolve, 2100));
+  const automatic = await jj.snapshot();
+  assert.match(automatic.patch, /another external rewrite/);
+});
+
 test('hub_describe_stale_and_literal checks versions and preserves literal descriptions', async t => {
   const cwd = await repo(t), jj = createHubJj(cwd);
   const original = (await jj.snapshot()).commits[0];
