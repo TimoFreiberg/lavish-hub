@@ -54,9 +54,43 @@ async function refresh() {
 function draft(key, initial) { if (!drafts.has(key)) drafts.set(key, initial); return drafts.get(key); }
 function editor(label, value, onInput) { const area = el('textarea', null, { 'aria-label': label, rows: '5', spellcheck: 'false' }); area.value = value; area.addEventListener('input', () => onInput(area.value)); return area; }
 function notice(text) { return el('p', text, { role: 'status', class: 'notice' }); }
+function feedback(view, id) {
+  const key = `feedback:${id}`;
+  const state = draft(key, { text: '', context: null, message: '' });
+  const section = el('section', null, { class: 'card', 'aria-label': 'Feedback' });
+  section.setAttribute('data-lavish-action', '');
+  section.append(el('h2', 'Feedback'));
+  const info = notice(state.message || 'Queue feedback for the agent.');
+  const area = editor('Feedback', state.text, value => {
+    if (!state.text && value) {
+      const doc = documents.find(item => item.id === id);
+      state.context = { view: id, title: labels[id] || doc?.title || id, base: snapshot?.base || null, head: snapshot?.head || null, metadata: doc?.metadata || null };
+    }
+    state.text = value;
+    if (!value) state.context = null;
+    info.textContent = value ? 'Unqueued feedback' : 'Queue feedback for the agent.';
+  });
+  const queue = button('Queue feedback', () => {
+    if (!state.text.trim()) return;
+    if (typeof window.lavish?.queuePrompt !== 'function') { info.textContent = 'Feedback unavailable: open this page in Lavish. Your draft is retained.'; return; }
+    try {
+      const context = state.context;
+      const heading = `Hub view: ${context.title} (${context.view})\nRevision range: ${context.base || 'unavailable'} → ${context.head || 'unavailable'}${context.metadata ? `\nReviewed scope: ${JSON.stringify(context.metadata)}` : ''}`;
+      window.lavish.queuePrompt(`${heading}\n\n${state.text}`, { tag: 'hub-feedback', text: context.title });
+      state.text = ''; state.context = null; area.value = ''; state.message = 'Feedback queued. Use Send to deliver it.'; info.textContent = state.message;
+    } catch (error) { state.message = `Could not queue feedback: ${error.message}. Your draft is retained.`; info.textContent = state.message; }
+  });
+  const send = button('Send feedback', () => {
+    if (typeof window.lavish?.sendQueuedPrompts !== 'function') { info.textContent = 'Send unavailable: open this page in Lavish.'; return; }
+    try { window.lavish.sendQueuedPrompts(); }
+    catch (error) { info.textContent = `Could not send feedback: ${error.message}`; }
+  });
+  section.append(area, queue, send, info); view.append(section);
+}
 async function renderView() {
   const view = document.querySelector('#view'); view.replaceChildren();
   const id = selected; view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
+  feedback(view, id);
   if (id === 'commits' || id === 'changes') {
     if (!snapshot) { view.append(notice('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `Range ${snapshot.base.slice(0, 12)} → ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));

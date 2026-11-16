@@ -9,11 +9,16 @@ keep the draft on the page. Actions require the local owner; if it is unreachabl
 the page reports the error without discarding edits. Drafts are not persisted across
 page reloads.
 
+Each view has a feedback field. Queue feedback to include the view, the full
+revision range at the time you started writing, and any published review scope;
+then use Send feedback to deliver queued prompts through the hub's Lavish session.
+Draft feedback survives navigation and refresh within the page, but not a reload.
+
 This is not the complete hub: the diff is not the standalone annotated diff,
-rendered Markdown documents, HTML action integration, and feedback context are
-not yet available. Tasks have a checklist and a Markdown source editor; changes
-are written only when saved. Published HTML is displayed in a nested sandbox and
-can load scripts, styles, and images relative to its source file.
+rendered Markdown documents and HTML action integration are not yet available.
+Tasks have a checklist and a Markdown source editor; changes are written only when
+saved. Published HTML is displayed in a nested sandbox and can load scripts,
+styles, and images relative to its source file.
 
 The owner serves files under the published HTML file's directory, including its
 subdirectories, but rejects traversal and symlinks outside that directory. Like
