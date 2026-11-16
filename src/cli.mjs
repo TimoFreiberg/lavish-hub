@@ -85,7 +85,7 @@ Options:
 
 Hub owner (experimental; browser views are not yet implemented):
   hub listen [--workspace DIR] [--open] [--reopen]  run a foreground owner
-  hub [--workspace DIR]                             check owner status
+  hub [--workspace DIR] [--view VIEW]               check status or select a view
   hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR]
   hub tasks --file FILE [--workspace DIR]            attach a Markdown file
   hub pr [--file FILE] [--rev REV] [--workspace DIR]  configure PR draft and head
@@ -122,6 +122,9 @@ export function parseArgs(args) {
         const key = arg === '--metadata-file' ? 'metadataFile' : arg.slice(2);
         if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
         result[key] = args[++i];
+      } else if (command === 'status' && arg === '--view') {
+        if (result.view !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--view requires one value');
+        result.view = args[++i];
       } else if (command === 'listen' && (arg === '--open' || arg === '--reopen')) {
         const key = arg.slice(2);
         if (result[key]) throw new UsageError(`${arg} given twice`);
@@ -176,6 +179,7 @@ export async function main(args = process.argv.slice(2)) {
         console.log(options.hub === 'publish' ? `Registered document ${options.id}.` : `Configured ${options.hub}.`);
         return 0;
       }
+      if (options.hub === 'status' && options.view) await callHub('navigate', { ...options, body: { id: options.view } });
       const result = await callHub(options.hub, options);
       console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}.`);
       return 0;

@@ -76,18 +76,25 @@ export async function runHubOwner(options = {}) {
     const documents = await createHubDocuments(identity.directory);
     commands = await createHubCommands(identity.directory, identity.root, () => workspaceMatches(identity));
     const launchPr = await createHubPr(identity.directory, identity.root, documents, jj);
+    let selected = 'commits';
+    const select = id => {
+      if (!['commits', 'changes', 'tasks', 'pr'].includes(id) && !documents.list().documents.some(doc => doc.id === id)) throw new Error('Unknown view');
+      selected = id;
+      return { selected };
+    };
     transport = await createHubTransport({
+      navigate: body => select(body.id),
       launchPr,
       configurePr: async body => { if (body.rev !== undefined) await jj.prHead(body.rev); return documents.attach({ ...body, kind: 'pr' }); },
       executeCommand: body => commands.execute(body),
       commandStatus: body => commands.status(body),
       cancelCommand: body => commands.cancel(body),
       documents: () => documents.list(),
-      publish: body => documents.publish(body),
+      publish: async body => { const document = await documents.publish(body); select(document.id); return document; },
       attach: body => documents.attach(body),
       readDocument: body => documents.read(body),
       saveDocument: body => documents.save(body),
-      status: async () => ({ workspace: identity.root, instance, available: await workspaceMatches(identity) }),
+      status: async () => ({ workspace: identity.root, instance, selected, available: await workspaceMatches(identity) }),
       snapshot: () => jj.snapshot(),
       describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },

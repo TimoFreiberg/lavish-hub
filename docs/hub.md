@@ -10,12 +10,16 @@ the page reports the error without discarding edits. Drafts are not persisted ac
 page reloads.
 
 This is not the complete hub: the diff is not the standalone annotated diff,
-tasks have only a source editor, and rendered published documents, HTML assets and
-actions, feedback context, and shared navigation are not yet available.
+rendered published documents, HTML assets and actions, and feedback context are
+not yet available. Tasks have a checklist and a Markdown source editor; changes
+are written only when saved.
 The registered HTML source is not displayed by this version.
 
-Run `lavish-kit hub [--workspace DIR]` to check the owner or `lavish-kit hub
-stop [--workspace DIR]` to request shutdown. The owner exits on stop, SIGINT,
+Run `lavish-kit hub [--workspace DIR]` to check the owner, add `--view VIEW` to
+select a built-in view or published document ID, or run `lavish-kit hub stop
+[--workspace DIR]` to request shutdown. Publishing selects the document. Selection
+is shared by the running owner and is restored on page refresh; a new owner starts
+on Commits. The owner exits on stop, SIGINT,
 SIGTERM, an ended Lavish session, or a listener error. It does not start a
 background daemon. A second owner is refused; an unreachable live process is
 not replaced. A stale record is reclaimed only when its recorded process is

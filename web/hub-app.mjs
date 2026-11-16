@@ -20,12 +20,16 @@ function renderNav() {
     const b = button(label, () => select(id)); if (id === selected) b.setAttribute('aria-current', 'page'); nav.append(b);
   }
 }
-async function select(id) { selected = id; renderNav(); await renderView(); }
+async function select(id) {
+  try { await action('navigate', { id }); selected = id; renderNav(); await renderView(); }
+  catch (error) { status(error.message); }
+}
 async function refresh() {
   if (busy) return; busy = true; status('Refreshing…');
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
     documents = list.documents;
+    if (state.selected) selected = state.selected;
     try { snapshot = await action('snapshot'); status(state.available ? 'Connected' : 'Workspace unavailable'); }
     catch (error) { snapshot = undefined; status(error.message); }
     const active = document.activeElement;
@@ -79,10 +83,30 @@ async function renderView() {
     catch (error) { if (selected === id) view.append(notice(error.message)); return; }
   }
   if (selected !== id) return;
-  if (id === 'tasks') view.append(el('p', 'Edit the Markdown checklist below; surrounding text is preserved.'));
+  if (id === 'tasks') {
+    view.append(el('p', 'Toggle or edit checklist items, or edit the Markdown source below. Save to write your changes.'));
+    const list = el('ol', null, { 'aria-label': 'Tasks checklist' });
+    const lines = state.text.split('\n');
+    lines.forEach((line, index) => {
+      const match = /^(\s*[-*+]\s+\[)([ xX])(\]\s+)(.*)$/.exec(line);
+      if (!match) return;
+      const item = el('li');
+      const toggle = el('input', null, { type: 'checkbox', 'aria-label': `Complete task ${list.children.length + 1}` });
+      toggle.checked = match[2].toLowerCase() === 'x';
+      const text = el('input', null, { type: 'text', 'aria-label': `Task ${list.children.length + 1}` }); text.value = match[4];
+      const update = () => { lines[index] = `${match[1]}${toggle.checked ? 'x' : ' '}${match[3]}${text.value}`; state.text = lines.join('\n'); area.value = state.text; info.textContent = 'Unsaved changes'; };
+      toggle.addEventListener('change', update); text.addEventListener('input', update);
+      item.append(toggle, text); list.append(item);
+    });
+    view.append(list);
+    view.append(button('Add task', () => { state.text += `${state.text && !state.text.endsWith('\n') ? '\n' : ''}- [ ] New task\n`; renderView(); }));
+  }
   if (id === 'pr') view.append(el('p', 'Use # title followed by the body. Launch saves this draft before opening an interactive PR command.'));
   const info = notice(state.message || 'Ready');
   const area = editor(id === 'pr' ? 'PR Markdown' : id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? 'Ready' : 'Unsaved changes'; });
+  if (id === 'tasks') area.addEventListener('input', () => {
+    view.querySelectorAll('ol input').forEach(control => { control.disabled = true; });
+  });
   const save = button('Save', async () => {
     const submitted = state.text; save.disabled = true; info.textContent = 'Saving…';
     try {

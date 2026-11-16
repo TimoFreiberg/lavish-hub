@@ -39,6 +39,18 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await assert.rejects(run(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env }), /hub owner is already running/i);
   const { stdout } = await run(process.execPath, [cli, 'hub', '--workspace', repo], { env });
   assert.match(stdout, /Hub owner running/);
+  const connection = JSON.parse(await readFile(runtime, 'utf8'));
+  const request = async (operation, body = {}) => {
+    const response = await fetch(`${connection.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': connection.capability }, body: JSON.stringify({ operation, ...body }) });
+    assert.equal(response.status, 200);
+    return (await response.json()).result;
+  };
+  assert.equal((await request('status')).selected, 'commits');
+  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
+  assert.equal((await request('status')).selected, 'tasks');
+  const document = path.join(dir, 'review.md'); await writeFile(document, '# Review\n');
+  await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--workspace', repo], { env });
+  assert.equal((await request('status')).selected, 'review');
   await run(process.execPath, [cli, 'hub', 'stop', '--workspace', repo], { env });
   const exit = await new Promise(resolve => owner.once('exit', resolve));
   assert.equal(exit, 0, stderr);

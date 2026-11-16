@@ -7,7 +7,7 @@ import { createHubTransport } from '../src/hub-transport.mjs';
 test('hub keeps description drafts across navigation and stale saves', { timeout: 30000 }, async t => {
   const commit = { changeId: 'a'.repeat(32), commitId: 'b'.repeat(40), description: 'Original\n', immutable: false, divergent: false };
   const transport = await createHubTransport({
-    status: () => ({ available: true }), documents: () => ({ documents: [] }),
+    status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
     snapshot: () => ({ base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff content', commits: [commit] }),
     describe: () => ({ status: 'conflict', reason: 'stale', current: [{ description: 'External\n' }] }),
     readDocument: () => ({ text: '- [ ] Task\n', hash: 'hash', version: 'version' }),
@@ -31,4 +31,9 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   assert.equal(await tasks.inputValue(), '- [x] Local draft\n');
+  await page.getByRole('checkbox', { name: 'Complete task 1' }).uncheck();
+  await page.getByRole('textbox', { name: 'Task 1', exact: true }).fill('Edited task');
+  assert.equal(await tasks.inputValue(), '- [ ] Edited task\n');
+  await page.getByRole('button', { name: 'Add task' }).click();
+  assert.equal(await tasks.inputValue(), '- [ ] Edited task\n- [ ] New task\n');
 });
