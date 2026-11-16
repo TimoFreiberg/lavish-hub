@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { relayPaths, relayLog } from '../src/relay.mjs';
+import { ensureDeps } from '../src/deps.mjs';
 import { cleanupTerminals } from './relay-e2e-cleanup.mjs';
 const exec = promisify(execFile);
 const cli = path.resolve(import.meta.dirname, '../bin/lavish-kit');
@@ -35,6 +36,8 @@ const until = async fn => {
 };
 let primaryError;
 try {
+  // Dependency installation and bundling are not part of the prompt-return check.
+  await ensureDeps();
   await mkdir(bin); await mkdir(path.join(config, 'lavish-kit'), { recursive: true });
   await executable('create-pr-stub', `const fs=require('node:fs'); const args=process.argv.slice(2); const source=args[args.indexOf('--body-file')+1]; fs.writeFileSync(${JSON.stringify(captureFile)},JSON.stringify({args,cwd:process.cwd(),terminal:process.env.HC_TERMINAL_ID,text:fs.readFileSync(source,'utf8')})); console.log('stub-create-pr: '+JSON.stringify(args)); console.log('No GitHub access');`);
   await executable('herdr-app', `const fs=require('node:fs'),cp=require('node:child_process'),assert=require('node:assert/strict');
