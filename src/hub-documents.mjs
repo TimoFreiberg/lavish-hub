@@ -80,11 +80,25 @@ export async function createHubDocuments(directory) {
     }),
     attach: body => locked(async () => {
       if (!['tasks', 'pr'].includes(body.kind)) throw new Error('Invalid attachment');
-      const file = await source(body.file, ['.md', '.markdown']);
-      if (body.kind === 'pr') parsePR(await readFile(file, 'utf8'));
-      const attachment = { source: file, version: randomUUID() };
+      if (!body.file && (body.kind !== 'pr' || body.rev === undefined)) throw new Error('An attachment file or PR revision is required');
+      let attachment = state.attachments[body.kind];
+      if (body.file) {
+        const file = await source(body.file, ['.md', '.markdown']);
+        if (body.kind === 'pr') parsePR(await readFile(file, 'utf8'));
+        attachment = { source: file, version: randomUUID() };
+      }
+      if (body.kind === 'pr' && body.rev !== undefined) attachment = { ...attachment, rev: body.rev };
+      else if (body.kind === 'pr') attachment = { ...attachment, ...(state.attachments.pr.rev ? { rev: state.attachments.pr.rev } : {}) };
       await persist({ ...state, attachments: { ...state.attachments, [body.kind]: attachment } });
       return attachment;
+    }),
+    savePrForLaunch: body => locked(async () => {
+      const target = lookup('pr');
+      if (!target || body.version !== target.version) throw new Error('Document target changed; reload before launching');
+      parsePR(body.text);
+      const saved = await saveDocument({ baseHash: body.baseHash, text: body.text }, { sourceFile: target.source });
+      if (saved.reply !== 'Saved') throw new Error(`${saved.reply} PR command was not launched.`);
+      return { source: target.source, rev: target.rev || '@-', savedHash: textHash(body.text) };
     }),
     read: body => locked(async () => {
       const target = lookup(body.id);

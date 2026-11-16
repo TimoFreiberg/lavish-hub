@@ -88,7 +88,9 @@ Hub owner (experimental; browser views are not yet implemented):
   hub [--workspace DIR]                             check owner status
   hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR]
   hub tasks --file FILE [--workspace DIR]            attach a Markdown file
-  hub pr --file FILE [--workspace DIR]               attach a valid PR draft
+  hub pr [--file FILE] [--rev REV] [--workspace DIR]  configure PR draft and head
+  The PR head defaults to @-. Launch saves the draft and resolves the selected
+  expression to a full commit ID before opening an interactive terminal.
   hub stop [--workspace DIR]                        stop the owner
   Publication registers a source for the future hub view; it does not yet show
   the document. Metadata accepts reviewedRepository, baseCommit, headCommit and
@@ -116,7 +118,7 @@ export function parseArgs(args) {
       if (arg === '--workspace') {
         if (result.workspace || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--workspace requires one value');
         result.workspace = args[++i];
-      } else if ((command === 'publish' && ['--id', '--title', '--metadata-file'].includes(arg)) || (['tasks', 'pr'].includes(command) && arg === '--file')) {
+      } else if ((command === 'publish' && ['--id', '--title', '--metadata-file'].includes(arg)) || (['tasks', 'pr'].includes(command) && arg === '--file') || (command === 'pr' && arg === '--rev')) {
         const key = arg === '--metadata-file' ? 'metadataFile' : arg.slice(2);
         if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
         result[key] = args[++i];
@@ -127,7 +129,8 @@ export function parseArgs(args) {
       } else throw new UsageError(`unknown hub argument ${arg}`);
     }
     if (command === 'publish' && !result.id) throw new UsageError('hub publish requires --id');
-    if (['tasks', 'pr'].includes(command) && !result.file) throw new UsageError(`hub ${command} requires --file`);
+    if (command === 'tasks' && !result.file) throw new UsageError('hub tasks requires --file');
+    if (command === 'pr' && !result.file && !result.rev) throw new UsageError('hub pr requires --file or --rev');
     return result;
   }
   if (target === 'retarget') {
@@ -168,9 +171,9 @@ export async function main(args = process.argv.slice(2)) {
       if (['publish', 'tasks', 'pr'].includes(options.hub)) {
         const body = options.hub === 'publish'
           ? { id: options.id, title: options.title, file: path.resolve(options.file), ...(options.metadataFile ? { metadata: await readMetadata(options.metadataFile) } : {}) }
-          : { kind: options.hub, file: path.resolve(options.file) };
-        await callHub(options.hub === 'publish' ? 'publish' : 'attach', { ...options, body });
-        console.log(options.hub === 'publish' ? `Registered document ${options.id}.` : `Attached ${options.hub} file.`);
+          : { kind: options.hub, ...(options.file ? { file: path.resolve(options.file) } : {}), ...(options.rev ? { rev: options.rev } : {}) };
+        await callHub(options.hub === 'publish' ? 'publish' : options.hub === 'pr' ? 'configurePr' : 'attach', { ...options, body });
+        console.log(options.hub === 'publish' ? `Registered document ${options.id}.` : `Configured ${options.hub}.`);
         return 0;
       }
       const result = await callHub(options.hub, options);

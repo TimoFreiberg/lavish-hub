@@ -5,6 +5,7 @@ import { createHubTransport } from './hub-transport.mjs';
 import { createHubJj } from './hub-jj.mjs';
 import { createHubDocuments } from './hub-documents.mjs';
 import { createHubCommands } from './hub-commands.mjs';
+import { createHubPr } from './hub-pr.mjs';
 import { resolveWorkspace, resolveRecordedWorkspace, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
@@ -74,7 +75,10 @@ export async function runHubOwner(options = {}) {
     const jj = createHubJj(identity.root, { validate: () => workspaceMatches(identity) });
     const documents = await createHubDocuments(identity.directory);
     commands = await createHubCommands(identity.directory, identity.root, () => workspaceMatches(identity));
+    const launchPr = await createHubPr(identity.directory, identity.root, documents, jj);
     transport = await createHubTransport({
+      launchPr,
+      configurePr: async body => { if (body.rev !== undefined) await jj.prHead(body.rev); return documents.attach({ ...body, kind: 'pr' }); },
       executeCommand: body => commands.execute(body),
       commandStatus: body => commands.status(body),
       cancelCommand: body => commands.cancel(body),

@@ -10,8 +10,8 @@ the page reports the error without discarding edits. Drafts are not persisted ac
 page reloads.
 
 This is not the complete hub: the diff is not the standalone annotated diff,
-tasks have only a source editor, and PR launch, rendered published documents, HTML
-assets and actions, feedback context, and shared navigation are not yet available.
+tasks have only a source editor, and rendered published documents, HTML assets and
+actions, feedback context, and shared navigation are not yet available.
 The registered HTML source is not displayed by this version.
 
 Run `lavish-kit hub [--workspace DIR]` to check the owner or `lavish-kit hub
@@ -41,3 +41,18 @@ or stale changes, and recheck the result. Hub saves are serialized, but other
 jj processes do not share that serialization: a small race remains between the
 check and `jj describe`. This is not an atomic compare-and-swap. Conflicts return
 current visible versions so an editor can preserve the draft and show the change.
+
+Use `lavish-kit hub pr --file FILE` to attach a valid PR draft and `lavish-kit
+hub pr --rev REV` to configure its head expression. Both options can be supplied
+together; the default head is `@-`. Launch saves the submitted draft first, then
+resolves the expression to one full commit ID and passes that ID to the configured
+`createPr` command. The receipt shows the submitted ID. With the default head,
+a nonempty working copy produces a visible warning and a warning on the owner's
+stderr. An explicit head reports whether it is the working-copy commit instead.
+
+The owner rereads `createPr` from the config file on each launch. When the owner
+has a live herdr terminal, it attempts to open an interactive tab; otherwise it
+shows a quoted command to run manually. A durable request record prevents the
+same submission from launching twice. If acknowledgement is lost or the owner
+is interrupted, check the terminal before trying again. A successful launch
+only opens the command; it does not confirm that a PR was created.
