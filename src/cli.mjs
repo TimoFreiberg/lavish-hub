@@ -10,6 +10,7 @@ import { ensureDeps } from './deps.mjs';
 import { DiffUsageError, prepareDiff, readDiff } from './diff/source.mjs';
 import { pagePath, writeDiffPage } from './diff/page.mjs';
 import { callHub, runHubOwner } from './hub-runtime.mjs';
+import { readMetadata } from './hub-documents.mjs';
 
 const usage = `usage: lavish-kit <file.html|file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
        lavish-kit diff [-r REV | --from A --to B] [--git] [--title T] [--out FILE] [--open] [--reopen]
@@ -82,10 +83,16 @@ Options:
   --open            open a browser if the page isn't listed under Artifacts
   --reopen          reopen a review the user ended in the browser
 
-Hub owner (experimental; views and publication are not yet implemented):
+Hub owner (experimental; browser views are not yet implemented):
   hub listen [--workspace DIR] [--open] [--reopen]  run a foreground owner
   hub [--workspace DIR]                             check owner status
+  hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR]
+  hub tasks --file FILE [--workspace DIR]            attach a Markdown file
+  hub pr --file FILE [--workspace DIR]               attach a valid PR draft
   hub stop [--workspace DIR]                        stop the owner
+  Publication registers a source for the future hub view; it does not yet show
+  the document. Metadata accepts reviewedRepository, baseCommit, headCommit and
+  sourceUrl. Each publication replaces previous metadata, including omission.
   The owner prints feedback as agent-notification JSON lines and never starts a
   relay. An unreachable owner is not automatically replaced.
 
@@ -98,19 +105,29 @@ export function parseArgs(args) {
   if (!target || target.startsWith('-')) throw new UsageError();
   if (target === 'hub') {
     const command = args[0] && !args[0].startsWith('-') ? args.shift() : 'status';
-    if (!['listen', 'stop', 'status'].includes(command)) throw new UsageError(`unknown hub command ${command}`);
+    if (!['listen', 'stop', 'status', 'publish', 'tasks', 'pr'].includes(command)) throw new UsageError(`unknown hub command ${command}`);
     const result = { hub: command };
+    if (command === 'publish') {
+      result.file = args.shift();
+      if (!result.file || result.file.startsWith('-')) throw new UsageError('hub publish requires a file');
+    }
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if (arg === '--workspace') {
         if (result.workspace || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--workspace requires one value');
         result.workspace = args[++i];
+      } else if ((command === 'publish' && ['--id', '--title', '--metadata-file'].includes(arg)) || (['tasks', 'pr'].includes(command) && arg === '--file')) {
+        const key = arg === '--metadata-file' ? 'metadataFile' : arg.slice(2);
+        if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
+        result[key] = args[++i];
       } else if (command === 'listen' && (arg === '--open' || arg === '--reopen')) {
         const key = arg.slice(2);
         if (result[key]) throw new UsageError(`${arg} given twice`);
         result[key] = true;
       } else throw new UsageError(`unknown hub argument ${arg}`);
     }
+    if (command === 'publish' && !result.id) throw new UsageError('hub publish requires --id');
+    if (['tasks', 'pr'].includes(command) && !result.file) throw new UsageError(`hub ${command} requires --file`);
     return result;
   }
   if (target === 'retarget') {
@@ -148,6 +165,14 @@ export async function main(args = process.argv.slice(2)) {
     if (options.help) { console.log(help); return 0; }
     if (options.hub) {
       if (options.hub === 'listen') return await runHubOwner(options);
+      if (['publish', 'tasks', 'pr'].includes(options.hub)) {
+        const body = options.hub === 'publish'
+          ? { id: options.id, title: options.title, file: path.resolve(options.file), ...(options.metadataFile ? { metadata: await readMetadata(options.metadataFile) } : {}) }
+          : { kind: options.hub, file: path.resolve(options.file) };
+        await callHub(options.hub === 'publish' ? 'publish' : 'attach', { ...options, body });
+        console.log(options.hub === 'publish' ? `Registered document ${options.id}.` : `Attached ${options.hub} file.`);
+        return 0;
+      }
       const result = await callHub(options.hub, options);
       console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}.`);
       return 0;

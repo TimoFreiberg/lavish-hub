@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
 import { createHubJj } from './hub-jj.mjs';
+import { createHubDocuments } from './hub-documents.mjs';
 import { resolveWorkspace, resolveRecordedWorkspace, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
@@ -70,7 +71,13 @@ export async function runHubOwner(options = {}) {
     await recordWorkspace(identity);
     const page = path.join(identity.directory, 'hub.html');
     const jj = createHubJj(identity.root, { validate: () => workspaceMatches(identity) });
+    const documents = await createHubDocuments(identity.directory);
     transport = await createHubTransport({
+      documents: () => documents.list(),
+      publish: body => documents.publish(body),
+      attach: body => documents.attach(body),
+      readDocument: body => documents.read(body),
+      saveDocument: body => documents.save(body),
       status: async () => ({ workspace: identity.root, instance, available: await workspaceMatches(identity) }),
       snapshot: () => jj.snapshot(),
       describe: body => jj.describe(body),
@@ -110,7 +117,7 @@ export async function callHub(operation, options = {}) {
   if (!alive(runtime.pid) || !/^http:\/\/127\.0\.0\.1:\d+$/.test(runtime.url) || !/^[a-f0-9]{64}$/.test(runtime.capability || '')) throw new Error(`No live hub owner. ${startup}`);
   let response;
   try {
-    response = await fetch(`${runtime.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': runtime.capability }, body: JSON.stringify({ operation }), signal: AbortSignal.timeout(3000), redirect: 'error' });
+    response = await fetch(`${runtime.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': runtime.capability }, body: JSON.stringify({ ...options.body, operation }), signal: AbortSignal.timeout(3000), redirect: 'error' });
   } catch { throw new Error(`Hub owner is unreachable; it will not be replaced automatically. ${startup}`); }
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Hub request failed');
