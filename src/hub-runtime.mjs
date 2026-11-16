@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
 import { createHubJj } from './hub-jj.mjs';
@@ -83,8 +83,12 @@ export async function runHubOwner(options = {}) {
       describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },
     });
-    const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Workspace hub</title><body><h1>Workspace hub</h1><p>The hub owner is running. Workspace views are not available yet.</p></body></html>`;
+    const web = new URL('../web/', import.meta.url);
+    const [script, style] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8')]);
+    const config = JSON.stringify({ url: transport.url, capability: transport.capability, workspace: identity.root }).replaceAll('<', '\\u003c');
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><style>${style}</style></head><body><div id="app"></div><script>globalThis.hubConfig=${config};</script><script type="module">${script}</script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
+    await chmod(page, 0o600);
     const review = await prepareReview(page, { reopen: options.reopen, log: console.error });
     if (review.ended) return 1;
     const client = createLavishClient({ signal: abort.signal });
