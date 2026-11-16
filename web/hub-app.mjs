@@ -24,10 +24,19 @@ function renderNav() {
     const b = button(label, () => select(id)); if (id === selected) b.setAttribute('aria-current', 'page'); nav.append(b);
   }
 }
-let navigationRevision = 0;
+let navigationRevision = 0, leavingConfirmed = false;
+function hasUnsavedDrafts() {
+  return [...drafts].some(([key, state]) => state.saving || (key.startsWith('feedback:') ? !!state.text : state.text !== state.original));
+}
+window.addEventListener('beforeunload', event => {
+  if (!leavingConfirmed && hasUnsavedDrafts()) { event.preventDefault(); event.returnValue = ''; }
+});
 async function select(id) {
+  const doc = documents.find(item => item.id === id);
+  const leavesPage = doc?.sibling && doc.source?.toLowerCase().endsWith('.html');
+  if (leavesPage && hasUnsavedDrafts() && !window.confirm('Leave this page and discard unsaved hub drafts?')) return;
   const revision = ++navigationRevision;
-  try { await action('navigate', { id }); if (revision !== navigationRevision) return; const doc = documents.find(item => item.id === id); if (doc?.sibling && doc.source?.toLowerCase().endsWith('.html')) { location.href = new URL(doc.sibling, location.href).href; return; } selected = id; renderNav(); await renderView(); }
+  try { await action('navigate', { id }); if (revision !== navigationRevision) return; if (leavesPage) { leavingConfirmed = true; location.href = new URL(doc.sibling, location.href).href; return; } selected = id; renderNav(); await renderView(); }
   catch (error) { status(error.message); }
 }
 async function refresh() {
@@ -37,10 +46,13 @@ async function refresh() {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
     const oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSnapshot = JSON.stringify(snapshot);
     documents = list.documents;
-    if (state.selected && navigationAtStart === navigationRevision) selected = state.selected;
+    const remoteDoc = documents.find(item => item.id === state.selected);
+    const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
+    if (state.selected && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
+    else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
     if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { location.href = new URL(selectedDoc.sibling, location.href).href; return; }
-    try { snapshot = await action('snapshot'); status(state.available ? 'Connected' : 'Workspace unavailable'); }
+    try { snapshot = await action('snapshot'); status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
     catch (error) { snapshot = undefined; status(error.message); }
     let documentChanged = false;
     const cached = drafts.get(`doc:${selected}`);

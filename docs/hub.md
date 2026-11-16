@@ -60,7 +60,8 @@ publication time, not necessarily the current checkout.
 Each view has a feedback field. Queue feedback to include the view, the full
 revision range at the time you started writing, and any published review scope;
 then use Send feedback to deliver queued prompts through the hub's Lavish session.
-Draft feedback survives navigation and refresh within the page, but not a reload.
+Draft feedback survives navigation and refresh within the hub page. A browser reload
+prompts before discarding unsaved hub drafts; cancel it to keep editing.
 
 Tasks have a checklist and a Markdown source editor; changes are written only when
 saved. Published Markdown has Edit and Preview controls; the preview includes
@@ -69,7 +70,14 @@ Published HTML opens as a sibling page in the same Lavish review, where it can
 be annotated directly. Scripts, styles, and images resolve relative to its source
 file. Use the page's hub navigation to open built-in views or published documents.
 Explicit view and publish commands also switch an open published HTML page to the
-selected view. Navigating away reloads the hub, so unsaved hub drafts are lost.
+selected view, unless unsaved edits pause the switch. The hub asks before leaving
+for a published HTML page when a hub draft is unsaved. Published pages similarly
+ask after user input or changes outside the navigation, and pause automatic
+switches. Cancel the prompt to keep the current page and its edits.
+These guards do not persist drafts: accepting a prompt, a browser crash, or forced
+closure can discard them. Published pages with custom editors that do not emit
+trusted input or change events may not be detected. A published page remains
+marked edited even if its own save control has saved the data.
 
 The owner serves files under the published document's directory, including its
 subdirectories, but rejects traversal and symlinks outside that directory. Like
