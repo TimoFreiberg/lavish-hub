@@ -11,6 +11,7 @@ import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
 import { quote } from './relay.mjs';
 import { ensureDeps } from './deps.mjs';
+import { composeHubHtml } from './hub-html.mjs';
 
 const startup = 'Start one with lavish-kit hub listen --workspace DIR';
 const readJson = async file => JSON.parse(await readFile(file, 'utf8'));
@@ -72,6 +73,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
   const abort = new AbortController();
   let transport, commands, stopping = false;
   const generatedSiblings = new Set();
+  const siblingContents = new Map();
   const stop = () => { stopping = true; abort.abort(); };
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) process.once(signal, stop);
@@ -103,22 +105,27 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       for (const doc of htmlDocs) {
         let authored;
         try { await guardSource(doc.source); authored = await readFile(doc.source, 'utf8'); }
-        catch { authored = '<!doctype html><html><head><title>Document unavailable</title></head><body><p>Document source is unavailable.</p></body></html>'; }
+        catch (error) {
+          console.error(`Document source is unavailable for ${doc.id}: ${error.message}`);
+          continue;
+        }
         const base = `${transport.url}/resources/${transport.resourceKey}/${encodeURIComponent(doc.id)}/${encodeURIComponent(path.basename(doc.source))}`;
         const destinations = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks', pr: 'PR draft' }).map(([id, title]) => ({ id, title, href: 'hub.html' })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : 'hub.html' }))];
         const nav = `<nav aria-label="Hub navigation" data-lavish-action style="position:relative;z-index:2147483647;padding:8px;background:#171923;color:white;font:14px system-ui;display:flex;gap:12px;flex-wrap:wrap">${destinations.map(item => `<a style="color:white" href="${item.href}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}>${escapeHtml(item.title)}</a>`).join('')}</nav>`;
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope" data-lavish-action style="padding:8px;background:#171923;color:white;font:14px system-ui;overflow-wrap:anywhere">${scope}</aside>` : '';
-        const baseTag = `<base href="${escapeHtml(base)}">`;
         const navConfig = JSON.stringify({ url: transport.url, capability: transport.capability, id: doc.id }).replaceAll('<', '\\u003c');
         const navigation = `${nav}${reviewedScope}<script>{const c=${navConfig};let navigating=false,dirty=false,leaving=false;for(const type of ['input','change'])document.addEventListener(type,e=>{if(e.isTrusted&&!e.target.closest('[data-lavish-action]'))dirty=true},true);window.addEventListener('beforeunload',e=>{if(dirty&&!leaving){e.preventDefault();e.returnValue=''}});const action=async(operation,body={})=>{const r=await fetch(c.url+'/action',{method:'POST',headers:{'content-type':'application/json','x-lavish-capability':c.capability},body:JSON.stringify({...body,operation})});if(!r.ok)throw Error('Hub action failed');return(await r.json()).result};for(const a of document.querySelectorAll('nav[aria-label="Hub navigation"] a')){a.href=new URL(a.getAttribute('href'),location.href).href;a.addEventListener('click',async e=>{e.preventDefault();if(dirty&&!confirm('Leave this page and discard unsaved document edits?'))return;navigating=true;try{await action('navigate',{id:a.dataset.hubId});leaving=true;location.href=a.href}catch{navigating=false}})}async function refresh(){try{const [state,list]=await Promise.all([action('status'),action('documents')]);if(!navigating&&!dirty&&state.selected!==c.id){const doc=list.documents.find(d=>d.id===state.selected);location.href=new URL(doc&&doc.source.toLowerCase().endsWith('.html')?doc.sibling:'hub.html',location.href).href;return}}catch{}setTimeout(refresh,2000)}setTimeout(refresh,2000)}</script>`;
-        authored = /<head\b[^>]*>/i.test(authored) ? authored.replace(/<head\b[^>]*>/i, match => match + baseTag) : baseTag + authored;
-        authored = /<body\b[^>]*>/i.test(authored) ? authored.replace(/<body\b[^>]*>/i, match => match + navigation) : navigation + authored;
+        authored = composeHubHtml(authored, base, navigation);
         const name = siblingName(doc);
         siblingSources.set(name, doc.source);
         const target = path.join(identity.directory, name);
+        const previous = siblingContents.get(target);
+        const current = await readFile(target, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        if (current !== null && current !== previous) throw new Error(`Published document ${doc.id} already exists or was edited; refusing to overwrite it`);
         generatedSiblings.add(target);
         await writeFile(target, authored, { mode: 0o600 });
+        siblingContents.set(target, authored);
         await chmod(target, 0o600);
       }
     }
@@ -184,7 +191,10 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     for (const signal of signals) process.removeListener(signal, stop);
     if (commands) commands.close();
     if (transport) await transport.close();
-    await Promise.all([...generatedSiblings].map(file => rm(file, { force: true })));
+    await Promise.all([...generatedSiblings].map(async file => {
+      const current = await readFile(file, 'utf8').catch(() => null);
+      if (current !== null && current === siblingContents.get(file)) await rm(file, { force: true });
+    }));
     await release(lock, instance);
   }
 }

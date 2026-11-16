@@ -68,7 +68,9 @@ saved. Published Markdown has Edit and Preview controls; the preview includes
 unsaved edits and resolves relative links and images from the source directory.
 Published HTML opens as a sibling page in the same Lavish review, where it can
 be annotated directly. Scripts, styles, and images resolve relative to its source
-file. Use the page's hub navigation to open built-in views or published documents.
+file, respecting an authored `<base href>`. Local resources remain restricted to
+the source directory as described below. Use the page's hub navigation to open
+built-in views or published documents.
 Explicit view and publish commands also switch an open published HTML page to the
 selected view, unless unsaved edits pause the switch. The hub asks before leaving
 for a published HTML page when a hub draft is unsaved. Published pages similarly
@@ -101,8 +103,11 @@ on Commits. An open hub checks for selection, repository, and source changes abo
 every two seconds after each completed check; slow or unavailable actions can delay
 updates. Clean Markdown documents update automatically, while unsaved drafts remain
 in the page. Published HTML is generated when the owner starts or a document is
-published; republish after changing its source. Navigating away or reloading resets
-its internal state. The owner exits on stop, SIGINT,
+published; republish after changing its source, then reload the page to see the
+new version. If a source is unavailable, the owner leaves its last generated copy
+in place and reports the error. It refuses to overwrite a generated copy edited on
+disk; preserve or remove that copy before publishing again. Navigating away or
+reloading resets its internal state. The owner exits on stop, SIGINT,
 SIGTERM, an ended Lavish session, or a listener error. It does not start a
 background daemon. A second owner is refused; an unreachable live process is
 not replaced. A stale record is reclaimed only when its recorded process is
