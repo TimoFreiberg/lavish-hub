@@ -46,7 +46,7 @@ export async function createHubCommands(directory, cwd, validate = async () => t
           child.stdin.end(body.stdin || '');
           const timer = setTimeout(() => { state.timedOut = true; kill(child); }, timeoutMs);
           child.on('close', (code, signal) => {
-            clearTimeout(timer); running.delete(body.id);
+            clearTimeout(timer); kill(child); running.delete(body.id);
             resolve({ id: body.id, status: 'finished', code, signal, timedOut: state.timedOut, cancelled: state.cancelled, truncated, stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8'), ...(failure ? { error: failure } : {}) });
           });
         });

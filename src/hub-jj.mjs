@@ -55,7 +55,7 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
   }
   async function versions(changeId) {
     const op = await operation(cwd);
-    return rows(cwd, op, 'all()').then(items => items.filter(item => item.changeId === changeId));
+    return rows(cwd, op, `change_id(${changeId})`).then(items => items.filter(item => item.changeId === changeId));
   }
   async function describe(request) {
     const { changeId, commitId, expectedDescription, description } = request;
