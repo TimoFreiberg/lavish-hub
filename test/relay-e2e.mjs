@@ -1,7 +1,7 @@
 // Run with a working hc service: node test/relay-e2e.mjs
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,9 +50,27 @@ try {
   await card.locator('textarea').fill('Hub hc feedback'); await card.getByRole('button', { name: 'Queue' }).click();
   await page.getByRole('button', { name: 'Send to Agent', exact: true }).click();
   const notice = await until(async () => { const text = await run('hc', ['read', result.address]); return text.includes('Hub hc feedback') && text.includes('agent-notification') ? text : null; });
-  assert.ok(notice.includes('lavish-kit reply')); assert.ok(notice.includes('Published hub review'));
-  await run(process.execPath, [cli, 'reply', record.page, '--agent-reply', 'Hub hc reply']);
+  const notification = notice.split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }).find(item => item.type === 'agent-notification' && JSON.stringify(item.prompts).includes('Hub hc feedback'));
+  assert.ok(notification, notice);
+  assert.equal(notification.workspace, identity.root);
+  assert.equal(notification.page, record.page);
+  const canonicalSource = await realpath(source);
+  assert.equal(notification.snapshotDocument, canonicalSource);
+  assert.ok(notification.snapshotPage);
+  assert.ok(notification.prompts.some(prompt => prompt.document === canonicalSource && prompt.page === notification.snapshotPage));
+  assert.match(notification.reply, /^lavish-kit reply /);
+  const command = notification.reply.replace("'...'", "'Hub hc reply'");
+  assert.notEqual(command, notification.reply);
+  await run('/bin/sh', ['-c', command], { env: { ...env, PATH: `${path.dirname(cli)}${path.delimiter}${env.PATH}` } });
   await page.getByText('Hub hc reply', { exact: false }).first().waitFor({ timeout: 20000 });
+  const markdown = path.join(dir, 'notes.md');
+  await writeFile(markdown, '# Original\n');
+  await run(process.execPath, [cli, 'hub', 'publish', markdown, '--id', 'notes', '--workspace', repo]);
+  const editor = page.frameLocator('#artifact').getByRole('textbox', { name: 'Document Markdown' });
+  await editor.waitFor({ timeout: 20000 });
+  await editor.fill('# Edited in hc\n');
+  await page.frameLocator('#artifact').getByRole('button', { name: 'Save', exact: true }).click();
+  await until(async () => (await readFile(markdown, 'utf8')) === '# Edited in hc\n');
   await run(process.execPath, [cli, 'hub', 'stop', '--workspace', repo]);
   await until(async () => { try { await readFile(runtime); return false; } catch (error) { if (error.code === 'ENOENT') return true; throw error; } });
   console.log('PASS: hc owner received scoped annotation and browser displayed reply; owner stopped');

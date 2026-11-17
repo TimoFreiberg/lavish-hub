@@ -55,8 +55,7 @@ Each full run uses private Lavish and XDG directories and
 checks the private Lavish session list and looks for processes inheriting a unique
 run marker, including detached children. The final audit allows up to five
 seconds for normal detached shutdown before failing, without killing processes.
-Relay workers also carry the marker in
-their arguments. The screenshot helper checks its own separate private sessions
+The screenshot helper checks its own separate private sessions
 before removing its state. Processes that discard the marker cannot be identified
 by this audit. On failure, the run directory is
 retained for inspection.
@@ -112,14 +111,14 @@ only its own private `HC_SESSION`, with a short private socket directory under
 It creates a scratch jj repository and isolated terminals
 (`hc run --bg --no-parent --no-notify`) with synthetic space labels, and checks:
 
-- delivery follows a moved session label,
-- the exact saved bytes, page updates, and agent notices,
-- Create PR with a stub command from a temporary `XDG_CONFIG_HOME`: a mock
-  validates the `tab.new` request and persisted launch checkpoint, then starts
-  the stub through real `hc` (no PR command or GitHub access),
-- that opening commands return before edits,
-- that a watch-only Markdown page updates in the browser and its worker stops
-  when the session ends.
+- a foreground hub owner in a real hc terminal receives HTML annotation feedback,
+- the notification identifies the workspace, page, and published document,
+- the printed reply command delivers a response visible in the browser,
+- editing and saving a published Markdown document writes the expected bytes,
+- the owner stops and removes its runtime record.
+
+Hub integration tests separately cover stale saves and the PR launch checkpoint
+with a mocked herdr app. They do not exercise the removed relay or retarget workflow.
 
 It ends its pages and removes only its own workers, logs, terminals, and temporary
 files. It never sends to the terminal you run it from. Don't point tests at
@@ -131,7 +130,7 @@ integration and phone artifact behavior require manual desktop testing.
 ```sh
 npm ci            # development dependencies, once
 just shots
-lavish-kit shots/index.html
+# Open shots/index.html in a browser
 ```
 
 Runs `scripts/shots.mjs` with `HC_TERMINAL_ID` unset, headless Chromium, and
@@ -139,18 +138,14 @@ real Lavish sessions on a private Lavish server (temporary state, config, and
 data directories, its own port, no workers). It replaces the gitignored
 `shots/` directory with:
 
-- 18 wide (1440×900), dark viewport PNGs: static HTML, Markdown, populated diff, long task edit, and configured PR rendered; real-Lavish populated diff, changed-on-disk task edit, configured PR edit, and ten hub states,
+- eight wide (1440×900), dark primary viewport PNGs covering static and real-Lavish hub views,
 - full-page and scrolled-pane captures for selected pages that scroll,
 - `preview/`, the generated interactive static artifact used for static checks,
 - `report.json` (schema version 2) with static and integration check records, timings, and cleanup result; unlike version 1, records distinguish their source and diagnostic-only cases need not have a PNG,
 - `index.html`, a gallery linking the preview and distinguishing check-only records from captures.
 
-Fixtures cover HTML, Markdown with highlighted code and frontmatter, a jj diff
-(additions, deletions, renames, long lines, 180 added lines), an empty diff,
-short, long, and empty task files in both views, the unsaved-edit/disk-change
-banner, and PR drafts in both views with and without `createPr`. Git diffs use
-the same renderer, so there is no git matrix. Diff and PR metadata use fixed
-values so temporary paths don't change the layout. The simulated hub fixtures are
+Fixtures use a scratch jj diff with additions, deletions, renames and long lines.
+The simulated hub fixtures are
 `hub-empty`, `hub-stack`, `hub-dirty`, `hub-conflict`, `hub-disconnected`,
 `hub-changes`, `hub-tasks`, `hub-pr`, `hub-markdown`, and `hub-html`. They use
 the hub UI and deterministic action responses, not a live workspace owner.
@@ -158,7 +153,7 @@ the hub UI and deterministic action responses, not a live workspace owner.
 Every fixture is checked at both viewport sizes and themes, separately for the
 static artifact and real Lavish. Only selected cases produce primary PNGs.
 Real-Lavish cases also check Lavish's own layout issues using a fresh complete
-audit (Lavish 0.1.96's layout-diagnostics and layout-warnings endpoints). An
+audit (the packaged Lavish layout-diagnostics and layout-warnings endpoints). An
 incomplete audit fails the case. Both static and real-Lavish cases check:
 
 - Page and console errors.
@@ -180,11 +175,12 @@ serves from local development dependencies. A full run takes a few minutes.
 
 After UI work, open the changed PNGs at their original size.
 
-For a transport-only memory comparison at 1, 5, and 20 concurrent polls, run
-`node scripts/measure-lavish.mjs`. See [docs/lavish-http.md](docs/lavish-http.md)
-for what the RSS totals include and exclude.
+## Historical timing comparison
 
-## Timing comparison
+The measurements below describe an earlier standalone test matrix and are not
+representative of the current hub-only suite.
+
+## Earlier measurements
 
 Measured on the same macOS checkout and installed tools, against base
 `ea94b395edd61f7273d0c331292998b8b38a36ee`, using `/usr/bin/time -p` around

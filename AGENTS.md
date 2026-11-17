@@ -15,6 +15,9 @@ without a trailing period. Leave the working-copy change empty after
 committing. Advancing and pushing `main` is authorized through the development
 process below; other bookmark moves require the operator's approval.
 
+This is a personal interactive tool. Prefer pragmatic changes and short cycle times;
+general-user compatibility and checkout-runtime installation are not required.
+
 This is a public repo. Keep private names, work details, credentials, hostnames,
 and absolute home paths out of code, tests, and docs. Use `$HOME`/XDG paths in
 examples. Never read or print secrets to inspect an environment or config.

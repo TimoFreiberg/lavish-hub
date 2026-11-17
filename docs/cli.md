@@ -1,105 +1,15 @@
-# Commands and options
+# Command reference
 
-This is the full list of lavish-kit commands, options, output, and exit codes.
-`lavish-kit --help` prints a shorter version.
-
-## Commands
-
-```sh
-lavish-kit <file.html|file.md|file.markdown> [--title T] [--out FILE] [--open] [--reopen]
-lavish-kit diff [-r REV | --from A --to B] [--git] [--title T] [--out FILE] [--open] [--reopen]
-lavish-kit diff - [--repo-root DIR] [--title T] [--out FILE] [--open] [--reopen]
-lavish-kit pr <pr.md|pr.markdown> [-r REV] [--title T] [--out FILE] [--open] [--reopen]
-lavish-kit retarget <page.html> [--terminal T]
-lavish-kit hub listen [--workspace DIR] [--open] [--reopen]
-lavish-kit hub [--workspace DIR] [--view VIEW] [--open]
+```text
+lavish-kit hub [listen|stop|status] [--workspace DIR] [--open] [--reopen]
 lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
 lavish-kit hub tasks --file FILE [--workspace DIR]
 lavish-kit hub pr [--file FILE] [--rev REV] [--workspace DIR]
-lavish-kit hub stop [--workspace DIR]
-lavish-kit --help
+lavish-kit reply PAGE --agent-reply TEXT
 ```
 
-| Command | Opens |
-| --- | --- |
-| `FILE.html` | The HTML file itself, or a copy at `--out` |
-| `FILE.md`, `FILE.markdown` | A rendered-first editable page ([markdown.md](markdown.md)) |
-| `diff` | A diff page for a jj or git range ([diffs.md](diffs.md)) |
-| `diff -` | A diff page for a patch read from stdin, not watched |
-| `pr FILE` | A PR draft page, run from the jj repository the PR is for ([pr-drafts.md](pr-drafts.md)) |
-| `retarget PAGE` | Nothing. It sends retained feedback to a new herdr terminal ([feedback-routing.md](feedback-routing.md#retarget)) |
+`hub listen` owns a workspace in the foreground; wait until it is ready before using the short commands. `hub` and `hub status` report its status; `hub --view ID` selects a view. `hub stop` requests shutdown. `publish` registers an existing HTML or Markdown file, `tasks` attaches a task file, and `pr` configures a PR draft or revision. `--open` opens an existing review, and `--reopen` permits an explicitly ended review to reopen when starting the owner. `--workspace` selects the jj workspace instead of the current directory.
 
-File extensions are matched case-insensitively. The source file must exist.
+The owner prints each feedback batch as a JSON line with a `reply` command. Replace its placeholder with your response and run it; do not start a second polling consumer. See [hub](hub.md) for document scope, safety, and lifecycle details.
 
-The [hub guide](hub.md) describes the hub commands and their options. `listen`
-owns the foreground runtime and its exclusive feedback poll; the remaining hub
-commands require that live owner. `--workspace DIR` chooses a jj workspace,
-`--view` selects a built-in view or published ID, and `publish` registers a
-source and optional reviewed-scope metadata. `tasks` attaches a Markdown file;
-`pr` attaches a draft and/or changes the head expression; `stop` shuts down the
-owner. Hub output and lifetime differ from the standalone commands below.
-
-## Options
-
-The following table describes standalone commands; hub options are listed above
-and in [hub.md](hub.md).
-
-| Option | Commands | Meaning |
-| --- | --- | --- |
-| `--title T` | all except `retarget` | Title under herdr's Artifacts and in delivered feedback. Defaults: HTML uses its `<title>`, then the file name. Markdown uses frontmatter `title`, the first H1, then the file name. Task pages use the file name, PR pages `PR: <draft title>`, diffs `Diff review`. |
-| `--out FILE` | all except `retarget` | Write the page to FILE instead of the default under `${XDG_DATA_HOME:-$HOME/.local/share}/lavish-kit/pages/`. FILE must be outside the reviewed repository (for `pr`, also outside the repository the command runs in). |
-| `--open` | all except `retarget` | Open the URL in a browser (`open` on macOS, `xdg-open` on Linux) if the page wasn't listed under herdr's Artifacts. |
-| `--reopen` | all except `retarget` | Reopen a review the user ended. Use it only when they ask. |
-| `-r REV` | `diff`, `pr` | `diff`: a jj revset, or an `A..B` range in git. `pr`: the head revision (default `@-`). |
-| `--from A --to B` | `diff` | Diff two revisions. Both are required, and they conflict with `-r`. |
-| `--git` | `diff` | Use git even inside a jj repository. |
-| `-` | `diff` | Read a patch from stdin. Conflicts with `--git`, `-r`, `--from`, and `--to`. |
-| `--repo-root DIR` | `diff -` | Directory the patch's paths are relative to (default: the current working directory, not its repository root). Pass the repository root when the patch has repository-relative paths and you run from a subdirectory. |
-| `--terminal T` | `retarget` | A live herdr terminal address or unique name to deliver to. |
-
-Each option may be given once.
-
-## Output
-
-Each opening command returns once the page is open in Lavish and its
-background worker has started. It prints two lines. The first is one of:
-
-```text
-Lavish review of PAGE is listed under the task's Artifacts.
-Lavish review of PAGE ready: URL (ask the user to open it)
-```
-
-The second says who handles feedback:
-
-```text
-Feedback is delivered automatically; do not poll PAGE.
-Feedback requires agent polling: lavish-axi poll 'PAGE'.
-```
-
-Follow the second line. With automatic delivery, answer with
-`lavish-axi reply PAGE --agent-reply '...'` and never poll. With polling, use
-`lavish-axi poll`, `reply`, and `end` as with plain Lavish
-([feedback-routing.md](feedback-routing.md)).
-
-If the user ended the review, the command prints this instead and opens
-nothing:
-
-```text
-The user ended the Lavish review of PAGE; pass --reopen only if they ask to see it again.
-```
-
-`retarget` prints `Retargeted PAGE to TARGET; delivered N outbox batch(es).`
-and, if delivery failed, how many batches remain.
-
-## Exit codes
-
-| Code | Meaning |
-| --- | --- |
-| 0 | Success |
-| 1 | Runtime failure (message on stderr), or `retarget` left batches in the outbox |
-| 2 | Usage error. stderr has the reason and the usage summary. |
-
-## Ending a review
-
-End a review with `lavish-axi end PAGE`, or Send & End in the browser. The
-worker delivers the final feedback and exits.
+`--help` prints usage. Exit status 0 indicates success, 2 indicates invalid arguments, and 1 indicates a runtime error. `reply` forwards the packaged Lavish command's exit status or signal. Removed standalone commands are not accepted; see [workflow gaps](hub-gaps.md).
