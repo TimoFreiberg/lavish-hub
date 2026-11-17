@@ -102,7 +102,7 @@ exploration only when required behavioral coverage remains.
 
 ## `just test-e2e`
 
-Runs `test/relay-e2e.mjs` through the isolated runner. It requires a working
+Runs `test/hub-e2e.mjs` through the isolated runner. It requires a working
 `hc` installation, but not the herdr desktop app. The runner starts and stops
 only its own private `HC_SESSION`, with a short private socket directory under
 `/tmp` to fit macOS socket-path limits. It never stops the user's service.

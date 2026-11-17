@@ -1,4 +1,4 @@
-// Run with a working hc service: node test/relay-e2e.mjs
+// Run with a working hc service: node test/hub-e2e.mjs
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 import { resolveWorkspace } from '../src/hub-workspace.mjs';
-import { cleanupTerminals } from './relay-e2e-cleanup.mjs';
+import { cleanupTerminals } from './hub-e2e-cleanup.mjs';
 
 const exec = promisify(execFile), cli = path.resolve('bin/lavish-kit');
 const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-hc-e2e-'));

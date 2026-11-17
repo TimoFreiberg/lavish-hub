@@ -10,7 +10,7 @@ import { resolveWorkspace, resolveRecordedWorkspace, recordWorkspace, workspaceM
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
 import { quote } from './quote.mjs';
-import { ensureDeps } from './deps.mjs';
+import { ensureHubAssets } from './deps.mjs';
 import { composeHubHtml } from './hub-html.mjs';
 
 const startup = 'Start one with lavish-kit hub listen --workspace DIR';
@@ -208,7 +208,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       stop: async () => { setImmediate(stop); return { stopping: true }; },
     }, { resource: id => documents.list().documents.find(doc => doc.id === id)?.source, guardSource });
     const web = new URL('../web/', import.meta.url);
-    const { dist } = await ensureDeps();
+    const dist = await ensureHubAssets();
     const [script, style, diffScript, diffStyle, markdownScript, documentStyle] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8'), readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'), readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8')]);
     await writeSiblings();
     const config = JSON.stringify({ url: transport.url, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root }).replaceAll('<', '\\u003c');

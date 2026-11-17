@@ -42,7 +42,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(npm, '#!/bin/sh\nln -s "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
   const execute = promisify(execFile);
   const depsModule = new URL('../src/deps.mjs', import.meta.url).href;
-  await execute(process.execPath, ['--input-type=module', '-e', `import { ensureDeps } from ${JSON.stringify(depsModule)}; await ensureDeps();`], { env: { ...env, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
+  await execute(process.execPath, ['--input-type=module', '-e', `import { ensureHubAssets } from ${JSON.stringify(depsModule)}; await ensureHubAssets();`], { env: { ...env, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const ownerScript = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; process.exitCode = await runHubOwner({ workspace: process.argv[1] }, { prepare: async (_page, options) => { if (!options.vendored) throw Error('expected vendored'); return { url: 'http://localhost:123/review' }; } });`;
   const ownerArgs = ['--input-type=module', '-e', ownerScript, repo];

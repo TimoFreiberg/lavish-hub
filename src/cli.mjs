@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { callHub, runHubOwner } from './hub-runtime.mjs';
 import { readMetadata } from './hub-documents.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
+import { createLavishClient } from './lavish-http.mjs';
 
 const usage = `usage: lavish-kit hub [listen|stop|status] [--workspace DIR] [--open] [--reopen]
        lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
@@ -57,6 +58,7 @@ export function parseArgs(args) {
 }
 
 async function reply(page, text) {
+  await createLavishClient().verifyIfRunning();
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [lavishCli, 'reply', page, '--agent-reply', text], { env: runtimeEnv(), stdio: 'inherit' });
     child.once('error', reject);

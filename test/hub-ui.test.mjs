@@ -4,7 +4,7 @@ import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { chromium } from 'playwright-core';
 import { createHubTransport } from '../src/hub-transport.mjs';
-import { ensureDeps } from '../src/deps.mjs';
+import { ensureHubAssets } from '../src/deps.mjs';
 import path from 'node:path';
 
 test('published Markdown previews relative assets and retains conflicting edits', { timeout: 120000 }, async t => {
@@ -21,7 +21,7 @@ test('published Markdown previews relative assets and retains conflicting edits'
   }, { resource: id => id === 'review' ? source : undefined });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); await rm(dir, { recursive: true, force: true }); });
-  const { dist } = await ensureDeps();
+  const dist = await ensureHubAssets();
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = await readFile(path.join(dist, 'hub-markdown.js'), 'utf8');
   const page = await browser.newPage();
@@ -52,7 +52,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
-  const { dist } = await ensureDeps();
+  const dist = await ensureHubAssets();
   const bundle = await readFile(path.join(dist, 'diff-app.js'), 'utf8');
   const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
   const page = await browser.newPage();

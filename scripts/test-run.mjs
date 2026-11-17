@@ -62,7 +62,7 @@ if (mode === 'test-worker') {
   }
   if (controller.signal.aborted) status = 1;
 } else {
-  const args = [mode === 'e2e' ? 'test/relay-e2e.mjs' : 'scripts/shots.mjs'];
+  const args = [mode === 'e2e' ? 'test/hub-e2e.mjs' : 'scripts/shots.mjs'];
   status = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, { env, stdio: 'inherit' });
     const interrupt = () => child.kill('SIGINT'), terminate = () => child.kill('SIGTERM');

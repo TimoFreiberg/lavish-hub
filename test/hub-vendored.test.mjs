@@ -17,7 +17,7 @@ async function warmDeps(dir, env) {
   await writeFile(npm, '#!/bin/sh\nln -s "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
   const deps = new URL('../src/deps.mjs', import.meta.url).href;
   // Dependency installation and bundling are not part of hub startup checks.
-  await run(process.execPath, ['--input-type=module', '-e', `import { ensureDeps } from ${JSON.stringify(deps)}; await ensureDeps();`], { env: { ...env, PATH: `${dir}:${env.PATH}`, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
+  await run(process.execPath, ['--input-type=module', '-e', `import { ensureHubAssets } from ${JSON.stringify(deps)}; await ensureHubAssets();`], { env: { ...env, PATH: `${dir}:${env.PATH}`, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
 }
 test('hub opens with the vendored server rather than PATH and polls its protocol', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-vendored-'));

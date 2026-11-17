@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, mkdir, access, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { cleanupTerminals } from './relay-e2e-cleanup.mjs';
+import { cleanupTerminals } from './hub-e2e-cleanup.mjs';
 
 test('e2e_cleanup_failure_validation', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'relay-cleanup-test-'));

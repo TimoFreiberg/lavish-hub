@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import { ensureHubAssets } from '../src/deps.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { runtimeEnv, lavishCli } from '../src/runtime.mjs';
 
@@ -24,6 +27,12 @@ test('reply parsing preserves argument boundaries', () => {
   for (const args of [['reply'], ['reply', 'page', '--agent-reply'], ['reply', 'page', '--agent-reply', 'x', 'extra']]) {
     assert.throws(() => parseArgs(args), /reply requires/);
   }
+});
+
+test('missing hub assets retain their actionable error', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'hub-assets-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await assert.rejects(ensureHubAssets({ root }), /Hub assets missing; build the package for development/);
 });
 
 test('runtime defaults and explicit overrides agree', () => {
