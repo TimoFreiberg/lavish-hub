@@ -41,6 +41,13 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
     return json(`${base}${endpoint}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: boundedSignal() });
   }
   return {
+    async verifyIfRunning() {
+      try { return await verify(); }
+      catch (error) {
+        if (error.cause?.code === 'ECONNREFUSED') return null;
+        throw error;
+      }
+    },
     async poll(file, owner, { timeoutMs } = {}) {
       await verify();
       const absolute = await realpath(file);

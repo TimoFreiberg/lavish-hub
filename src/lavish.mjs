@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { ensureRelay, quote, recordTarget } from './relay.mjs';
+import { createLavishClient } from './lavish-http.mjs';
 
 const exec = promisify(execFile);
 
@@ -35,6 +36,7 @@ export async function prepareReview(file, { reopen = false, log = console.log, v
   file = path.resolve(file);
   let result;
   const cli = new URL('../vendor/lavish/dist/cli.mjs', import.meta.url);
+  if (vendored) await createLavishClient({ vendored: true }).verifyIfRunning();
   try {
     if (vendored) await readFile(cli, { flag: 'r' });
     result = await exec(vendored ? process.execPath : 'lavish-axi', [...(vendored ? [fileURLToPath(cli)] : []), file, '--no-open', ...(reopen ? ['--reopen'] : [])]);

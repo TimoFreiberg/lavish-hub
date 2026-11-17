@@ -51,6 +51,32 @@ test('hub HTTP requires the patched version and matching state before polling', 
   assert.equal(polls, 1);
 });
 
+test('vendored preflight only permits refusal or a compatible server', async t => {
+  const x = await fixture(t); let calls = 0;
+  const refused = createLavishClient({ env: x.env, vendored: true, fetch: async () => {
+    throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+  } });
+  assert.equal(await refused.verifyIfRunning(), null);
+  const client = createLavishClient({ env: x.env, vendored: true, fetch: async (url, options) => {
+    calls++;
+    assert.equal(new URL(url).pathname, '/health');
+    assert.equal(options.method, undefined);
+    return Response.json(x.health);
+  } });
+  x.health.version = '0.1.97';
+  await assert.rejects(client.verifyIfRunning(), /UNSUPPORTED_LAVISH/);
+  x.health.lavish_kit_page_reviews = 1;
+  x.health.state_id = 'other';
+  await assert.rejects(client.verifyIfRunning(), /STATE_MISMATCH/);
+  x.health.state_id = keyFor(path.join(await realpath(x.state), 'state.json'));
+  assert.equal((await client.verifyIfRunning()).ok, true);
+  assert.equal(calls, 3);
+  const malformed = createLavishClient({ env: x.env, vendored: true, fetch: async () => new Response('not json') });
+  await assert.rejects(malformed.verifyIfRunning(), SyntaxError);
+  const timeout = createLavishClient({ env: x.env, vendored: true, fetch: async () => { throw new Error('timeout'); } });
+  await assert.rejects(timeout.verifyIfRunning(), /timeout/);
+});
+
 test('HTTP preserves feedback, listener errors, cancellation, and non-consuming listings', async t => {
   const x = await fixture(t), calls = []; let result = { status: 'feedback', prompts: [{ id: 'p1', prompt: 'Keep exactly', tag: 'save', target: { path: 'odd path' } }], artifact_failures: [{ kind: 'load', detail: 'missing' }], session_ended: true, ended_by: 'user', dom_snapshot: '<main>', snapshot_page: 'tasks.html' };
   const controller = new AbortController();
