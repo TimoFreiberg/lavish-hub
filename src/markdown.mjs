@@ -50,6 +50,15 @@ export async function renderMarkdown(source, deps) {
   const langs = [...new Set(tokens.filter(token => token.type === 'fence')
     .map(token => md.utils.unescapeAll(token.info).trim().split(/\s+/)[0])
     .filter(lang => Object.hasOwn(bundledLanguages, lang)))];
+  // Lazy embedded grammars are otherwise available only when all languages are loaded.
+  for (let i = 0; i < langs.length; i++) {
+    const { default: grammars } = await bundledLanguages[langs[i]]();
+    for (const grammar of grammars) {
+      for (const embedded of grammar.embeddedLangsLazy || []) {
+        if (Object.hasOwn(bundledLanguages, embedded) && !langs.includes(embedded)) langs.push(embedded);
+      }
+    }
+  }
   md.use(await shiki({ themes: { light: 'github-light', dark: 'github-dark' }, langs, fallbackLanguage: 'text' }));
   md.use(accessibleCodeBlocks);
   const firstHeading = tokens.findIndex(token => token.type === 'heading_open' && token.tag === 'h1');
