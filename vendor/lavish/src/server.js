@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
+import * as zlib from "node:zlib";
 
 import chokidar from "chokidar";
 import express from "express";
@@ -354,6 +355,36 @@ function artifactEntryUrl(session) {
   return artifactDocumentUrl(session.key, entryRoute);
 }
 
+function artifactEncoding(header) {
+  const qualities = new Map();
+  for (const part of (header || "").split(",")) {
+    const [name, ...params] = part.trim().toLowerCase().split(";");
+    if (!name) continue;
+    let quality = 1;
+    for (const param of params) {
+      const match = /^\s*q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)\s*$/.exec(param);
+      if (!match) {
+        quality = 0;
+        break;
+      }
+      quality = Number(match[1]);
+    }
+    qualities.set(name, quality);
+  }
+  const wildcard = qualities.get("*");
+  const quality = (name) => qualities.get(name) ?? (name === "identity" ? (wildcard === 0 ? 0 : 1) : (wildcard ?? 0));
+  const candidates = [...(typeof zlib.zstdCompress === "function" ? ["zstd"] : []), "gzip", "identity"];
+  candidates.sort((a, b) => quality(b) - quality(a));
+  return { encoding: quality(candidates[0]) > 0 ? candidates[0] : null, identityAllowed: quality("identity") > 0 };
+}
+
+function compressArtifactBytes(encoding, bytes) {
+  return new Promise((resolve, reject) => {
+    const compress = encoding === "zstd" ? zlib.zstdCompress : zlib.gzip;
+    compress(bytes, (error, result) => (error ? reject(error) : resolve(result)));
+  });
+}
+
 /**
  * @param {{ [key: string]: any }} [options]
  */
@@ -380,6 +411,7 @@ export async function serve({
   artifactPageOpen,
   artifactPageStat,
   artifactAssetOpen,
+  compressArtifact = compressArtifactBytes,
 } = {}) {
   // Keep the transport dependency off fast metadata paths such as `--version`.
   const { WebSocket, WebSocketServer } = await import("ws");
@@ -2305,6 +2337,33 @@ export async function serve({
         "<!doctype html><title>Artifact load expired</title><p>This artifact load is no longer current. Reload Lavish to continue.</p>",
       );
 
+  async function prepareArtifactHtml(req, res, html) {
+    res.vary("Accept-Encoding");
+    res.setHeader("cache-control", "no-store");
+    const choice = artifactEncoding(req.get("Accept-Encoding"));
+    if (!choice.encoding) return null;
+    let encoding = choice.encoding;
+    let bytes = Buffer.from(html);
+    if (encoding !== "identity") {
+      try {
+        bytes = await compressArtifact(encoding, bytes);
+      } catch (error) {
+        if (!choice.identityAllowed) throw error;
+        encoding = "identity";
+      }
+    }
+    return { encoding, bytes };
+  }
+
+  function sendArtifactHtml(res, representation) {
+    if (!representation) {
+      res.status(406).send("Not acceptable");
+      return;
+    }
+    if (representation.encoding !== "identity") res.setHeader("content-encoding", representation.encoding);
+    res.type("html").send(representation.bytes);
+  }
+
   async function serveLegacyVirtualEntry(req, res) {
     const key = req.params[0];
     const token = String(req.query.artifact_load_token || "");
@@ -2352,8 +2411,17 @@ export async function serve({
       expiredArtifactLoad(res);
       return;
     }
-    res.setHeader("cache-control", "no-store");
-    res.type("html").send(injectLavishSdk(html, key, verified.artifact_revision, verified.artifact_load_token));
+    const representation = await prepareArtifactHtml(
+      req,
+      res,
+      injectLavishSdk(html, key, verified.artifact_revision, verified.artifact_load_token),
+    );
+    const current = await store.verifyArtifactLoad(key, token, revision);
+    if (!current?.valid) {
+      expiredArtifactLoad(res);
+      return;
+    }
+    sendArtifactHtml(res, representation);
   }
 
   async function serveArtifactPath(req, res, requestedPath = undefined) {
@@ -2423,10 +2491,10 @@ export async function serve({
         expiredArtifactLoad(res);
         return;
       }
-      if (pinned && loadDestinations.get(key) === recovered) recovered.documentRead = true;
-      res.setHeader("cache-control", "no-store");
       const chromeNonce = createChromeAuthNonce();
-      res.type("html").send(
+      const representation = await prepareArtifactHtml(
+        req,
+        res,
         injectLavishSdk(
           html,
           key,
@@ -2442,6 +2510,18 @@ export async function serve({
           },
         ),
       );
+      const current = await store.currentArtifactLoad(key);
+      if (
+        hadActiveGeneration &&
+        (!current?.valid ||
+          current.artifact_revision !== beforeRead.artifact_revision ||
+          current.artifact_load_token !== beforeRead.artifact_load_token)
+      ) {
+        expiredArtifactLoad(res);
+        return;
+      }
+      if (representation && pinned && loadDestinations.get(key) === recovered) recovered.documentRead = true;
+      sendArtifactHtml(res, representation);
       return;
     }
 

@@ -8,6 +8,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
+import * as zlib from "node:zlib";
 import WebSocket from "ws";
 
 process.env.LAVISH_AXI_HOST = "127.0.0.1";
@@ -2801,6 +2802,112 @@ test("a fatal artifact failure still wakes the poll without user action", async 
     assert.equal(poll.status, "feedback");
     assert.equal(poll.artifact_failures.length, 1);
     assert.equal(poll.artifact_failures[0].severity, "fatal");
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("artifact HTML negotiates compression and rejects expired compressed loads", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-compression-"));
+  const artifact = path.join(dir, "artifact.html");
+  await writeFile(artifact, `<!doctype html><html><body>${"hello ".repeat(500)}</body></html>`);
+  let pause = false;
+  let fail = false;
+  let entered;
+  let release;
+  const server = await serve({
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    compressArtifact: async (encoding, bytes) => {
+      if (pause) {
+        entered();
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+      }
+      if (fail) throw new Error("compression failed");
+      return new Promise((resolve, reject) =>
+        zlib[encoding === "zstd" ? "zstdCompress" : "gzip"](bytes, (error, result) =>
+          error ? reject(error) : resolve(result),
+        ),
+      );
+    },
+  });
+  const wire = (url, encoding, method = "GET") =>
+    new Promise((resolve, reject) => {
+      const req = httpRequest(url, { method, headers: { "accept-encoding": encoding } }, (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+        res.on("error", reject);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const { key } = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    }).then((res) => res.json());
+    pause = true;
+    const firstStarted = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const firstResponse = wire(`${base}/artifact/${key}/artifact.html`, "gzip");
+    await firstStarted;
+    let load = await beginArtifactLoad(base, key);
+    pause = false;
+    release();
+    assert.equal((await firstResponse).status, 200);
+    for (const route of [() => artifactLoadUrl(base, key, load), () => `${base}/artifact/${key}/artifact.html`]) {
+      const identity = await wire(route(), "identity");
+      assert.equal(identity.status, 200);
+      assert.match(identity.body.toString(), /sdk\.js\?key=/);
+      assert.equal(identity.headers["cache-control"], "no-store");
+      assert.match(identity.headers.vary, /Accept-Encoding/i);
+      for (const [accept, expected] of [
+        ["gzip", "gzip"],
+        ["gzip;q=0, *;q=1", typeof zlib.zstdCompress === "function" ? "zstd" : undefined],
+        ["gzip;q=0.2, identity;q=0.8", undefined],
+        ["zstd, gzip", typeof zlib.zstdCompress === "function" ? "zstd" : "gzip"],
+      ]) {
+        const result = await wire(route(), accept);
+        assert.equal(result.status, 200);
+        assert.equal(result.headers["content-encoding"], expected);
+        assert.equal(Number(result.headers["content-length"]), result.body.length);
+        const decoded =
+          expected === "gzip"
+            ? zlib.gunzipSync(result.body)
+            : expected === "zstd"
+              ? zlib.zstdDecompressSync(result.body)
+              : result.body;
+        // Path responses contain a fresh authentication nonce on each request.
+        assert.match(decoded.toString(), /sdk\.js\?key=/);
+        assert.match(decoded.toString(), /hello hello/);
+      }
+      const head = await wire(route(), "gzip", "HEAD");
+      assert.equal(head.headers["content-encoding"], "gzip");
+      assert.ok(Number(head.headers["content-length"]) > 0);
+      assert.equal(head.body.length, 0);
+      assert.equal((await wire(route(), "*;q=0")).status, 406);
+      fail = true;
+      assert.equal((await wire(route(), "gzip, identity;q=0")).status, 500);
+      assert.equal((await wire(route(), "gzip")).headers["content-encoding"], undefined);
+      fail = false;
+      pause = true;
+      const started = new Promise((resolve) => {
+        entered = resolve;
+      });
+      const pending = wire(route(), "gzip");
+      await started;
+      load = await beginArtifactLoad(base, key);
+      pause = false;
+      release();
+      assert.equal((await pending).status, 409);
+    }
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });
