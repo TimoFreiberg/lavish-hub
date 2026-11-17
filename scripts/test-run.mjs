@@ -40,14 +40,15 @@ const port = await new Promise((resolve, reject) => {
   const server = net.createServer().once('error', reject);
   server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(error => error ? reject(error) : resolve(port)); });
 });
-const marker = randomUUID();
+const runId = randomUUID();
+const marker = [process.env.LAVISH_KIT_TEST_RUN, runId].filter(Boolean).join(',');
 const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_KIT_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
 delete env.HC_TERMINAL_ID;
 // Use a short directory to keep socket paths within macOS Unix socket limits.
 let hcRoot;
 if (mode === 'e2e') {
   hcRoot = await mkdtemp('/tmp/lk-hc-');
-  env.HC_SESSION = `lk-${marker.slice(0, 8)}`;
+  env.HC_SESSION = `lk-${runId.slice(0, 8)}`;
   env.HC_SOCKET = path.join(hcRoot, 'core.sock');
 }
 let status = 0;

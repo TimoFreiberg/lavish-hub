@@ -4,7 +4,7 @@ import { markedProcesses } from './test-process-audit.mjs';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Only processes in the private process group or bearing this run's marker are signalled.
-export async function runSupervised(args, { env, timeout, signal, grace = 2000 }) {
+export async function runSupervised(args, { env, timeout, signal, grace = 2000, audit = markedProcesses, kill = process.kill }) {
   if (signal?.aborted) return { code: 1, cancelled: true };
   const child = spawn(process.execPath, args, { env, stdio: 'inherit', detached: true });
   const exited = new Promise(resolve => {
@@ -23,23 +23,26 @@ export async function runSupervised(args, { env, timeout, signal, grace = 2000 }
   signal?.removeEventListener('abort', abort);
   if (typeof result !== 'string') return result;
 
+  const failures = [];
   const send = (pid, sig) => {
-    try { process.kill(pid, sig); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    try { kill(pid, sig); } catch (error) { if (error.code !== 'ESRCH') failures.push(error); }
   };
   // Capture marked detached children before stopping their parent; scan again after
   // the grace period for children created during shutdown.
   const stop = sig => {
-    let failure;
-    try { for (const pid of markedProcesses(env.LAVISH_KIT_TEST_RUN)) send(pid, sig); }
-    catch (error) { failure = error; }
-    try { if (child.pid) send(-child.pid, sig); } catch (error) { failure ??= error; }
-    return failure;
+    let pids = [];
+    try { pids = audit(env.LAVISH_KIT_TEST_RUN); } catch (error) { failures.push(error); }
+    for (const pid of pids) send(pid, sig);
+    if (child.pid) send(-child.pid, sig);
   };
-  let cleanupError = stop('SIGTERM');
+  stop('SIGTERM');
   await delay(grace);
-  cleanupError ??= stop('SIGKILL');
-  // Always attempt escalation, even if the first scan failed.
-  if (cleanupError) stop('SIGKILL');
-  await exited;
-  return { code: 1, [result === 'timeout' ? 'timedOut' : 'cancelled']: true, ...(cleanupError && { error: cleanupError }) };
+  stop('SIGKILL');
+  const exitResult = await Promise.race([exited, delay(grace).then(() => null)]);
+  if (!exitResult) {
+    child.unref();
+    failures.push(new Error('Test process did not exit after SIGKILL'));
+  }
+  const error = failures.length ? new AggregateError(failures, `Test cleanup failed: ${failures.map(failure => failure.message).join('; ')}`) : undefined;
+  return { code: 1, [result === 'timeout' ? 'timedOut' : 'cancelled']: true, ...(error && { error }) };
 }

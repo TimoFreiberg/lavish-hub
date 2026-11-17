@@ -11,7 +11,7 @@ import { markedProcesses } from '../scripts/test-process-audit.mjs';
 async function fixture(source, run) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'test-supervision-'));
   const file = path.join(root, 'fixture.test.mjs');
-  const marker = randomUUID();
+  const marker = [process.env.LAVISH_KIT_TEST_RUN, randomUUID()].filter(Boolean).join(',');
   const env = { ...process.env, LAVISH_KIT_TEST_RUN: marker };
   delete env.NODE_TEST_CONTEXT;
   try {
@@ -48,6 +48,75 @@ test('timeout stops detached marked descendants', { timeout: 10000 }, async () =
     const result = await runSupervised(args(file), options(env));
     assert.equal(result.timedOut, true);
     assert.ifError(result.error);
+    await assertNoProcesses(marker);
+  });
+});
+
+test('outer cancellation reaches nested supervised detached descendants', { timeout: 10000 }, async () => {
+  const supervisor = new URL('../scripts/test-supervision.mjs', import.meta.url).href;
+  const source = `import { runSupervised } from ${JSON.stringify(supervisor)};
+const inner = process.env.LAVISH_KIT_TEST_RUN + ',inner';
+const code = "const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'}).unref(); require('node:fs').writeFileSync(process.env.READY,'ready'); setInterval(()=>{},1000)";
+await runSupervised(['-e', code], { env: { ...process.env, LAVISH_KIT_TEST_RUN: inner }, timeout: 30000 });`;
+  await fixture(source, async ({ root, file, marker, env }) => {
+    env.READY = path.join(root, 'ready');
+    const controller = new AbortController();
+    const running = runSupervised([file], { ...options(env), timeout: 8000, signal: controller.signal });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!await readFile(env.READY, 'utf8').catch(() => '')) {
+        assert.ok(Date.now() < deadline, 'nested fixture did not start');
+        await delay(20);
+      }
+      assert.ok(markedProcesses(marker + ',inner').length >= 2);
+    } finally { controller.abort(); }
+    const result = await running;
+    assert.equal(result.cancelled, true);
+    assert.ifError(result.error);
+    await assertNoProcesses(marker);
+  });
+});
+
+test('cleanup continues after signal and audit errors and escalates', { timeout: 10000 }, async () => {
+  await fixture('', async ({ marker, env }) => {
+    const calls = [];
+    let scans = 0;
+    const result = await runSupervised(['-e', "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)"], {
+      ...options(env), timeout: 500,
+      audit: value => {
+        if (++scans === 1) return [99999999, ...markedProcesses(value)];
+        throw new Error('audit failed');
+      },
+      kill: (pid, signal) => {
+        calls.push([pid, signal]);
+        if (pid === 99999999) throw new Error('signal failed');
+        process.kill(pid, signal);
+      },
+    });
+    assert.equal(result.timedOut, true);
+    assert.match(result.error.message, /signal failed/);
+    assert.match(result.error.message, /audit failed/);
+    assert.ok(calls.some(([pid, signal]) => pid > 0 && pid !== 99999999 && signal === 'SIGTERM'));
+    assert.ok(calls.some(([pid, signal]) => pid < 0 && signal === 'SIGKILL'));
+    await assertNoProcesses(marker);
+  });
+});
+
+test('cleanup returns when signals cannot stop the child', { timeout: 10000 }, async () => {
+  await fixture('', async ({ marker, env }) => {
+    let pid;
+    try {
+      const result = await runSupervised(['-e', 'setInterval(()=>{},1000)'], {
+        ...options(env), timeout: 500,
+        audit: value => { const pids = markedProcesses(value); pid = pids[0] ?? pid; return pids; },
+        kill: () => { throw new Error('signal denied'); },
+      });
+      assert.equal(result.timedOut, true);
+      assert.match(result.error.message, /signal denied/);
+      assert.match(result.error.message, /did not exit/);
+    } finally {
+      if (pid) { try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+    }
     await assertNoProcesses(marker);
   });
 });
