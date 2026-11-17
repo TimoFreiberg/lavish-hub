@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full integrated commit SHA
+        required: true
+        type: string
+      version:
+        description: Package version without v
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: jj-cli
+      - name: Verify source and release availability
+        env:
+          SOURCE: ${{ inputs.commit }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          git merge-base --is-ancestor "$SOURCE" origin/main
+          test "$(node -p 'require("./package.json").version')" = "$VERSION"
+          test -z "$(git ls-remote --tags origin "refs/tags/v$VERSION")"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo 'Release already exists' >&2
+            exit 1
+          fi
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test --test-concurrency=1 test/hub-commands.test.mjs test/hub-foundation.test.mjs test/hub-jj.test.mjs
+      - name: Build package
+        env:
+          LAVISH_KIT_SOURCE_COMMIT: ${{ inputs.commit }}
+        run: node scripts/package.mjs "$RUNNER_TEMP/release"
+      - run: node test/package-smoke.mjs "$RUNNER_TEMP/release/lavish-kit.tgz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: jj-cli
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: release
+      - name: Verify and smoke test the built package
+        run: |
+          cd release
+          shasum -a 256 -c SHA256SUMS
+          cd ..
+          node --version
+          node test/package-smoke.mjs release/lavish-kit.tgz
+
+  publish:
+    needs: smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: release
+      - name: Publish tested package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE: ${{ inputs.commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          cd release
+          shasum -a 256 -c SHA256SUMS
+          test "$(node -p 'require("./release-metadata.json").source')" = "$SOURCE"
+          test "$(node -p 'require("./release-metadata.json").version')" = "$VERSION"
+          gh release create "v$VERSION" --target "$SOURCE" --title "v$VERSION" --notes "Release v$VERSION" lavish-kit.tgz SHA256SUMS release-metadata.json

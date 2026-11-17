@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -16,7 +16,7 @@ async function fixture(t) {
   const state = path.join(dir, 'state'); await mkdir(state);
   const file = path.join(dir, 'review.html'); await writeFile(file, '<!doctype html><html lang="en"><title>HTTP probe</title><p>Review</p></html>');
   const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_AXI_STATE_DIR: state };
-  const health = { ok: true, app: 'lavish-axi', version: supportedLavishVersion, state_id: keyFor(path.join(await realpath(state), 'state.json')) };
+  const health = { ok: true, app: 'lavish-axi', version: supportedLavishVersion, lavish_kit_page_reviews: 1, state_id: keyFor(path.join(await realpath(state), 'state.json')) };
   return { dir, state, file, env, health };
 }
 
@@ -41,7 +41,7 @@ test('hub HTTP requires the patched version and matching state before polling', 
     if (new URL(url).pathname === '/health') return Response.json(x.health);
     polls++; return Response.json({ status: 'waiting' });
   } });
-  x.health.version = '0.1.97';
+  delete x.health.lavish_kit_page_reviews;
   await assert.rejects(client.poll(x.file, 'test'), /UNSUPPORTED_LAVISH/);
   x.health.lavish_kit_page_reviews = 1; x.health.state_id = 'other';
   await assert.rejects(client.poll(x.file, 'test'), /STATE_MISMATCH/);
@@ -63,7 +63,7 @@ test('vendored preflight only permits refusal or a compatible server', async t =
     assert.equal(options.method, undefined);
     return Response.json(x.health);
   } });
-  x.health.version = '0.1.97';
+  delete x.health.lavish_kit_page_reviews;
   await assert.rejects(client.verifyIfRunning(), /UNSUPPORTED_LAVISH/);
   x.health.lavish_kit_page_reviews = 1;
   x.health.state_id = 'other';
@@ -106,8 +106,8 @@ test('real pinned Lavish accepts HTTP feedback, exclusive polls, reply, and end'
   const x = await fixture(t);
   const port = await new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(() => resolve(port)); }); });
   const env = { ...x.env, LAVISH_AXI_PORT: String(port), LAVISH_AXI_HOST: '127.0.0.1', LAVISH_AXI_NO_OPEN: '1' };
-  const binary = execFileSync('which', ['lavish-axi'], { encoding: 'utf8' }).trim();
-  const child = spawn(binary, ['server', '--port', String(port)], { env, stdio: 'ignore' });
+  const binary = path.resolve('vendor/lavish/dist/cli.mjs');
+  const child = spawn(process.execPath, [binary, 'server', '--port', String(port)], { env, stdio: 'ignore' });
   const exited = new Promise(resolve => child.once('exit', resolve));
   t.after(async () => { child.kill('SIGTERM'); await exited; });
   const base = `http://127.0.0.1:${port}`;

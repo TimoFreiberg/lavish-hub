@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { runtimeEnv } from './runtime.mjs';
 
 const exec = promisify(execFile);
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -22,7 +23,7 @@ async function canonicalPath(value) {
 }
 
 async function hubDirectory(root, env) {
-  const lavishState = await canonicalPath(env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.lavish-axi'));
+  const lavishState = await canonicalPath(runtimeEnv(env).LAVISH_AXI_STATE_DIR);
   const data = await canonicalPath(env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'));
   return path.join(data, 'lavish-kit', 'hubs', digest(`${lavishState}\0${root}`));
 }

@@ -44,7 +44,7 @@ test('browser launch and visual cleanup failures propagate through the pipeline'
         mode: 'shots', directory: root,
         publish: async (name, value) => snapshots.set(name, structuredClone(value)),
         execute: async name => {
-          assert.equal(name, 'shots');
+          if (name !== 'shots') return 0;
           return runShots(scenario === 'launch-failure' ? {} : {
             afterLaunch: () => false,
             ...(scenario === 'cleanup-failure' && { close: (browser, lavish) => closeVisualResources({ close: async () => { await browser.close(); throw new Error('injected browser cleanup failure'); } }, lavish) }),
@@ -109,6 +109,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
         await mkdir(path.join(root, 'bin'));
         await copyFile(new URL('../scripts/check.mjs', import.meta.url), path.join(root, 'scripts/check.mjs'));
         await writeFile(path.join(root, 'bin/npm'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+        await writeFile(path.join(root, 'scripts/prepare-check.mjs'), 'process.exit(0);\n');
         await writeFile(path.join(root, 'scripts/test-run.mjs'), `
 import { appendFile, access } from 'node:fs/promises';
 const name = process.argv[2];
@@ -168,7 +169,7 @@ await appendFile('events', name + ':ready\\n');
   }
 }
 
-for (const failing of [undefined, 'install', 'shots', 'test', 'e2e']) {
+for (const failing of [undefined, 'install', 'prepare', 'shots', 'test', 'e2e']) {
   test(`correctness pipeline preserves ordering and propagates ${failing || 'no'} failure`, async () => {
     const events = [], snapshots = new Map(); let active = 0, maximum = 0;
     const result = await runChecks({
@@ -187,13 +188,13 @@ for (const failing of [undefined, 'install', 'shots', 'test', 'e2e']) {
     });
     assert.equal(result.status, failing ? 'failed' : 'passed');
     assert.equal(events[1], 'install');
-    if (failing === 'install') {
+    if (failing === 'install' || failing === 'prepare') {
       assert.equal(events.includes('shots'), false); assert.equal(snapshots.has('screenshots-ready.json'), false);
     } else {
       assert.ok(events.indexOf('shots') < events.indexOf('test'));
       assert.equal(maximum, 2);
       assert.equal(snapshots.get('screenshots-ready.json').status, failing === 'shots' ? 'failed' : 'passed');
-      assert.deepEqual(Object.keys(result.stages).sort(), ['e2e', 'install', 'shots', 'test']);
+      assert.deepEqual(Object.keys(result.stages).sort(), ['e2e', 'install', 'prepare', 'shots', 'test']);
     }
     assert.equal(snapshots.get('status.json').status, result.status);
     assert.equal(result.screenshotReviewRequired, true);
@@ -213,7 +214,7 @@ for (const boundary of ['before checks', 'after install', 'after shots']) {
       },
     });
     assert.equal(result.status, 'failed');
-    assert.deepEqual(started, boundary === 'before checks' ? [] : boundary === 'after install' ? ['install'] : ['install', 'shots']);
+    assert.deepEqual(started, boundary === 'before checks' ? [] : boundary === 'after install' ? ['install'] : ['install', 'prepare', 'shots']);
   });
 }
 

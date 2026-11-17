@@ -20,9 +20,7 @@ export async function runChecks({ mode = 'all', directory, execute, publish, sig
     return code;
   };
   await publish('status.json', result);
-  if (mode === 'all' || mode === 'test') {
-    if (await stage('install')) { result.status = 'failed'; await publish('status.json', result); return result; }
-  }
+  if (await stage('install') || await stage('prepare')) { result.status = 'failed'; await publish('status.json', result); return result; }
   if (mode === 'all' || mode === 'shots') {
     const code = await stage('shots');
     // Readiness means generation and cleanup finished, not that checks passed.
@@ -67,7 +65,7 @@ async function main() {
     };
     const execute = async name => {
       const log = await open(path.join(directory, `${name}.log`), 'w');
-      const args = name === 'install' ? ['ci'] : ['scripts/test-run.mjs', name];
+      const args = name === 'install' ? ['ci'] : name === 'prepare' ? ['scripts/prepare-check.mjs'] : ['scripts/test-run.mjs', name];
       const env = { ...process.env };
       if (mode === 'all') env.LAVISH_KIT_SHOTS_DIR = path.join(directory, 'shots');
       console.log(`Starting ${name}; log: ${directory}/${name}.log`);

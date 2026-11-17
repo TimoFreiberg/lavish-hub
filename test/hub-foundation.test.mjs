@@ -19,6 +19,8 @@ test('hub workspace identity distinguishes workspaces and detects replacement', 
   assert.equal(a.directory, sub.directory); assert.notEqual(a.directory, b.directory);
   assert.equal(a.repo, b.repo); assert.equal(await workspaceMatches(a), true);
   assert.notEqual(a.directory, (await resolveWorkspace(root, { ...env, LAVISH_AXI_STATE_DIR: path.join(dir, 'other') })).directory);
+  const defaults = { HOME: dir, XDG_DATA_HOME: env.XDG_DATA_HOME, XDG_STATE_HOME: path.join(dir, 'xdg-state') };
+  assert.equal((await resolveWorkspace(root, defaults)).directory, (await resolveWorkspace(root, { ...defaults, LAVISH_AXI_STATE_DIR: path.join(defaults.XDG_STATE_HOME, 'lavish-kit', 'lavish') })).directory);
   await symlink(dir, path.join(dir, 'alias'));
   const aliasEnv = { XDG_DATA_HOME: path.join(dir, 'alias', 'data'), LAVISH_AXI_STATE_DIR: path.join(dir, 'alias', 'state') };
   assert.equal((await resolveWorkspace(root, aliasEnv)).directory, a.directory);

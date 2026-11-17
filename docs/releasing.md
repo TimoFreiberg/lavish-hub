@@ -1,0 +1,46 @@
+# Building and releasing
+
+The distributed package is built from the root npm lockfile. The vendored Lavish
+source retains its upstream pnpm metadata, but the package producer resolves its
+build and runtime dependencies from the root npm installation. Keep the upstream
+license, notices, and patch history described in [maintenance](maintenance.md).
+
+For a development build, run `node scripts/package.mjs OUTPUT_DIRECTORY` with
+Node 22 or later, npm, and jj installed. The producer uses a temporary staging
+directory and writes `lavish-kit.tgz`, `SHA256SUMS`, and
+`release-metadata.json`. Set `LAVISH_KIT_SOURCE_COMMIT` to the full source
+commit when building from a Git checkout without jj. Test the archive with
+`node test/package-smoke.mjs OUTPUT_DIRECTORY/lavish-kit.tgz`. The smoke test
+requires jj. It is not a substitute for the full local checks.
+
+## Release checklist
+
+1. Run `just check` on the exact integrated source and inspect the screenshots at
+   original size. Record both results before release.
+2. Push the tested source to main. Confirm the version in `package.json` and
+   verify that its tag and release do not already exist.
+3. Manually dispatch the [release workflow](https://github.com/TimoFreiberg/lavish-kit/actions/workflows/release.yml)
+   with the full integrated commit and version without `v`. CI builds one archive,
+   tests those bytes on Linux and macOS, and publishes them only after both pass.
+4. Check the published metadata and checksum against the CI artifact. Attempt
+   installation from both the pinned and latest URLs using isolated mise state.
+   Report failures and any partially created release rather than overwriting it.
+
+CI builds its own archive. It does not prove byte equality with a local build,
+and its smoke tests do not replace local visual inspection or real-hc checks.
+
+## Installation with mise
+
+With mise v2026.11.6 or newer, use an npm HTTPS URL in your mise configuration:
+
+```toml
+[tools]
+"npm:https://github.com/TimoFreiberg/lavish-kit/releases/latest/download/lavish-kit.tgz" = "latest"
+```
+
+For a fixed release, replace the URL with
+`https://github.com/TimoFreiberg/lavish-kit/releases/download/v0.1.0/lavish-kit.tgz`.
+Run `mise install` after editing the configuration. `mise up` checks the URL's
+content digest for updates. An actual update between two releases remains to be
+verified. Remove an old source-archive entry yourself when switching. No global
+Lavish installation is needed, and existing Lavish state is not migrated.

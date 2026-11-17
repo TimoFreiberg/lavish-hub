@@ -5,6 +5,7 @@ import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 
 const archive = path.resolve(process.argv[2] || 'lavish-kit.tgz');
 const temp = await mkdtemp(path.join(os.tmpdir(), 'lavish-kit-smoke-'));
@@ -42,6 +43,16 @@ try {
   const file = path.join(temp, 'example.html'); await writeFile(file, '<title>Example</title><p>Hello</p>');
   const publish = run(['hub', 'publish', file, '--id', 'example']);
   assert.equal(publish.status, 0, publish.stderr);
+  const { resolveWorkspace } = await import(pathToFileURL(path.join(root, 'src/hub-workspace.mjs')).href);
+  const identity = await resolveWorkspace(repo, env);
+  const runtime = JSON.parse(await readFile(path.join(identity.directory, 'owner/runtime.json'), 'utf8'));
+  const url = logs.match(/ready: (https?:\/\/\S+)/)?.[1];
+  assert.ok(url, logs);
+  const page = await fetch(url);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /<html/i);
+  const reply = run(['reply', runtime.page, '--agent-reply', 'Package smoke reply']);
+  assert.equal(reply.status, 0, reply.stderr);
   assert.equal(run(['hub', 'stop']).status, 0);
   await new Promise((resolve, reject) => { if (owner.exitCode !== null) return resolve(); owner.once('exit', resolve); owner.once('error', reject); });
   console.log('Package smoke passed');

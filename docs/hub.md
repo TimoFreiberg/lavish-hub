@@ -9,23 +9,14 @@ keep the draft on the page. Actions require the local owner; if it is unreachabl
 the page reports the error without discarding edits. Drafts are not persisted across
 page reloads.
 
-## Development prerequisite
+## Runtime
 
-The hub uses the patched Lavish 0.1.97 source in `vendor/lavish`, not the
-`lavish-axi` executable on `PATH`. From a checkout, install Node 22 or later
-and pnpm, then run:
-
-```sh
-pnpm --dir vendor/lavish install --frozen-lockfile
-pnpm --dir vendor/lavish build
-```
-
-Rebuild after changing the vendored source. The built files are not checked in;
-a distribution method has not been chosen. The hub checks the server's version,
-patch capability, and state directory before polling. A different server on the
-configured port may need to be stopped or assigned a different port. Standalone
-reviews continue to use the installed `lavish-axi` and their existing 0.1.96
-HTTP compatibility requirement.
+The package includes patched Lavish 0.1.97 and does not use `lavish-axi` on
+`PATH`. The hub checks the server's version, patch capability, and state directory
+before polling. A different server on the configured port may need to be
+stopped or assigned a different port. See [building and releasing](releasing.md)
+for package production and [workflow gaps](hub-gaps.md) for removed standalone
+capabilities.
 
 ## Design priorities
 

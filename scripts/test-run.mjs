@@ -77,7 +77,7 @@ if (hcRoot) {
   catch (error) { console.error(`Test audit: cannot stop private hc service: ${error.message}`); status = 1; }
 }
 try {
-  const listing = execFileSync('lavish-axi', [], { env, encoding: 'utf8', timeout: 10000 });
+  const listing = execFileSync(process.execPath, [path.resolve('vendor/lavish/dist/cli.mjs')], { env, encoding: 'utf8', timeout: 10000 });
   const { decode } = await import('@toon-format/toon');
   const sessions = decode(listing).sessions;
   if (!Array.isArray(sessions) || sessions.length) { console.error('Test audit: private Lavish sessions remain or listing is invalid:', listing); status = 1; }

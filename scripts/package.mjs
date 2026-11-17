@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.resolve(process.argv[2] || '.');
-const source = process.env.LAVISH_KIT_SOURCE_COMMIT || execFileSync('jj', ['log', '-r', '@-', '--no-graph', '-T', 'commit_id'], { cwd: root, encoding: 'utf8' }).trim();
+const source = process.env.LAVISH_KIT_SOURCE_COMMIT || execFileSync('jj', ['log', '-r', '@', '--no-graph', '-T', 'commit_id'], { cwd: root, encoding: 'utf8' }).trim();
 const temp = await mkdtemp(path.join(os.tmpdir(), 'lavish-kit-package-'));
 const run = (cmd, args, cwd, env = process.env) => execFileSync(cmd, args, { cwd, env, stdio: 'inherit' });
 try {
