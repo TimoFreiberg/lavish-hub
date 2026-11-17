@@ -82,7 +82,7 @@ export async function generateDemo(dir) {
   const repo = path.join(dir, 'repo');
   const jjConfig = demoEnv(dir).JJ_CONFIG;
   await mkdir(path.dirname(jjConfig), { recursive: true });
-  await writeFile(jjConfig, '[user]\nname = "Demo Author"\nemail = "demo@example.invalid"\n');
+  await writeFile(jjConfig, '[user]\nname = "Demo Author"\nemail = "demo@example.invalid"\n\n[revset-aliases]\n"trunk()" = "main"\n"immutable_heads()" = \'builtin_immutable_heads() | description(exact:"Already landed upstream\\n")\'\n');
   let seq = 0;
   const jj = (...args) => {
     seq++;
@@ -106,8 +106,6 @@ export async function generateDemo(dir) {
   for (const [file, content] of Object.entries(baseFiles())) await write(file, content);
   commit('Initial widget service');
   jj('bookmark', 'create', 'main', '-r', '@-');
-  jj('config', 'set', '--repo', 'revset-aliases."trunk()"', 'main');
-  jj('config', 'set', '--repo', 'revset-aliases."immutable_heads()"', 'builtin_immutable_heads() | description(exact:"Already landed upstream\n")');
 
   await edit('README.md', text => text + '\nSee CHANGELOG for release notes.\n');
   commit('Already landed upstream');
