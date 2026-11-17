@@ -39,20 +39,17 @@ function renderQueue() {
     const remove = document.createElement('button'); remove.textContent = 'Remove'; remove.onclick = () => { queued.splice(index, 1); renderQueue(); receipt('Simulated item removed.'); }; row.append(' ', remove); list.append(row);
   });
 }
-const theme = new URL(location.href).searchParams.get('theme') === 'light' ? 'light' : 'dark';
-document.documentElement.dataset.theme = theme;
+const theme = 'orangebox';
+if (!document.documentElement.hasAttribute('data-theme')) document.documentElement.dataset.theme = theme;
 document.addEventListener('DOMContentLoaded', () => {
   const bar = document.createElement('aside'); bar.setAttribute('aria-label', 'Preview controls');
   bar.style.cssText = 'position:relative;z-index:10;padding:12px;background:#243044;color:white;font:16px system-ui;overflow-wrap:anywhere';
-  bar.innerHTML = '<strong>Demo: no files saved or actions run.</strong> <a href="../../index.html" style="color:#b9d9ff">All previews</a> <label>Theme <select aria-label="Theme"><option value="dark">Dark</option><option value="light">Light</option></select></label> <button type="button" id="preview-reset">Reset</button> <button type="button" id="preview-external">Simulate external edit</button> <button type="button" id="preview-send">Send queued comments</button><p id="preview-receipt" role="status" aria-live="polite">Changes are temporary and reset on navigation.</p><ul id="preview-queue"></ul>';
+  bar.innerHTML = '<strong>Demo: no files saved or actions run.</strong> <a href="../../index.html" style="color:#b9d9ff">All previews</a> <button type="button" id="preview-reset">Reset</button> <button type="button" id="preview-external">Simulate external edit</button> <button type="button" id="preview-send">Send queued comments</button><p id="preview-receipt" role="status" aria-live="polite">Changes are temporary and reset on navigation.</p><ul id="preview-queue"></ul>';
   const style = document.createElement('style');
   style.textContent = '[aria-label="Preview controls"] button, [aria-label="Preview controls"] select { color: #17202d; background: #fff; min-height: 44px; } [aria-label="Preview controls"] a { text-decoration: underline !important; }';
   bar.append(style);
   document.body.prepend(bar);
   if (document.querySelector('.viewport')) { document.body.style.display = 'flex'; document.body.style.flexDirection = 'column'; const app = document.getElementById('app'); app.style.height = 'auto'; app.style.flex = '1'; app.style.minHeight = '0'; }
-  const select = bar.querySelector('select'); select.value = theme;
-  select.onchange = () => { const url = new URL(location.href); url.searchParams.set('theme', select.value); location.href = url; };
-  bar.querySelector('a').href += `?theme=${theme}`;
   bar.querySelector('#preview-reset').onclick = () => { if (confirm('Reset this demo and discard edits?')) location.reload(); };
   const external = bar.querySelector('#preview-external'); external.hidden = !/^task-/.test(location.pathname.split('/').at(-3));
   external.onclick = () => { if (!data) return; data = { ...data, text: `${data.text}\nExternal fixture edit.\n`, hash: hash() }; notify(); receipt('Simulated external edit applied.'); };

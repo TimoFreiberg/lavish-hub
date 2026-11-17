@@ -6,6 +6,7 @@ import shiki from '@shikijs/markdown-it';
 import { parse, stringify } from 'yaml';
 import { createDocumentEditor } from './document-editor.mjs';
 import { accessibleCodeBlocks } from '../src/markdown-accessibility.mjs';
+import { syntaxTheme } from '../src/orangebox.mjs';
 
 let highlighting;
 export const byId = id => document.getElementById(id);
@@ -41,7 +42,7 @@ export function markdownRenderer(body, preview, { hideFrontMatter = false, onTas
     }
     afterRender(preview);
   };
-  highlighting ||= shiki({ themes: { light: 'github-light', dark: 'github-dark' }, fallbackLanguage: 'text' });
+  highlighting ||= shiki({ theme: syntaxTheme, fallbackLanguage: 'text' });
   highlighting.then(plugin => { md.use(plugin).use(accessibleCodeBlocks); render(); }).catch(onError);
   return render;
 }

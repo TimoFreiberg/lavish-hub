@@ -1,4 +1,6 @@
-import { CodeView, getFiletypeFromFileName } from '@pierre/diffs';
+import { CodeView, getFiletypeFromFileName, registerCustomTheme } from '@pierre/diffs';
+import { syntaxTheme, palette } from '../src/orangebox.mjs';
+registerCustomTheme('orangebox', async () => syntaxTheme);
 import { WorkerPoolManager } from '@pierre/diffs/worker';
 import { modelPatch } from '../src/diff/model.mjs';
 import { commentLocation, quoteSelection, zedCommand, zedUrl } from './locations.mjs';
@@ -21,8 +23,7 @@ const HEADER_HEIGHT = 64;
 function persist() { if (window.lavishPreview) return; try { localStorage.setItem('lavish-kit-viewed', JSON.stringify([...state.viewed])); } catch { state.storageFailed = true; renderToolbar(); } }
 function makeWorker() {
   workerUrl = URL.createObjectURL(new Blob([LAVISH_KIT_WORKER_SOURCE], { type: 'text/javascript' }));
-  const light = document.documentElement.dataset.theme === 'light';
-  return new WorkerPoolManager({ poolSize: 1, workerFactory: () => new Worker(workerUrl), onWorkerError: event => { event.preventDefault?.(); fallback(); } }, { theme: light ? 'github-light' : 'github-dark', themeType: light ? 'light' : 'dark', langs: [] });
+  return new WorkerPoolManager({ poolSize: 1, workerFactory: () => new Worker(workerUrl), onWorkerError: event => { event.preventDefault?.(); fallback(); } }, { theme: 'orangebox', themeType: 'dark', langs: [] });
 }
 function fallback() {
   if (fallingBack) return; fallingBack = true;
@@ -32,8 +33,8 @@ function fallback() {
 }
 try { worker = makeWorker(); worker.initialize().catch(fallback); } catch { fallback(); }
 function options() { return {
-  theme: document.documentElement.dataset.theme === 'light' ? 'github-light' : 'github-dark', themeType: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
-  unsafeCSS: document.documentElement.dataset.theme === 'light' ? '[data-line-number-content] { color: #24292f !important; } [data-line] span[style*="#d73a49" i] { color: #b32130 !important; }' : ':host { --diffs-bg-addition-override: #172c22; --diffs-bg-addition-emphasis-override: #244432; }',
+  theme: 'orangebox', themeType: 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
+  unsafeCSS: `:host { --diffs-addition-color-override: ${palette['diff-add']}; --diffs-deletion-color-override: ${palette['diff-del']}; --diffs-bg-addition-override: color-mix(in srgb, ${palette['diff-add']} 16%, ${palette.bg}); --diffs-bg-deletion-override: color-mix(in srgb, ${palette['diff-del']} 16%, ${palette.bg}); --diffs-bg-addition-emphasis-override: color-mix(in srgb, ${palette['diff-add']} 30%, ${palette.bg}); --diffs-bg-deletion-emphasis-override: color-mix(in srgb, ${palette['diff-del']} 30%, ${palette.bg}); }`,
   itemMetrics: { diffHeaderHeight: HEADER_HEIGHT }, stickyHeaders: true, pointerEventsOnScroll: true,
   renderCustomHeader: (_metadata, context) => fileHeader(Number(context.item.id)),
   enableGutterUtility: true,

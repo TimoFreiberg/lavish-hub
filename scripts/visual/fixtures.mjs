@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { prepareDiff, readDiff } from '../../src/diff/source.mjs';
+import { themeCss } from '../../src/orangebox.mjs';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const fixtures = path.join(root, 'test/visual/fixtures');
@@ -47,13 +48,13 @@ export async function makePage(variant, dir, dist, diff, { portable = false } = 
       await cp(path.join(fixtures, 'clean.html'), path.join(resource, 'review.html'));
     }
     await Promise.all([
-      writeFile(path.join(path.dirname(file), 'hub.css'), `${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }`),
+      writeFile(path.join(path.dirname(file), 'hub.css'), `${themeCss}\n${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }`),
       writeFile(path.join(path.dirname(file), 'diff.js'), diffScript), writeFile(path.join(path.dirname(file), 'markdown.js'), markdown),
       writeFile(path.join(path.dirname(file), 'hub.js'), script),
     ]);
-    const styles = portable ? '<link rel="stylesheet" href="hub.css">' : `<style>${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style>`;
+    const styles = portable ? '<link rel="stylesheet" href="hub.css">' : `<style>${themeCss}\n${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style>`;
     const scripts = portable ? '<script src="../../assets/preview.js"></script><script src="diff.js"></script><script src="markdown.js"></script><script type="module" src="hub.js"></script>' : `<script>${safe(diffScript)}</script><script>${safe(markdown)}</script><script type="module">${safe(script)}</script>`;
-    await writeFile(file, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub fixture</title>${styles}</head><body><div id="app"></div><script>${safe(bootstrap)}</script>${scripts}</body></html>`);
+    await writeFile(file, `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub fixture</title>${styles}</head><body><div id="app"></div><script>${safe(bootstrap)}</script>${scripts}</body></html>`);
   } else throw new Error(`Unknown visual fixture: ${variant.kind}`);
   return { file };
 }

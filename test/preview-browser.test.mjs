@@ -76,8 +76,10 @@ test('hub previews work without external requests or changing fixtures', async (
     await page.keyboard.press('Escape');
     assert.equal(await page.getByText('Keyboard shortcuts', { exact: true }).isVisible(), false);
     await page.goto(`${base}hub-tasks/page/index.html`);
+    await page.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
     await page.getByRole('textbox', { name: 'Tasks Markdown' }).fill('Preview edit');
     await page.goto(`${base}hub-conflict/page/index.html`);
+    await page.getByRole('button', { name: /Edit Description/ }).click();
     await page.getByRole('textbox', { name: /Description/ }).fill('Preview edit');
     await page.getByRole('button', { name: 'Save description' }).click();
     await page.getByText(/Conflict: changed on disk/).waitFor();
@@ -87,9 +89,15 @@ test('hub previews work without external requests or changing fixtures', async (
     const dist = path.join(dir, 'build'); await mkdir(dist);
     execFileSync(process.execPath, ['build.mjs', process.cwd(), dist]);
     await makePage({ kind: 'hub', name: 'changes' }, path.join(dir, 'large'), dist, { patch }, { portable: true });
+    const workerPage = await context.newPage();
+    await workerPage.goto(`${base}large/page/index.html`);
+    await workerPage.waitForFunction(() => [...document.querySelectorAll('.hub-diff *')].some(node => node.shadowRoot?.innerHTML.includes('#F3A762')), null, { timeout: 30000 });
+    await workerPage.close();
     await page.goto(`${base}large/page/index.html`);
     await page.locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (500)' }).waitFor({ timeout: 30000 });
     await page.locator('.hub-diff [data-content] [data-line]').first().waitFor({ timeout: 30000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('.hub-diff *')].some(node => node.shadowRoot?.innerHTML.includes('#F3A762')), null, { timeout: 30000 });
+    assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ob-bg').trim()), '#262120');
     assert.ok(await page.locator('.hub-diff [data-content] [data-line]').count() < 6000);
     await page.locator('.hub-diff .file-link').nth(250).click();
     await page.locator('.hub-diff [data-file="file250.js"]').waitFor();

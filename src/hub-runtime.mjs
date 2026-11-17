@@ -11,6 +11,7 @@ import { createLavishClient } from './lavish-http.mjs';
 import { quote } from './quote.mjs';
 import { ensureHubAssets } from './deps.mjs';
 import { composeHubHtml } from './hub-html.mjs';
+import { themeCss } from './orangebox.mjs';
 
 const startup = 'Start one with lavish-kit hub listen --workspace DIR';
 const readJson = async file => JSON.parse(await readFile(file, 'utf8'));
@@ -211,7 +212,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const [script, style, diffScript, diffStyle, markdownScript, documentStyle] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8'), readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'), readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8')]);
     await writeSiblings();
     const config = JSON.stringify({ url: browserUrl, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root }).replaceAll('<', '\\u003c');
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><style>${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><script>${diffScript.replaceAll('</script', '<\\/script')}</script><script>${markdownScript.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script></body></html>`;
+    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><style>${themeCss}\n${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><script>${diffScript.replaceAll('</script', '<\\/script')}</script><script>${markdownScript.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);
     const review = await prepare(page, { reopen: options.reopen, log: console.error, vendored: true });

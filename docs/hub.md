@@ -78,7 +78,11 @@ Published HTML opens as a sibling page in the same Lavish review, where it can
 be annotated directly. Scripts, styles, and images resolve relative to its source
 file, respecting an authored `<base href>`. Local resources remain restricted to
 the source directory as described below. Use the page's hub navigation to open
-built-in views or published documents.
+built-in views or published documents. The hub, Markdown, and diff views use the
+Orangebox dark palette. Published HTML without a root `data-theme` receives
+`data-theme="orangebox"` and a dark background and foreground fallback. Authored
+CSS can override the fallback, and an existing root `data-theme` is retained. The
+fallback does not load DaisyUI for pages that do not already include it.
 Explicit view and publish commands also switch an open published HTML page to the
 selected view, unless unsaved edits pause the switch. The hub asks before leaving
 for a published HTML page when a hub draft or an unqueued diff comment is

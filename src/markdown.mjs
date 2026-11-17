@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { atomicWrite } from './files.mjs';
 import { accessibleCodeBlocks } from './markdown-accessibility.mjs';
+import { syntaxTheme, themeCss } from './orangebox.mjs';
 
 const load = async (deps, name) => import(pathToFileURL(deps.resolve(name)).href);
 
@@ -59,7 +60,7 @@ export async function renderMarkdown(source, deps) {
       }
     }
   }
-  md.use(await shiki({ themes: { light: 'github-light', dark: 'github-dark' }, langs, fallbackLanguage: 'text' }));
+  md.use(await shiki({ theme: syntaxTheme, langs, fallbackLanguage: 'text' }));
   md.use(accessibleCodeBlocks);
   const firstHeading = tokens.findIndex(token => token.type === 'heading_open' && token.tag === 'h1');
   const heading = firstHeading < 0 ? '' : headingText(tokens[firstHeading + 1]);
@@ -100,7 +101,7 @@ export async function writeMarkdown(file, deps, { out, assetBase, bootstrap } = 
   const title = extracted || path.basename(source);
   const escape = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const html = `<!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="orangebox">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -109,21 +110,19 @@ export async function writeMarkdown(file, deps, { out, assetBase, bootstrap } = 
 <link rel="stylesheet" href="${assetBase ? `${escape(assetBase)}/themes.css` : 'https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css'}">
 <script src="${assetBase ? `${escape(assetBase)}/tailwind.js` : 'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js'}"></script>
 <style>
+  ${themeCss}
   body { background: var(--color-base-100); color: var(--color-base-content); }
   .document { max-width: 80ch; margin: auto; padding: 2rem; overflow-wrap: anywhere; line-height: 1.65; }
   .document :is(h1,h2,h3,h4,h5,h6) { font-weight: 700; line-height: 1.25; margin: 1.5em 0 .5em; }
   .document h1 { font-size: 2em; } .document h2 { font-size: 1.5em; } .document h3 { font-size: 1.25em; }
   .document :is(p,ul,ol,table,pre,blockquote) { margin: 1em 0; }
   .document :is(ul,ol) { padding-left: 1.5em; } .document ul { list-style: disc; } .document ol { list-style: decimal; }
-  .document a { color: #79b8ff; text-decoration: underline; }
-  [data-theme="light"] .document a { color: #0759a8; }
+  .document a { color: var(--ob-cyan); text-decoration: underline; }
   .document table { border-collapse: collapse; display: block; overflow-x: auto; }
-  .document :is(th,td) { border: 1px solid var(--color-base-300); padding: .35em .65em; text-align: left; vertical-align: top; white-space: pre-wrap; }
+  .document :is(th,td) { border: 1px solid var(--ob-border); padding: .35em .65em; text-align: left; vertical-align: top; white-space: pre-wrap; }
   .document pre { overflow-x: auto; padding: 1em; border-radius: .5em; }
-  .document blockquote { border-left: .25em solid var(--color-base-300); padding-left: 1em; }
+  .document blockquote { border-left: .25em solid var(--ob-border); padding-left: 1em; }
   .document img { max-width: 100%; } .document .task-list-item { list-style: none; }
-  .shiki, .shiki span { color: var(--shiki-dark) !important; background-color: var(--shiki-dark-bg) !important; }
-  [data-theme="light"] .shiki, [data-theme="light"] .shiki span { color: var(--shiki-light) !important; background-color: var(--shiki-light-bg) !important; }
 </style>
 </head>
 <body><main class="document prose">${metadata}\n${body}</main>${bootstrap ? `<script src="${escape(bootstrap)}"></script>` : ''}</body>
