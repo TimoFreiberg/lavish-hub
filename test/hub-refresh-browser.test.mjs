@@ -111,18 +111,29 @@ test('commit descriptions render safely and retain draft targets across rewrites
   const page = await browser.newPage();
   page.setDefaultTimeout(5000);
   await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
-  const display = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
-  await display.waitFor();
+  const display = page.locator('.commit-description');
+  const edit = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
+  await edit.waitFor();
   assert.equal(await display.textContent(), '(no description set)');
+  await display.click();
+  assert.equal(await page.getByRole('textbox', { name: 'Description cccccccccccc' }).count(), 0);
+  assert.equal(await display.evaluate(node => getComputedStyle(node).userSelect), 'auto');
   assert.equal(await page.getByText('--from aaaaaaaaaaaa --to bbbbbbbbbbbb', { exact: true }).count(), 1);
   assert.equal(await page.getByRole('region', { name: 'Feedback' }).count(), 0);
   assert.equal(await page.getByText('aggregate-only').count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Changes', exact: true }).count(), 1);
   assert.equal(await page.locator('.stat-add').textContent(), '+');
   assert.equal(await page.locator('.stat-remove').textContent(), '-');
-  assert.equal(await page.locator('.commit-stat').evaluate(node => getComputedStyle(node).resize), 'vertical');
-  await display.focus(); await page.keyboard.press('Enter');
+  assert.equal(await page.locator('.commit-stat').evaluate(node => getComputedStyle(node).resize), 'none');
+  assert.equal(await display.evaluate(node => getComputedStyle(node).resize), 'none');
+  await edit.focus(); await page.keyboard.press('Enter');
   const editor = page.getByRole('textbox', { name: 'Description cccccccccccc' });
+  assert.ok(await editor.evaluate(node => node.getBoundingClientRect().height < 50));
+  assert.equal(await editor.evaluate(node => getComputedStyle(node).resize), 'vertical');
+  const saveStyle = await page.locator('.commit-save').evaluate(node => getComputedStyle(node).backgroundColor);
+  const cancelStyle = await page.locator('.commit-cancel').evaluate(node => getComputedStyle(node).backgroundColor);
+  assert.equal(saveStyle, 'rgb(36, 93, 59)'); assert.equal(cancelStyle, 'rgb(52, 58, 64)');
+  assert.ok(await page.locator('.commit-controls').evaluate(node => parseFloat(getComputedStyle(node).gap) > 0));
   await editor.fill('<b>draft</b>\nsecond');
   commitId = 'd'.repeat(40); description = 'External\n';
   await page.getByRole('button', { name: 'Refresh' }).click();
@@ -151,7 +162,7 @@ test('successful description save survives an old snapshot and renders literal t
   await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
   await page.getByRole('textbox', { name: 'Description cccccccccccc' }).fill('<b>literal</b>\nsecond');
   await page.getByRole('button', { name: 'Save description' }).click();
-  const display = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
+  const display = page.locator('.commit-description');
   await assertEventually(async () => assert.equal(await display.textContent(), '<b>literal</b>\nsecond\n'));
   assert.equal(await display.locator('b').count(), 0);
   current = { changeId, commitId: newId, description: '<b>literal</b>\nsecond\n' };
@@ -178,29 +189,55 @@ test('consecutive saves retain the latest target across an intermediate snapshot
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
-  const display = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
+  const edit = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
+  const display = page.locator('.commit-description');
   const editor = page.getByRole('textbox', { name: 'Description cccccccccccc' });
   assert.equal(await page.getByRole('button', { name: 'Save description' }).count(), 0);
-  await display.click(); await editor.fill('discard'); await editor.press('Escape');
+  await edit.click(); await editor.fill('discard'); await editor.press('Escape');
   assert.equal(await display.textContent(), 'A');
-  await display.click(); await editor.fill('discard again'); await page.getByRole('button', { name: 'Cancel' }).click();
+  await edit.click(); await editor.fill('discard again'); await page.getByRole('button', { name: 'Cancel' }).click();
   assert.equal(await display.textContent(), 'A');
-  await display.click(); await editor.fill('B'); await page.getByRole('button', { name: 'Save description' }).click();
+  await edit.click(); await editor.fill('B'); await page.getByRole('button', { name: 'Save description' }).click();
   await assertEventually(async () => assert.equal(await display.textContent(), 'B'));
-  await display.click(); await editor.fill('C'); await page.getByRole('button', { name: 'Save description' }).click();
+  await edit.click(); await editor.fill('C'); await page.getByRole('button', { name: 'Save description' }).click();
   await assertEventually(() => assert.equal(requests.length, 2));
   await page.getByRole('button', { name: 'Refresh' }).click();
   await assertEventually(async () => assert.ok((await page.locator('.card h2').textContent()).includes(ids[1].slice(0, 12))));
   await editor.press('Escape'); assert.equal(await editor.inputValue(), 'C');
   releaseSecond();
   await assertEventually(async () => assert.equal(await display.textContent(), 'C'));
-  await display.click(); await editor.fill('D'); await page.getByRole('button', { name: 'Save description' }).click();
+  await edit.click(); await editor.fill('D'); await page.getByRole('button', { name: 'Save description' }).click();
   await assertEventually(() => assert.equal(requests.length, 3));
   assert.equal(requests[1].commitId, ids[1]); assert.equal(requests[2].commitId, ids[2]);
   await assertEventually(async () => assert.equal(await display.textContent(), 'D'));
   current = { changeId, commitId: 'f'.repeat(40), description: 'External' };
   await page.getByRole('button', { name: 'Refresh' }).click();
   await assertEventually(async () => assert.equal(await display.textContent(), 'External'));
+});
+
+test('long rendered descriptions and statistics have resize handles, immutable commits do not offer editing', { timeout: 30000 }, async t => {
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [
+      { changeId: 'c'.repeat(32), commitId: 'b'.repeat(40), description: Array(12).fill('Long description').join('\n'), stat: Array(10).fill('file | 1 +').join('\n') },
+      { changeId: 'd'.repeat(32), commitId: 'e'.repeat(40), description: 'Immutable', immutable: true },
+      { changeId: 'f'.repeat(32), commitId: 'f'.repeat(40), description: 'Divergent', divergent: true },
+    ] }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).waitFor();
+  for (const selector of ['.commit-description', '.commit-stat']) {
+    const node = page.locator(selector).first();
+    assert.equal(await node.evaluate(element => getComputedStyle(element).resize), 'vertical');
+    assert.equal(await node.evaluate(element => element.scrollHeight > element.clientHeight), true);
+  }
+  assert.equal(await page.getByRole('button', { name: 'Edit Description dddddddddddd' }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: 'Edit Description ffffffffffff' }).count(), 0);
 });
 
 async function assertEventually(check) {

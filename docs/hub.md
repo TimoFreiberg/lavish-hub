@@ -63,10 +63,10 @@ at publication time, not necessarily the current checkout.
 Use Lavish annotations to give feedback. A browser reload prompts before
 discarding unsaved hub drafts; cancel it to keep editing.
 
-Commits shows each description and its own diff statistics. Click a description,
-or focus it and press Enter or Space, to edit it. Cancel or Escape discards the
-edit. Long descriptions and statistics scroll and can be resized vertically. A
-failed save keeps the draft and shows the error beside the Save button.
+Commits shows each description and its own diff statistics. Use the pencil button
+to edit a description; Cancel or Escape discards the edit. Descriptions and
+statistics that exceed their initial height scroll and can be resized vertically.
+A failed save keeps the draft and shows the error beside the Save button.
 
 Tasks display rendered Markdown with interactive checkboxes. Use the edit button
 to change the source; changes are written only when saved. Published Markdown

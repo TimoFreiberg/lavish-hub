@@ -138,13 +138,18 @@ async function renderView(focusChangeId) {
       if (state.text === state.original && !state.saving && !state.message && !state.awaitingSnapshot) { state.text = commit.description; state.original = commit.description; state.commitId = commit.commitId; }
       const card = el('section', null, { class: 'card' }); card.append(el('h2', `${commit.changeId.slice(0, 12)} · ${commit.commitId.slice(0, 12)}`));
       const label = `Description ${commit.changeId.slice(0, 12)}`;
-      const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}`, tabindex: '0', role: 'button', 'aria-label': `Edit ${label}` });
+      const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}` });
       const area = editor(label, state.text, value => { state.text = value; });
-      area.className = 'commit-editor';
+      area.className = 'commit-editor'; area.rows = 1;
       display.hidden = state.editing; area.hidden = !state.editing;
-      const edit = () => { if (commit.immutable || commit.divergent) return; state.editing = true; renderView(commit.changeId); };
-      display.addEventListener('click', edit);
-      display.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); edit(); } });
+      const edit = button('', () => { state.editing = true; renderView(commit.changeId); });
+      edit.className = 'commit-edit'; edit.setAttribute('aria-label', `Edit ${label}`); edit.title = `Edit ${label}`;
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M4 20l4-.8L19 8.2 15.8 5 4.8 16 4 20zm10.6-13.8l3.2 3.2');
+      icon.append(path); edit.append(icon);
+      edit.hidden = state.editing || commit.immutable || commit.divergent;
       const info = el('p', state.message, { role: 'alert', class: 'save-error' });
       const save = button('Save description', async () => {
         const submitted = state.text; state.saving = true; save.disabled = true; cancel.disabled = true;
@@ -157,18 +162,26 @@ async function renderView(focusChangeId) {
         if (selected === 'commits') renderView();
       });
       save.disabled = state.saving || commit.immutable || commit.divergent;
-      if (state.message) { save.className = 'save-failed'; save.title = state.message; save.prepend(el('span', '⚠ ', { 'aria-hidden': 'true' })); }
-      if (commit.immutable || commit.divergent) { display.removeAttribute('role'); display.removeAttribute('tabindex'); display.removeAttribute('aria-label'); save.title = commit.immutable ? 'Immutable commit' : 'Divergent change'; }
+      save.className = 'commit-save';
+      if (state.message) { save.classList.add('save-failed'); save.title = state.message; save.prepend(el('span', '⚠ ', { 'aria-hidden': 'true' })); }
+      if (commit.immutable || commit.divergent) save.title = commit.immutable ? 'Immutable commit' : 'Divergent change';
       const stats = el('pre', null, { class: 'commit-stat', 'aria-label': `Changes ${commit.changeId.slice(0, 12)}` });
       for (const part of (commit.stat || 'No changed files').split(/(\++|-+)/)) stats.append(el('span', part, { class: /^\++$/.test(part) ? 'stat-add' : /^-+$/.test(part) ? 'stat-remove' : '' }));
       const cancel = button('Cancel', () => { if (state.saving) return; state.text = state.original; state.message = ''; state.editing = false; renderView(); });
-      cancel.disabled = !!state.saving;
+      cancel.disabled = !!state.saving; cancel.className = 'commit-cancel';
       area.addEventListener('keydown', event => { if (event.key === 'Escape' && !state.saving) { event.preventDefault(); cancel.click(); } });
       save.hidden = cancel.hidden = !state.editing;
-      card.append(display, area, save, cancel, info, stats); view.append(card);
+      const description = el('div', null, { class: 'commit-description-wrap' }); description.append(display, edit);
+      const controls = el('div', null, { class: 'commit-controls' }); controls.append(save, cancel);
+      card.append(description, area, controls, info, stats); view.append(card);
       if (state.editing && commit.changeId === focusChangeId) area.focus();
-      for (const [node, lines] of [[display, 8], [stats, 6]]) {
-        if (!node.hidden) { const style = getComputedStyle(node); node.style.height = `${Math.min(node.scrollHeight, parseFloat(style.lineHeight) * lines + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom))}px`; }
+      for (const [node, lines] of [[display, 8], [area, 8], [stats, 6]]) {
+        if (!node.hidden) {
+          const style = getComputedStyle(node), cap = parseFloat(style.lineHeight) * lines + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+          const height = node.scrollHeight;
+          node.style.height = `${Math.min(height, cap)}px`;
+          if (node !== area) node.style.resize = height > cap + 1 ? 'vertical' : 'none';
+        }
       }
     }
     return;
