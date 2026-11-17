@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -98,6 +98,32 @@ test('cleanup continues after signal and audit errors and escalates', { timeout:
     assert.match(result.error.message, /audit failed/);
     assert.ok(calls.some(([pid, signal]) => pid > 0 && pid !== 99999999 && signal === 'SIGTERM'));
     assert.ok(calls.some(([pid, signal]) => pid < 0 && signal === 'SIGKILL'));
+    await assertNoProcesses(marker);
+  });
+});
+
+test('stalled process scans are reported and cleanup escalates', { timeout: 30000 }, async () => {
+  await fixture('', async ({ root, marker, env }) => {
+    const ps = path.join(root, 'ps');
+    await writeFile(ps, `#!${process.execPath}\nprocess.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 8000);\n`);
+    await chmod(ps, 0o755);
+    const originalPath = process.env.PATH;
+    const calls = [];
+    try {
+      process.env.PATH = `${root}${path.delimiter}${originalPath ?? ''}`;
+      const result = await runSupervised(['-e', "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)"], {
+        ...options(env), timeout: 500,
+        kill: (pid, signal) => { calls.push([pid, signal]); process.kill(pid, signal); },
+      });
+      assert.equal(result.timedOut, true);
+      assert.match(result.error.message, /Process scan timed out after 5000ms/);
+      assert.ok(calls.some(([pid, signal]) => pid < 0 && signal === 'SIGTERM'));
+      assert.ok(calls.some(([pid, signal]) => pid < 0 && signal === 'SIGKILL'));
+      assert.throws(() => markedProcesses(marker), /Process scan timed out after 5000ms/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
     await assertNoProcesses(marker);
   });
 });
