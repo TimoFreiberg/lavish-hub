@@ -37,18 +37,21 @@ export { parseTitleSource as markdownTitle };
 
 export async function renderMarkdown(source, deps) {
   const [{ default: MarkdownIt }, { default: taskLists }, { default: anchor },
-    { default: frontMatter }, { default: shiki }, yaml] = await Promise.all([
+    { default: frontMatter }, { default: shiki }, { bundledLanguages }, yaml] = await Promise.all([
     load(deps, 'markdown-it'), load(deps, 'markdown-it-task-lists'),
     load(deps, 'markdown-it-anchor'), load(deps, 'markdown-it-front-matter'),
-    load(deps, '@shikijs/markdown-it'), load(deps, 'yaml'),
+    load(deps, '@shikijs/markdown-it'), load(deps, 'shiki'), load(deps, 'yaml'),
   ]);
   let rawFrontMatter;
   const md = new MarkdownIt({ html: true, linkify: true });
   md.use(taskLists, { label: true }).use(anchor, { permalink: anchor.permalink.linkInsideHeader({ symbol: '#' }) });
   md.use(frontMatter, raw => { rawFrontMatter = raw; });
-  md.use(await shiki({ themes: { light: 'github-light', dark: 'github-dark' }, fallbackLanguage: 'text' }));
-  md.use(accessibleCodeBlocks);
   const tokens = md.parse(source, {});
+  const langs = [...new Set(tokens.filter(token => token.type === 'fence')
+    .map(token => md.utils.unescapeAll(token.info).trim().split(/\s+/)[0])
+    .filter(lang => Object.hasOwn(bundledLanguages, lang)))];
+  md.use(await shiki({ themes: { light: 'github-light', dark: 'github-dark' }, langs, fallbackLanguage: 'text' }));
+  md.use(accessibleCodeBlocks);
   const firstHeading = tokens.findIndex(token => token.type === 'heading_open' && token.tag === 'h1');
   const heading = firstHeading < 0 ? '' : headingText(tokens[firstHeading + 1]);
   let metadata = '', title;

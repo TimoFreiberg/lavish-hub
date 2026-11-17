@@ -46,6 +46,14 @@ test('renders gfm, front matter, shiki, and raw html', async () => {
   assert.match(page.body, /href="https:\/\/example\.com"/);
 });
 
+test('highlights fenced language aliases and falls back for unknown languages', async () => {
+  const page = await renderMarkdown('> ```js\n> const value = 1;\n> ```\n\n```python title=example\nprint(1)\n```\n\n```unknown-lang\n<plain>\n```', deps);
+  assert.match(page.body, /language-js/);
+  assert.match(page.body, /language-python/);
+  assert.match(page.body, /language-text/);
+  assert.match(page.body, /&#x3C;plain>/);
+});
+
 test('invalid yaml is escaped and heading supplies title', async () => {
   const page = await renderMarkdown('---\ntitle: [bad <value>\n---\n# First *heading* & more\n\n```unknown-lang\n<code>\n```', deps);
   assert.match(page.metadata, /<pre>title: \[bad &lt;value&gt;<\/pre>/);
