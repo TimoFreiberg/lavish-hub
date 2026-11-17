@@ -3,23 +3,36 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": { "lavish-kit": "bin/lavish-kit" },
   "dependencies": {
     "@pierre/diffs": "1.6.4",
     "@shikijs/markdown-it": "4.6.0",
     "@toon-format/toon": "2.3.1",
-    "esbuild": "0.28.2",
+    "@tailwindcss/browser": "4.2.4",
+    "axi-sdk-js": "^0.1.8",
+    "chokidar": "^4.0.3",
+    "cross-spawn": "7.0.6",
+    "daisyui": "5.5.19",
+    "express": "^5.2.1",
     "markdown-it": "15.0.3",
     "markdown-it-anchor": "10.1.0",
     "markdown-it-front-matter": "0.2.4",
     "markdown-it-task-lists": "2.1.1",
+    "open": "^10.2.0",
     "parse5": "^8.0.1",
     "shiki": "4.6.0",
+    "ws": "^8.21.3",
     "yaml": "2.9.1"
   },
   "devDependencies": {
-    "@tailwindcss/browser": "4.2.4",
+    "@excalidraw/excalidraw": "0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "2.2.2",
     "axe-core": "4.11.1",
-    "daisyui": "5.5.19",
-    "playwright-core": "1.61.0"
+    "esbuild": "0.28.2",
+    "mermaid": "11.12.1",
+    "playwright-core": "1.61.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   }
 }

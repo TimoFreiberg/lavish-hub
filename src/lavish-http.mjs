@@ -1,21 +1,20 @@
 import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { runtimeEnv } from './runtime.mjs';
 
-export const supportedLavishVersion = '0.1.96';
+export const supportedLavishVersion = '0.1.97';
 const keyFor = file => createHash('sha256').update(file).digest('hex').slice(0, 16);
 const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
 
-// These private contracts are verified against lavish-axi 0.1.96's dist/cli.mjs:
-// /health, handlePoll, createPollOutput, replyCommand, endCommand, visibleSessions.
 // Opening a page still uses the CLI, which owns server startup and networking.
-export function createLavishClient({ env = process.env, fetch: request = globalThis.fetch, signal, vendored = false } = {}) {
-  const version = vendored ? '0.1.97' : supportedLavishVersion;
-  const port = Number(env.LAVISH_AXI_PORT || 4387);
+export function createLavishClient({ env = process.env, fetch: request = globalThis.fetch, signal } = {}) {
+  env = runtimeEnv(env);
+  const version = supportedLavishVersion;
+  const port = Number(env.LAVISH_AXI_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid LAVISH_AXI_PORT');
   const base = `http://127.0.0.1:${port}`;
-  const directory = path.resolve(env.LAVISH_AXI_STATE_DIR || path.join(os.homedir(), '.lavish-axi'));
+  const directory = path.resolve(env.LAVISH_AXI_STATE_DIR);
   const stateFile = path.join(directory, 'state.json');
   const boundedSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000);
   async function json(url, options = {}) {
@@ -28,8 +27,8 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
   }
   async function verify() {
     const health = await json(`${base}/health`, { signal: boundedSignal() });
-    if (!health.ok || health.app !== 'lavish-axi' || health.version !== version || (vendored && health.lavish_kit_page_reviews !== 1)) {
-      throw failure('UNSUPPORTED_LAVISH', `Direct HTTP requires ${vendored ? 'the patched vendored ' : ''}lavish-axi ${version}; server reports ${health.version || 'unknown'}`);
+    if (!health.ok || health.app !== 'lavish-axi' || health.version !== version || health.lavish_kit_page_reviews !== 1) {
+      throw failure('UNSUPPORTED_LAVISH', `Direct HTTP requires patched lavish-axi ${version}; server reports ${health.version || 'unknown'}`);
     }
     const canonicalDirectory = await realpath(directory);
     const stateId = keyFor(path.join(canonicalDirectory, 'state.json'));

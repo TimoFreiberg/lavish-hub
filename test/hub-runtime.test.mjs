@@ -273,7 +273,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(notification.type, 'agent-notification');
   assert.deepEqual(notification.prompts, ['Review this']);
   assert.equal(notification.context, 'quoted context');
-  assert.match(notification.reply, /lavish-axi reply/);
+  assert.match(notification.reply, /lavish-kit reply/);
   const shutdownMarker = path.join(dir, 'shutdown-marker');
   const shutdownCommand = { id: 'owner-shutdown', argv: [process.execPath, '-e', "require('fs').writeFileSync(process.argv[1], 'started'); setTimeout(() => require('fs').writeFileSync(process.argv[1], 'escaped'), 1500)", shutdownMarker] };
   const shutdownRequest = request('executeCommand', shutdownCommand).catch(() => null);

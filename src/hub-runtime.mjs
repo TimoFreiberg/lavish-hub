@@ -227,7 +227,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       if (batch.session.status === 'feedback') {
         const sourceFor = sibling => siblingSources.get(sibling) ?? null;
         const prompts = batch.prompts.map(prompt => typeof prompt === 'object' && prompt !== null && sourceFor(prompt.page) ? { ...prompt, document: sourceFor(prompt.page) } : prompt);
-        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, snapshotDocument: sourceFor(batch.snapshot_page), failures: batch.artifact_failures || [], reply: `lavish-axi reply ${quote(page)} --agent-reply '...'` }));
+        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, snapshotDocument: sourceFor(batch.snapshot_page), failures: batch.artifact_failures || [], reply: `lavish-kit reply ${quote(page)} --agent-reply '...'` }));
       }
       if (batch.session.status === 'ended' || batch.session.session_ended) break;
     }
