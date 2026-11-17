@@ -14,7 +14,7 @@ if (mode === 'test') {
   if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error('LAVISH_KIT_TEST_JOBS must be an integer from 1 to 8');
   const files = (await readdir('test')).filter(name => name.endsWith('.test.mjs')).sort();
   // Approximate baseline seconds, used only to balance groups, never to skip tests.
-  const weights = { browser: 83, cli: 28, 'daemon-integration': 16, deps: 7, 'maintenance-finalization': 3, 'maintenance-integration': 14, markdown: 19, 'pr-browser': 21, relay: 18, 'task-browser': 23, 'visual-checks': 17, watch: 23 };
+  const weights = { 'maintenance-finalization': 3, 'maintenance-integration': 14, markdown: 19, 'visual-checks': 17 };
   const groups = Array.from({ length: Math.min(count, files.length) }, () => ({ files: [], weight: 0 }));
   for (const file of files.sort((a, b) => (weights[b.replace('.test.mjs', '')] || 1) - (weights[a.replace('.test.mjs', '')] || 1))) {
     const group = groups.reduce((a, b) => a.weight <= b.weight ? a : b);

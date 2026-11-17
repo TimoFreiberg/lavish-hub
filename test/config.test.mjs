@@ -4,9 +4,6 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { configPath, readCreatePr } from '../src/config.mjs';
-import { documentOutputPath } from '../src/document-page.mjs';
-import { markdownOutputPath } from '../src/markdown.mjs';
-import { pagePath } from '../src/diff/page.mjs';
 
 test('Create PR config accepts argv only, with no default for absent or invalid values', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-config-'));
@@ -27,22 +24,3 @@ test('Create PR config accepts argv only, with no default for absent or invalid 
   }
 });
 
-test('generated pages default to XDG data, or the home data directory', () => {
-  const old = process.env.XDG_DATA_HOME;
-  try {
-    for (const data of ['/example/data', undefined]) {
-      if (data === undefined) delete process.env.XDG_DATA_HOME;
-      else process.env.XDG_DATA_HOME = data;
-      const base = path.join(data || path.join(os.homedir(), '.local/share'), 'lavish-kit/pages');
-      assert.ok(documentOutputPath('/example/task.md').startsWith(path.join(base, 'markdown') + path.sep));
-      assert.ok(documentOutputPath('/example/pr.md', undefined, 'pr').startsWith(path.join(base, 'pr') + path.sep));
-      assert.ok(markdownOutputPath('/example/doc.md').startsWith(path.join(base, 'markdown') + path.sep));
-      assert.ok(pagePath({ root: '/example/repo', rangeSpec: '@' }).startsWith(path.join(base, 'diff') + path.sep));
-      assert.equal(documentOutputPath('/example/task.md', '/override/index.html'), '/override/index.html');
-      assert.equal(pagePath({}, '/override/index.html'), '/override/index.html');
-    }
-  } finally {
-    if (old === undefined) delete process.env.XDG_DATA_HOME;
-    else process.env.XDG_DATA_HOME = old;
-  }
-});

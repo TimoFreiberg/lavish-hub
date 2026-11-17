@@ -1,12 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
 
-import { ensureRelay, quote, recordTarget } from './relay.mjs';
 import { createLavishClient } from './lavish-http.mjs';
 
 const exec = promisify(execFile);
@@ -72,19 +71,3 @@ export async function presentReview(file, url, { title, open = false, log = cons
   return { url, registered };
 }
 
-export async function openReview(file, { title, open = false, reopen = false, sourceFile, pr, generation } = {}) {
-  file = path.resolve(file);
-  const review = await prepareReview(file, { reopen });
-  if (review.ended) return review;
-  if (title === undefined) {
-    const html = await readFile(file, 'utf8');
-    title = html.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i)?.[1].trim() || path.basename(file);
-  }
-  if (process.env.HC_TERMINAL_ID) await recordTarget(file, { title, sourceFile, pr, generation });
-  const worker = await ensureRelay(await realpath(file));
-  const { url, registered } = await presentReview(file, review.url, { title, open });
-  console.log(worker.delivery
-    ? `Feedback is delivered automatically; do not poll ${file}.`
-    : `Feedback requires agent polling: lavish-axi poll ${quote(file)}.`);
-  return { url, registered, delivery: worker.delivery };
-}

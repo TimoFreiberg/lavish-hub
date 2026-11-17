@@ -9,7 +9,7 @@ import { createHubPr } from './hub-pr.mjs';
 import { resolveWorkspace, resolveRecordedWorkspace, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
-import { quote } from './relay.mjs';
+import { quote } from './quote.mjs';
 import { ensureDeps } from './deps.mjs';
 import { composeHubHtml } from './hub-html.mjs';
 

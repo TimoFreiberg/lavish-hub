@@ -1,11 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { readCreatePr } from '../src/config.mjs';
-import { preparePR } from '../src/pr-page.mjs';
 
 const fishQuote = value => `'${String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`;
 const example = ['fish', '-c', 'jprc $argv', '--'];
@@ -27,20 +26,3 @@ test('documented fish argv prefix forwards appended arguments to a stub function
   }
 });
 
-test('PR metadata captures a single jj revision in the recorded repository', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-pr-metadata-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const run = (args) => execFileSync('jj', args, { cwd: dir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-  run(['git', 'init', '--colocate']);
-  run(['config', 'set', '--repo', 'user.name', 'Test']);
-  run(['config', 'set', '--repo', 'user.email', 'test@example.invalid']);
-  run(['config', 'set', '--repo', 'revset-aliases."trunk()"', 'root()']);
-  await writeFile(path.join(dir, 'change.txt'), 'Change\n');
-  run(['commit', '-m', 'Commit title\n\nCommit body']);
-  const metadata = await preparePR('@-', dir);
-  assert.equal(metadata.repo, await realpath(dir));
-  assert.equal(metadata.rev, '@-'); assert.match(metadata.head, /^[a-f0-9]{40}$/);
-  assert.ok(metadata.commits.some(line => line.endsWith('Commit title')));
-  await assert.rejects(preparePR('root() | @', dir), /exactly one commit/);
-  await assert.rejects(preparePR('missing_revision', dir));
-});

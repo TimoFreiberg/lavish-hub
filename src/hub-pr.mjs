@@ -3,7 +3,7 @@ import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { readCreatePr } from './config.mjs';
-import { quote } from './relay.mjs';
+import { quote } from './quote.mjs';
 
 const exec = promisify(execFile);
 

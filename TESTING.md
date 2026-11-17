@@ -84,11 +84,11 @@ Lavish telemetry with `LAVISH_AXI_TELEMETRY=0` for tests and screenshots.
 Chromium. Fake-executable suites explicitly select CLI transport; real server
 tests use the default HTTP transport.
 
-To run a single file: `node --test --test-concurrency=1 test/cli.test.mjs`.
+To run a single file: `node --test --test-concurrency=1 test/hub-cli-surface.test.mjs`.
 `test/hub-foundation.test.mjs` exercises canonical jj workspace identity,
 repository replacement detection, state-directory aliases, recorded missing-workspace
 lookup, and capability-protected loopback requests. `test/hub-opening.test.mjs`
-checks the opening helpers independently of the standalone relay. The other
+checks that opening refuses an incompatible server. The other
 `test/hub-*.test.mjs` suites cover runtime lifecycle, documents and metadata,
 jj snapshots and edits, commands, PR launch, browser UI, refresh, and feedback.
 The screenshot matrix below includes simulated hub states; inspect a live hub
