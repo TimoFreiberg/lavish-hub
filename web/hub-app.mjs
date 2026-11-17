@@ -117,14 +117,14 @@ async function refresh(force = false) {
 function draft(key, initial) { if (!drafts.has(key)) drafts.set(key, initial); return drafts.get(key); }
 function editor(label, value, onInput) { const area = el('textarea', null, { 'aria-label': label, rows: '5', spellcheck: 'false' }); area.value = value; area.addEventListener('input', () => onInput(area.value)); return area; }
 function notice(text) { return el('p', text, { role: 'status', class: 'notice' }); }
-async function renderView() {
+async function renderView(focusChangeId) {
   const view = document.querySelector('#view'); view.replaceChildren(); rendered = true;
   const id = selected;
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
   view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
   if (id === 'commits' || id === 'changes') {
     if (!snapshot) { view.append(notice('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
-    view.append(el('p', `Range ${snapshot.base.slice(0, 12)} → ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
+    view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
     if (id === 'changes') {
       view.append(diffContainer);
       if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true });
@@ -142,7 +142,7 @@ async function renderView() {
       const area = editor(label, state.text, value => { state.text = value; });
       area.className = 'commit-editor';
       display.hidden = state.editing; area.hidden = !state.editing;
-      const edit = () => { if (commit.immutable || commit.divergent) return; state.editing = true; renderView(); };
+      const edit = () => { if (commit.immutable || commit.divergent) return; state.editing = true; renderView(commit.changeId); };
       display.addEventListener('click', edit);
       display.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); edit(); } });
       const info = el('p', state.message, { role: 'alert', class: 'save-error' });
@@ -166,7 +166,7 @@ async function renderView() {
       area.addEventListener('keydown', event => { if (event.key === 'Escape' && !state.saving) { event.preventDefault(); cancel.click(); } });
       save.hidden = cancel.hidden = !state.editing;
       card.append(display, area, save, cancel, info, stats); view.append(card);
-      if (state.editing) area.focus();
+      if (state.editing && commit.changeId === focusChangeId) area.focus();
       for (const [node, lines] of [[display, 8], [stats, 6]]) {
         if (!node.hidden) { const style = getComputedStyle(node); node.style.height = `${Math.min(node.scrollHeight, parseFloat(style.lineHeight) * lines + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom))}px`; }
       }

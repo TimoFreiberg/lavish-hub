@@ -63,6 +63,39 @@ test('unchanged snapshots preserve the focused editor and external changes rende
   assert.equal(await page.evaluate(() => globalThis.originalEditor.isConnected), false);
 });
 
+for (const activation of ['click', 'keyboard']) test(`activating an upper commit editor by ${activation} focuses its draft`, { timeout: 30000 }, async t => {
+  let head = 'b'.repeat(40);
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head, commits: [
+      { changeId: 'c'.repeat(32), commitId: head, description: 'Upper' },
+      { changeId: 'd'.repeat(32), commitId: 'e'.repeat(40), description: 'Lower' },
+    ] }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Edit Description dddddddddddd' }).click();
+  const lower = page.getByRole('textbox', { name: 'Description dddddddddddd' });
+  await lower.fill('Lower draft');
+  const display = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
+  if (activation === 'click') await display.click();
+  else { await display.focus(); await page.keyboard.press('Enter'); }
+  const upper = page.getByRole('textbox', { name: 'Description cccccccccccc' });
+  assert.equal(await upper.evaluate(node => document.activeElement === node), true);
+  await page.keyboard.type('!');
+  assert.equal(await upper.inputValue(), 'Upper!');
+  assert.equal(await lower.inputValue(), 'Lower draft');
+  await upper.evaluate(node => node.setSelectionRange(2, 2));
+  head = 'f'.repeat(40);
+  await assertEventually(async () => assert.ok((await page.locator('.card h2').first().textContent()).includes('ffffffffffff')));
+  assert.equal(await upper.evaluate(node => document.activeElement === node && node.selectionStart === 2 && node.selectionEnd === 2), true);
+  assert.equal(await upper.inputValue(), 'Upper!');
+  assert.equal(await lower.inputValue(), 'Lower draft');
+});
+
 test('commit descriptions render safely and retain draft targets across rewrites and errors', { timeout: 30000 }, async t => {
   let commitId = 'b'.repeat(40), description = '', saved;
   const changeId = 'c'.repeat(32);
@@ -81,6 +114,7 @@ test('commit descriptions render safely and retain draft targets across rewrites
   const display = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
   await display.waitFor();
   assert.equal(await display.textContent(), '(no description set)');
+  assert.equal(await page.getByText('--from aaaaaaaaaaaa --to bbbbbbbbbbbb', { exact: true }).count(), 1);
   assert.equal(await page.getByRole('region', { name: 'Feedback' }).count(), 0);
   assert.equal(await page.getByText('aggregate-only').count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Changes', exact: true }).count(), 1);
