@@ -44,7 +44,11 @@ export async function readHubSnapshot(cwd, { afterMetadata } = {}) {
   const commits = await rows(cwd, op, `${base}..${head}`);
   if (afterMetadata) await afterMetadata();
   const args = ['--at-operation', op, '--config', 'diff.git.show-path-prefix=true', 'diff', '--from', base, '--to', head];
-  const [patch, stat] = await Promise.all([run(cwd, [...args, '--git']), run(cwd, [...args, '--stat'])]);
+  const [patch, stat, commitStats] = await Promise.all([
+    run(cwd, [...args, '--git']), run(cwd, [...args, '--stat']),
+    Promise.all(commits.map(commit => run(cwd, ['--at-operation', op, 'diff', '-r', commit.commitId, '--stat']))),
+  ]);
+  commits.forEach((commit, index) => { commit.stat = commitStats[index]; });
   return { operationId: op, base, head, commits, patch, stat, generated: new Date().toISOString() };
 }
 

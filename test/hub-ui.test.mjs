@@ -57,6 +57,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}; globalThis.queued=[]; globalThis.lavish={queuePrompt:(...args)=>queued.push(args),sendQueuedPrompts:()=>{throw new Error('send failed')}};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: /Edit Description/ }).click();
   const description = page.getByRole('textbox', { name: /Description/ });
   await description.waitFor(); await description.fill('My draft');
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
@@ -80,7 +81,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   assert.equal(await description.inputValue(), 'My draft');
   await page.getByRole('button', { name: 'Save description' }).click();
-  await page.getByRole('status').filter({ hasText: 'Conflict: stale' }).waitFor();
+  await page.getByRole('alert').filter({ hasText: 'Conflict: stale' }).waitFor();
   assert.equal(await description.inputValue(), 'My draft');
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   const tasks = page.getByRole('textbox', { name: 'Tasks Markdown' }); await tasks.fill('- [x] Local draft\n');

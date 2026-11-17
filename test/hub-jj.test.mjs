@@ -31,6 +31,7 @@ test('hub_jj_snapshot pins metadata, endpoints and patch through an external rew
   assert.match(snapshot.patch, /\+initial change/);
   assert.doesNotMatch(snapshot.patch, /later rewrite/);
   assert.match(snapshot.stat, /file/);
+  assert.match(snapshot.commits.find(commit => commit.commitId === snapshot.head).stat, /file/);
   const next = await readHubSnapshot(cwd);
   assert.match(next.patch, /\+later rewrite/);
   assert.notEqual(next.head, snapshot.head);

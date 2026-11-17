@@ -155,7 +155,7 @@ async function renderView() {
   const id = selected;
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
   view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
-  feedback(view, id);
+  if (id !== 'commits') feedback(view, id);
   if (id === 'commits' || id === 'changes') {
     if (!snapshot) { view.append(notice('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `Range ${snapshot.base.slice(0, 12)} → ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
@@ -165,24 +165,40 @@ async function renderView() {
       diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, kind: 'jj', to: snapshot.head });
       return;
     }
-    const stats = button(snapshot.stat || 'No changed files', () => select('changes')); stats.className = 'stats'; view.append(stats);
     if (!snapshot.commits.length) view.append(el('p', 'No commits in this range.'));
     for (const commit of snapshot.commits) {
-      const key = `commit:${commit.changeId}`, state = draft(key, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '' });
-      if (state.text === state.original && !state.saving) { state.text = commit.description; state.original = commit.description; state.commitId = commit.commitId; }
+      const key = `commit:${commit.changeId}`, state = draft(key, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '', editing: false });
+      if (state.awaitingCommit && commit.commitId !== state.awaitingCommit) state.awaitingCommit = null;
+      if (state.text === state.original && !state.saving && !state.message && !state.awaitingCommit) { state.text = commit.description; state.original = commit.description; state.commitId = commit.commitId; }
       const card = el('section', null, { class: 'card' }); card.append(el('h2', `${commit.changeId.slice(0, 12)} · ${commit.commitId.slice(0, 12)}`));
-      const info = notice(state.message || (commit.immutable ? 'Immutable' : commit.divergent ? 'Divergent change' : 'Ready'));
-      const area = editor(`Description ${commit.changeId.slice(0, 12)}`, state.text, value => { state.text = value; info.textContent = value === state.original ? 'Ready' : 'Unsaved changes'; });
+      const label = `Description ${commit.changeId.slice(0, 12)}`;
+      const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}`, tabindex: '0', role: 'button', 'aria-label': `Edit ${label}` });
+      const area = editor(label, state.text, value => { state.text = value; });
+      area.className = 'commit-editor';
+      display.hidden = state.editing; area.hidden = !state.editing;
+      const edit = () => { if (commit.immutable || commit.divergent) return; state.editing = true; display.hidden = true; area.hidden = false; area.focus(); };
+      display.addEventListener('click', edit);
+      display.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); edit(); } });
+      const info = el('p', state.message, { role: 'alert', class: 'save-error' });
       const save = button('Save description', async () => {
-        const submitted = state.text; state.saving = true; save.disabled = true; info.textContent = 'Saving…';
+        const submitted = state.text; state.saving = true; save.disabled = true;
         try {
           const result = await action('describe', { changeId: commit.changeId, commitId: state.commitId, expectedDescription: state.original, description: submitted });
           if (result.status !== 'saved') { state.message = `Conflict: ${result.reason}. Current description: ${result.current?.map(row => row.description).join(' / ') || '(unavailable)'}`; }
-          else { state.original = result.current.description; state.commitId = result.current.commitId; if (state.text === submitted) { state.text = state.original; area.value = state.text; } state.message = 'Saved'; }
+          else { state.awaitingCommit = commit.commitId === result.current.commitId ? null : commit.commitId; state.original = result.current.description; state.commitId = result.current.commitId; if (state.text === submitted) { state.text = state.original; state.editing = false; } state.message = ''; }
         } catch (error) { state.message = error.message; }
-        state.saving = false; save.disabled = false; info.textContent = state.message;
+        state.saving = false;
+        if (selected === 'commits') renderView();
       });
-      save.disabled = commit.immutable || commit.divergent; card.append(area, save, info); view.append(card);
+      save.disabled = state.saving || commit.immutable || commit.divergent;
+      if (state.message) { save.className = 'save-failed'; save.title = state.message; save.prepend(el('span', '⚠ ', { 'aria-hidden': 'true' })); }
+      if (commit.immutable || commit.divergent) { display.removeAttribute('role'); display.removeAttribute('tabindex'); display.removeAttribute('aria-label'); save.title = commit.immutable ? 'Immutable commit' : 'Divergent change'; }
+      const stats = el('pre', null, { class: 'commit-stat', 'aria-label': `Changes ${commit.changeId.slice(0, 12)}` });
+      for (const part of (commit.stat || 'No changed files').split(/(\++|-+)/)) stats.append(el('span', part, { class: /^\++$/.test(part) ? 'stat-add' : /^-+$/.test(part) ? 'stat-remove' : '' }));
+      card.append(display, area, save, info, stats); view.append(card);
+      for (const [node, lines] of [[display, 8], [stats, 6]]) {
+        if (!node.hidden) { const style = getComputedStyle(node); node.style.height = `${Math.min(node.scrollHeight, parseFloat(style.lineHeight) * lines + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom))}px`; }
+      }
     }
     return;
   }
