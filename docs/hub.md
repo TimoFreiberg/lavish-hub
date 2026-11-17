@@ -60,8 +60,10 @@ rollback can leave generated pages out of sync. Scope is recorded as supplied an
 is not updated if commits are rewritten. The displayed scope describes the review
 at publication time, not necessarily the current checkout.
 
-Use Lavish annotations to give feedback. A browser reload prompts before
-discarding unsaved hub drafts; cancel it to keep editing.
+Use Lavish annotations to give feedback outside the Commits view. Commits lets
+you select and edit text without annotation interception; your annotation mode
+is unchanged when you switch views. A browser reload prompts before discarding
+unsaved hub drafts; cancel it to keep editing.
 
 Commits shows each description and its own diff statistics. Use the pencil button
 to edit a description; Cancel or Escape discards the edit. Descriptions and

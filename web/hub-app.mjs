@@ -126,6 +126,7 @@ function notice(text) { return el('p', text, { role: 'status', class: 'notice' }
 async function renderView(focusChangeId) {
   const view = document.querySelector('#view'); view.replaceChildren(); rendered = true;
   const id = selected;
+  view.toggleAttribute('data-lavish-action', id === 'commits');
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
   view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
   if (id === 'commits' || id === 'changes') {
