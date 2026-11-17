@@ -2811,7 +2811,15 @@ test("a fatal artifact failure still wakes the poll without user action", async 
 test("artifact HTML negotiates compression and rejects expired compressed loads", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-compression-"));
   const artifact = path.join(dir, "artifact.html");
-  await writeFile(artifact, `<!doctype html><html><body>${"hello ".repeat(500)}</body></html>`);
+  const source = `<!doctype html><html><body>${"hello ".repeat(500)}</body></html>`;
+  await writeFile(artifact, source);
+  const assertInjectedSource = (body) => {
+    const html = body.toString();
+    const injected = html.match(/<script src="\/sdk\.js\?[^"]*"><\/script>/g);
+    assert.equal(injected?.length, 1);
+    assert.equal(html.replace(injected[0], ""), source);
+  };
+  let compressorInput;
   let pause = false;
   let fail = false;
   let entered;
@@ -2820,6 +2828,7 @@ test("artifact HTML negotiates compression and rejects expired compressed loads"
     port: 0,
     stateFile: path.join(dir, "state.json"),
     compressArtifact: async (encoding, bytes) => {
+      compressorInput = Buffer.from(bytes);
       if (pause) {
         entered();
         await new Promise((resolve) => {
@@ -2865,7 +2874,7 @@ test("artifact HTML negotiates compression and rejects expired compressed loads"
     for (const route of [() => artifactLoadUrl(base, key, load), () => `${base}/artifact/${key}/artifact.html`]) {
       const identity = await wire(route(), "identity");
       assert.equal(identity.status, 200);
-      assert.match(identity.body.toString(), /sdk\.js\?key=/);
+      assertInjectedSource(identity.body);
       assert.equal(identity.headers["cache-control"], "no-store");
       assert.match(identity.headers.vary, /Accept-Encoding/i);
       for (const [accept, expected] of [
@@ -2874,6 +2883,7 @@ test("artifact HTML negotiates compression and rejects expired compressed loads"
         ["gzip;q=0.2, identity;q=0.8", undefined],
         ["zstd, gzip", typeof zlib.zstdCompress === "function" ? "zstd" : "gzip"],
       ]) {
+        compressorInput = undefined;
         const result = await wire(route(), accept);
         assert.equal(result.status, 200);
         assert.equal(result.headers["content-encoding"], expected);
@@ -2884,9 +2894,13 @@ test("artifact HTML negotiates compression and rejects expired compressed loads"
             : expected === "zstd"
               ? zlib.zstdDecompressSync(result.body)
               : result.body;
-        // Path responses contain a fresh authentication nonce on each request.
-        assert.match(decoded.toString(), /sdk\.js\?key=/);
-        assert.match(decoded.toString(), /hello hello/);
+        if (expected) {
+          assert.ok(compressorInput);
+          assert.deepEqual(decoded, compressorInput);
+        } else {
+          assert.equal(compressorInput, undefined);
+        }
+        assertInjectedSource(decoded);
       }
       const head = await wire(route(), "gzip", "HEAD");
       assert.equal(head.headers["content-encoding"], "gzip");
@@ -2895,7 +2909,13 @@ test("artifact HTML negotiates compression and rejects expired compressed loads"
       assert.equal((await wire(route(), "*;q=0")).status, 406);
       fail = true;
       assert.equal((await wire(route(), "gzip, identity;q=0")).status, 500);
-      assert.equal((await wire(route(), "gzip")).headers["content-encoding"], undefined);
+      compressorInput = undefined;
+      const fallback = await wire(route(), "gzip");
+      assert.equal(fallback.status, 200);
+      assert.equal(fallback.headers["content-encoding"], undefined);
+      assert.ok(compressorInput);
+      assert.deepEqual(fallback.body, compressorInput);
+      assertInjectedSource(fallback.body);
       fail = false;
       pause = true;
       const started = new Promise((resolve) => {
