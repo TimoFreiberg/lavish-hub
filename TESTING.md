@@ -202,9 +202,3 @@ and dependency tools are unchanged because their measured cost did not justify
 a rewrite. Parallel scheduling uses more peak CPU/memory and can expose timing
 flakiness under host load. Linux remains supported but was not benchmarked here.
 
-## Known flaky tests
-
-- The large-diff timing test in `test/browser.test.mjs` (first row within
-  5 seconds) fails under load and passes on rerun.
-- The offline browser smoke test in `test/browser.test.mjs` times out
-  occasionally. Cause unknown.

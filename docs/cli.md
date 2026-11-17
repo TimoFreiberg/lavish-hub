@@ -1,7 +1,9 @@
 # Command reference
 
 ```text
-lavish-kit hub [listen|stop|status] [--workspace DIR] [--open] [--reopen]
+lavish-kit hub listen [--workspace DIR] [--open] [--reopen]
+lavish-kit hub stop [--workspace DIR]
+lavish-kit hub [status] [--workspace DIR] [--open] [--view ID]
 lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
 lavish-kit hub tasks --file FILE [--workspace DIR]
 lavish-kit hub pr [--file FILE] [--rev REV] [--workspace DIR]

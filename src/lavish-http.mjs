@@ -53,7 +53,7 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
       const query = new URLSearchParams({ file: absolute, owner });
       if (timeoutMs !== undefined) query.set('timeoutMs', String(timeoutMs));
       // Never retry a consuming request: a truncated response has an unknown
-      // delivery outcome. pollLoop persists complete results before polling again.
+      // delivery outcome.
       const data = await json(`${base}/api/poll?${query}`, { signal });
       if (data.status === 'missing') throw failure('NOT_FOUND', 'No active Lavish session for this file');
       if (!['feedback', 'ended', 'waiting', 'browser_disconnected'].includes(data.status)) throw failure('LAVISH_PROTOCOL_ERROR', 'Unknown poll status');

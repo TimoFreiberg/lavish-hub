@@ -18,8 +18,8 @@ export async function saveDocument(data, target, { recovering = false } = {}) {
     const file = target.sourceFile, savedHash = textHash(text);
     const saved = { reply: 'Saved', notice: `The user edited ${file}. Read the updated source file before continuing.` };
     const diskHash = textHash(await readFile(file));
-    // A durable pending batch may resume after rename but before its result was
-    // recorded. Matching the requested bytes makes that retry idempotent.
+    // A retry may arrive after the previous write succeeded. Treat matching
+    // requested content as success even if its base hash is now stale.
     if (diskHash === savedHash) return saved;
     if (diskHash !== baseHash) return mismatch();
     const { mode } = await stat(file);
