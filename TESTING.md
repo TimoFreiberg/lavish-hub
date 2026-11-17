@@ -20,6 +20,16 @@ in disposable page memory; reload or navigation discards changes. See the
 Nothing is published. Do not overlap `just preview` with other commands that
 install dependencies in this checkout.
 
+## Demo hub
+
+Run `just demo` to see the real hub with realistic data. It rebuilds `dist/`,
+creates a jj repository and review documents in
+`${XDG_CACHE_HOME:-$HOME/.cache}/lavish-kit-demo`, and runs a hub on port 4399
+with its own XDG and Lavish state, so your normal hub is not affected. Each run
+deletes and recreates that directory. Restart it to pick up code changes. Stop
+it with Ctrl-C or `just demo-stop`. Use `--dir`, `--port` and `--no-open` to
+change the defaults.
+
 ## Complete correctness run
 
 Run `just check` (or `node scripts/check.mjs all`) for the entire pipeline.

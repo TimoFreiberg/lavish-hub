@@ -13,4 +13,4 @@ Start with the [README](../README.md) for installation and the [hub guide](hub.m
 | [releasing.md](releasing.md) | Package production, releases, and mise installation |
 | [maintenance.md](maintenance.md) | Maintenance and vendored Lavish provenance |
 | [interactive-preview.md](interactive-preview.md) | Fixture preview and hosting |
-| [TESTING.md](../TESTING.md) | Automated and visual checks |
+| [TESTING.md](../TESTING.md) | Automated and visual checks, and the `just demo` hub |

@@ -3,6 +3,13 @@ preview out="preview":
     npm ci
     node scripts/preview.mjs "{{out}}"
 
+# Run the real hub against generated demo data, isolated from your normal hub.
+demo *args:
+    node scripts/demo.mjs {{args}}
+
+demo-stop *args:
+    node scripts/demo.mjs --stop {{args}}
+
 # One install, screenshots first, then isolated correctness suites.
 check:
     node scripts/check.mjs all
