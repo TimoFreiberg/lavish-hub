@@ -5,6 +5,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { markedProcesses } from './test-process-audit.mjs';
+import { runSupervised } from './test-supervision.mjs';
 
 const mode = process.argv[2];
 if (!['test', 'test-worker', 'shots', 'e2e'].includes(mode)) throw new Error('Expected test, shots, or e2e');
@@ -20,14 +21,19 @@ if (mode === 'test') {
     group.files.push(`test/${file}`); group.weight += weights[file.replace('.test.mjs', '')] || 1;
   }
   const children = new Set();
-  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { for (const child of children) child.kill(signal); });
+  let cancelled = false;
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { cancelled = true; for (const child of children) child.kill(signal); });
   const statuses = await Promise.all(groups.map(group => new Promise(resolve => {
     const child = spawn(process.execPath, [import.meta.filename, 'test-worker', ...group.files], { stdio: 'inherit' });
     children.add(child);
     child.once('error', error => { children.delete(child); console.error(error); resolve(1); });
     child.once('exit', code => { children.delete(child); resolve(code ?? 1); });
   })));
-  process.exit(statuses.some(code => code !== 0) ? 1 : 0);
+  process.exit(cancelled || statuses.some(code => code !== 0) ? 1 : 0);
+}
+const controller = new AbortController();
+if (mode === 'test-worker') {
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => controller.abort());
 }
 const root = await mkdtemp(path.join(os.tmpdir(), 'lavish-kit-run-'));
 const port = await new Promise((resolve, reject) => {
@@ -44,15 +50,27 @@ if (mode === 'e2e') {
   env.HC_SESSION = `lk-${marker.slice(0, 8)}`;
   env.HC_SOCKET = path.join(hcRoot, 'core.sock');
 }
-const args = mode === 'test-worker' ? ['--test', '--test-concurrency=1', ...process.argv.slice(3)] : [mode === 'e2e' ? 'test/relay-e2e.mjs' : 'scripts/shots.mjs'];
-let status = await new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, args, { env, stdio: 'inherit' });
-  const interrupt = () => child.kill('SIGINT'), terminate = () => child.kill('SIGTERM');
-  process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
-  const cleanup = () => { process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); };
-  child.once('error', error => { cleanup(); reject(error); });
-  child.once('exit', (code, signal) => { cleanup(); resolve(code ?? (signal ? 1 : 0)); });
-});
+let status = 0;
+if (mode === 'test-worker') {
+  for (const file of process.argv.slice(3)) {
+    if (controller.signal.aborted) { status = 1; break; }
+    const result = await runSupervised(['--test', '--test-concurrency=1', file], { env, timeout: 10 * 60 * 1000, signal: controller.signal });
+    if (result.timedOut) console.error(`Test runner: ${file} timed out after 10 minutes`);
+    if (result.error) console.error(`Test runner: ${file}: ${result.error.message}`);
+    if (result.code !== 0) status = 1;
+  }
+  if (controller.signal.aborted) status = 1;
+} else {
+  const args = [mode === 'e2e' ? 'test/relay-e2e.mjs' : 'scripts/shots.mjs'];
+  status = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, args, { env, stdio: 'inherit' });
+    const interrupt = () => child.kill('SIGINT'), terminate = () => child.kill('SIGTERM');
+    process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
+    const cleanup = () => { process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); };
+    child.once('error', error => { cleanup(); reject(error); });
+    child.once('exit', (code, signal) => { cleanup(); resolve(code ?? (signal ? 1 : 0)); });
+  });
+}
 if (hcRoot) {
   try { execFileSync('hc', ['server', 'stop'], { env, encoding: 'utf8', timeout: 15000 }); }
   catch (error) { console.error(`Test audit: cannot stop private hc service: ${error.message}`); status = 1; }
@@ -75,6 +93,7 @@ try {
   if (leaked.length) { console.error(`Test audit: processes with the run marker remain (PIDs): ${leaked.join(', ')}`); status = 1; }
   else console.error('Test audit: no processes with the run marker remain');
 } catch (error) { console.error(`Test audit: cannot inspect processes: ${error.message}`); status = 1; }
+if (controller.signal.aborted) status = 1;
 if (status === 0) {
   await rm(root, { recursive: true, force: true });
   if (hcRoot) await rm(hcRoot, { recursive: true, force: true });

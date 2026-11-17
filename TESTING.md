@@ -64,8 +64,12 @@ retained for inspection.
 ## `just test`
 
 Runs `npm ci`, then every `*.test.mjs` file in `test/`, balanced across three
-isolated groups. Each group uses `node --test --test-concurrency=1`; tests within
-a file retain their original order and real subprocess/browser behavior. Set
+isolated groups. Each group runs files sequentially with `node --test
+--test-concurrency=1`; tests within a file retain their original order and real
+subprocess/browser behavior. Each file has a ten-minute deadline. A timeout fails
+the file and stops its process group and marked descendants before the group's
+usual session and process audits. Cancellation also stops the active file and
+marked descendants. Set
 `LAVISH_KIT_REAL_NPM=1` to add
 a first-run test against the real npm registry.
 
