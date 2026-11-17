@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 import { createHubTransport } from '../src/hub-transport.mjs';
+import { build } from 'esbuild';
 
 test('refresh updates clean documents and retains dirty drafts and their target', { timeout: 30000 }, async t => {
   let selected = 'tasks';
@@ -19,7 +20,9 @@ test('refresh updates clean documents and retains dirty drafts and their target'
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
-  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
   const editor = page.getByRole('textbox', { name: 'Tasks Markdown' });
   await editor.waitFor();
   document = { text: 'External\n', hash: 'second', version: 'two' };
@@ -120,6 +123,50 @@ test('successful description save survives an old snapshot and renders literal t
   current = { changeId, commitId: newId, description: '<b>literal</b>\nsecond\n' };
   await page.getByRole('button', { name: 'Refresh' }).click();
   await assertEventually(async () => assert.equal(await display.textContent(), current.description));
+});
+
+test('consecutive saves retain the latest target across an intermediate snapshot', { timeout: 30000 }, async t => {
+  const changeId = 'c'.repeat(32), ids = ['a', 'b', 'd', 'e'].map(c => c.repeat(40));
+  let current = { changeId, commitId: ids[0], description: 'A' }, releaseSecond;
+  const requests = [];
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: ids[0], head: current.commitId, commits: [{ ...current }] }),
+    describe: async body => {
+      requests.push(body);
+      if (requests.length === 2) await new Promise(resolve => { releaseSecond = resolve; });
+      current = { changeId, commitId: ids[requests.length], description: body.description };
+      return { status: 'saved', current: { ...current } };
+    },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { releaseSecond?.(); await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  const display = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
+  const editor = page.getByRole('textbox', { name: 'Description cccccccccccc' });
+  assert.equal(await page.getByRole('button', { name: 'Save description' }).count(), 0);
+  await display.click(); await editor.fill('discard'); await editor.press('Escape');
+  assert.equal(await display.textContent(), 'A');
+  await display.click(); await editor.fill('discard again'); await page.getByRole('button', { name: 'Cancel' }).click();
+  assert.equal(await display.textContent(), 'A');
+  await display.click(); await editor.fill('B'); await page.getByRole('button', { name: 'Save description' }).click();
+  await assertEventually(async () => assert.equal(await display.textContent(), 'B'));
+  await display.click(); await editor.fill('C'); await page.getByRole('button', { name: 'Save description' }).click();
+  await assertEventually(() => assert.equal(requests.length, 2));
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await assertEventually(async () => assert.ok((await page.locator('.card h2').textContent()).includes(ids[1].slice(0, 12))));
+  await editor.press('Escape'); assert.equal(await editor.inputValue(), 'C');
+  releaseSecond();
+  await assertEventually(async () => assert.equal(await display.textContent(), 'C'));
+  await display.click(); await editor.fill('D'); await page.getByRole('button', { name: 'Save description' }).click();
+  await assertEventually(() => assert.equal(requests.length, 3));
+  assert.equal(requests[1].commitId, ids[1]); assert.equal(requests[2].commitId, ids[2]);
+  await assertEventually(async () => assert.equal(await display.textContent(), 'D'));
+  current = { changeId, commitId: 'f'.repeat(40), description: 'External' };
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await assertEventually(async () => assert.equal(await display.textContent(), 'External'));
 });
 
 async function assertEventually(check) {

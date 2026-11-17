@@ -60,21 +60,18 @@ rollback can leave generated pages out of sync. Scope is recorded as supplied an
 is not updated if commits are rewritten. The displayed scope describes the review
 at publication time, not necessarily the current checkout.
 
-Use Lavish annotations to give feedback on Commits. Other views also have a
-feedback field: queue feedback to include the view, the full revision range at the
-time you started writing, and any published review scope; then use Send feedback
-to deliver queued prompts through the hub's Lavish session. Draft feedback survives
-navigation and refresh within the hub page. A browser reload prompts before
+Use Lavish annotations to give feedback. A browser reload prompts before
 discarding unsaved hub drafts; cancel it to keep editing.
 
 Commits shows each description and its own diff statistics. Click a description,
-or focus it and press Enter or Space, to edit it. Long descriptions and statistics
-scroll and can be resized vertically. A failed save keeps the draft and shows the
-error beside the Save button.
+or focus it and press Enter or Space, to edit it. Cancel or Escape discards the
+edit. Long descriptions and statistics scroll and can be resized vertically. A
+failed save keeps the draft and shows the error beside the Save button.
 
-Tasks have a checklist and a Markdown source editor; changes are written only when
-saved. Published Markdown has Edit and Preview controls; the preview includes
-unsaved edits and resolves relative links and images from the source directory.
+Tasks display rendered Markdown with interactive checkboxes. Use the edit button
+to change the source; changes are written only when saved. Published Markdown
+also opens rendered, with Edit and Preview controls. Its preview includes unsaved
+edits and resolves relative links and images from the source directory.
 Published HTML opens as a sibling page in the same Lavish review, where it can
 be annotated directly. Scripts, styles, and images resolve relative to its source
 file, respecting an authored `<base href>`. Local resources remain restricted to

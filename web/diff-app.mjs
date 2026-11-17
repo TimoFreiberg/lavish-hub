@@ -105,15 +105,14 @@ function fileHeader(index) {
   const hunks = file.parsed?.hunks || [];
   if (hunks.length) {
     const side = file.status === 'deleted' ? 'deletions' : 'additions', path = side === 'deletions' ? file.oldPath : file.newPath;
-    const links = el('span', null, 'zed-links'); links.append(el('span', 'Open in Zed', 'hint'));
+    const links = el('span', null, 'zed-links');
     for (const hunk of hunks) {
       const lineNumber = Math.max(1, side === 'deletions' ? hunk.deletionStart : hunk.additionStart);
-      const link = el('a', `:${lineNumber}`); link.href = window.lavishPreview ? '#' : zedUrl(state.data.root, path, lineNumber); if (window.lavishPreview) link.onclick = event => { event.preventDefault(); notice.textContent = 'Opening an editor is unavailable in the demo.'; }; link.target = '_blank'; link.rel = 'noopener'; link.setAttribute('aria-label', `Open in Zed :${lineNumber}`);
+      const link = el('a', 'Open in Zed'); link.href = window.lavishPreview ? '#' : zedUrl(state.data.root, path, lineNumber); if (window.lavishPreview) link.onclick = event => { event.preventDefault(); notice.textContent = 'Opening an editor is unavailable in the demo.'; }; link.target = '_blank'; link.rel = 'noopener'; link.setAttribute('aria-label', `Open in Zed :${lineNumber}`);
       const copy = button('⧉', () => copyText(zedCommand(state.data.root, path, lineNumber))); copy.className = 'icon small'; copy.title = `Copy Zed command :${lineNumber}`; copy.setAttribute('aria-label', copy.title);
       const group = el('span', null, 'zed-link'); group.append(link, copy); links.append(group);
     }
     row.append(links);
-    if (side === 'deletions' || (state.data.kind === 'jj' && state.data.to !== '@') || (state.data.kind === 'git' && state.data.to)) row.append(el('span', 'Working tree may differ from the reviewed revision', 'hint'));
   }
   box.append(row);
   return box;

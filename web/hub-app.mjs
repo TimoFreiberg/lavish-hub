@@ -6,7 +6,7 @@ const diffContainer = document.createElement('div'); diffContainer.className = '
 let diffView;
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
-let refreshTimer, rendered = false, refreshRequested = false;
+let refreshTimer, rendered = false, refreshRequested = false, snapshotRequest = 0, snapshotApplied = 0;
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks', pr: 'PR draft' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
 const button = (text, action) => { const node = el('button', text, { type: 'button' }); node.addEventListener('click', action); return node; };
@@ -28,7 +28,7 @@ function renderNav() {
 let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0;
 for (const type of ['input', 'change']) document.addEventListener(type, event => { if (event.isTrusted) editRevision++; }, true);
 function hasUnsavedDrafts() {
-  return Boolean(diffView?.hasUnsavedDraft()) || [...drafts].some(([key, state]) => state.saving || (key.startsWith('feedback:') ? !!state.text : state.text !== state.original));
+  return Boolean(diffView?.hasUnsavedDraft()) || [...drafts.values()].some(state => state.saving || state.text !== state.original);
 }
 window.addEventListener('beforeunload', event => {
   if (!leavingConfirmed && hasUnsavedDrafts()) { event.preventDefault(); event.returnValue = ''; }
@@ -55,7 +55,7 @@ async function select(id) {
   } catch (error) { status(error.message); }
   finally { navigationPending = false; }
 }
-const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch, stat: value.stat });
+const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
 async function refresh(force = false) {
   if (busy) { if (force) refreshRequested = true; return; } busy = true;
   const navigationAtStart = navigationRevision;
@@ -69,7 +69,7 @@ async function refresh(force = false) {
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
     if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { location.href = new URL(selectedDoc.sibling, location.href).href; return; }
-    try { snapshot = await action('snapshot', { force }); status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
+    try { const request = ++snapshotRequest; snapshot = await action('snapshot', { force }); snapshotApplied = request; status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
     catch (error) { snapshot = undefined; status(error.message); }
     let documentChanged = false;
     const cached = drafts.get(`doc:${selected}`);
@@ -117,45 +117,11 @@ async function refresh(force = false) {
 function draft(key, initial) { if (!drafts.has(key)) drafts.set(key, initial); return drafts.get(key); }
 function editor(label, value, onInput) { const area = el('textarea', null, { 'aria-label': label, rows: '5', spellcheck: 'false' }); area.value = value; area.addEventListener('input', () => onInput(area.value)); return area; }
 function notice(text) { return el('p', text, { role: 'status', class: 'notice' }); }
-function feedback(view, id) {
-  const key = `feedback:${id}`;
-  const state = draft(key, { text: '', context: null, message: '' });
-  const section = el('section', null, { class: 'card', 'aria-label': 'Feedback' });
-  section.setAttribute('data-lavish-action', '');
-  section.append(el('h2', 'Feedback'));
-  const info = notice(state.message || 'Queue feedback for the agent.');
-  const area = editor('Feedback', state.text, value => {
-    if (!state.text && value) {
-      const doc = documents.find(item => item.id === id);
-      state.context = { view: id, title: labels[id] || doc?.title || id, base: snapshot?.base || null, head: snapshot?.head || null, metadata: doc?.metadata || null };
-    }
-    state.text = value;
-    if (!value) state.context = null;
-    info.textContent = value ? 'Unqueued feedback' : 'Queue feedback for the agent.';
-  });
-  const queue = button('Queue feedback', () => {
-    if (!state.text.trim()) return;
-    if (typeof window.lavish?.queuePrompt !== 'function') { info.textContent = 'Feedback unavailable: open this page in Lavish. Your draft is retained.'; return; }
-    try {
-      const context = state.context;
-      const heading = `Hub view: ${context.title} (${context.view})\nRevision range: ${context.base || 'unavailable'} → ${context.head || 'unavailable'}${context.metadata ? `\nReviewed scope: ${JSON.stringify(context.metadata)}` : ''}`;
-      window.lavish.queuePrompt(`${heading}\n\n${state.text}`, { tag: 'hub-feedback', text: context.title });
-      state.text = ''; state.context = null; area.value = ''; state.message = 'Feedback queued. Use Send to deliver it.'; info.textContent = state.message;
-    } catch (error) { state.message = `Could not queue feedback: ${error.message}. Your draft is retained.`; info.textContent = state.message; }
-  });
-  const send = button('Send feedback', () => {
-    if (typeof window.lavish?.sendQueuedPrompts !== 'function') { info.textContent = 'Send unavailable: open this page in Lavish.'; return; }
-    try { window.lavish.sendQueuedPrompts(); }
-    catch (error) { info.textContent = `Could not send feedback: ${error.message}`; }
-  });
-  section.append(area, queue, send, info); view.append(section);
-}
 async function renderView() {
   const view = document.querySelector('#view'); view.replaceChildren(); rendered = true;
   const id = selected;
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
   view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
-  if (id !== 'commits') feedback(view, id);
   if (id === 'commits' || id === 'changes') {
     if (!snapshot) { view.append(notice('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `Range ${snapshot.base.slice(0, 12)} → ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
@@ -168,24 +134,24 @@ async function renderView() {
     if (!snapshot.commits.length) view.append(el('p', 'No commits in this range.'));
     for (const commit of snapshot.commits) {
       const key = `commit:${commit.changeId}`, state = draft(key, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '', editing: false });
-      if (state.awaitingCommit && commit.commitId !== state.awaitingCommit) state.awaitingCommit = null;
-      if (state.text === state.original && !state.saving && !state.message && !state.awaitingCommit) { state.text = commit.description; state.original = commit.description; state.commitId = commit.commitId; }
+      if (state.awaitingSnapshot && (commit.commitId === state.awaitingSnapshot.commitId || snapshotApplied > state.awaitingSnapshot.after)) state.awaitingSnapshot = null;
+      if (state.text === state.original && !state.saving && !state.message && !state.awaitingSnapshot) { state.text = commit.description; state.original = commit.description; state.commitId = commit.commitId; }
       const card = el('section', null, { class: 'card' }); card.append(el('h2', `${commit.changeId.slice(0, 12)} · ${commit.commitId.slice(0, 12)}`));
       const label = `Description ${commit.changeId.slice(0, 12)}`;
       const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}`, tabindex: '0', role: 'button', 'aria-label': `Edit ${label}` });
       const area = editor(label, state.text, value => { state.text = value; });
       area.className = 'commit-editor';
       display.hidden = state.editing; area.hidden = !state.editing;
-      const edit = () => { if (commit.immutable || commit.divergent) return; state.editing = true; display.hidden = true; area.hidden = false; area.focus(); };
+      const edit = () => { if (commit.immutable || commit.divergent) return; state.editing = true; renderView(); };
       display.addEventListener('click', edit);
       display.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); edit(); } });
       const info = el('p', state.message, { role: 'alert', class: 'save-error' });
       const save = button('Save description', async () => {
-        const submitted = state.text; state.saving = true; save.disabled = true;
+        const submitted = state.text; state.saving = true; save.disabled = true; cancel.disabled = true;
         try {
           const result = await action('describe', { changeId: commit.changeId, commitId: state.commitId, expectedDescription: state.original, description: submitted });
           if (result.status !== 'saved') { state.message = `Conflict: ${result.reason}. Current description: ${result.current?.map(row => row.description).join(' / ') || '(unavailable)'}`; }
-          else { state.awaitingCommit = commit.commitId === result.current.commitId ? null : commit.commitId; state.original = result.current.description; state.commitId = result.current.commitId; if (state.text === submitted) { state.text = state.original; state.editing = false; } state.message = ''; }
+          else { state.awaitingSnapshot = { after: snapshotRequest, commitId: result.current.commitId }; state.original = result.current.description; state.commitId = result.current.commitId; if (state.text === submitted) { state.text = state.original; state.editing = false; } state.message = ''; refresh(true); }
         } catch (error) { state.message = error.message; }
         state.saving = false;
         if (selected === 'commits') renderView();
@@ -195,7 +161,12 @@ async function renderView() {
       if (commit.immutable || commit.divergent) { display.removeAttribute('role'); display.removeAttribute('tabindex'); display.removeAttribute('aria-label'); save.title = commit.immutable ? 'Immutable commit' : 'Divergent change'; }
       const stats = el('pre', null, { class: 'commit-stat', 'aria-label': `Changes ${commit.changeId.slice(0, 12)}` });
       for (const part of (commit.stat || 'No changed files').split(/(\++|-+)/)) stats.append(el('span', part, { class: /^\++$/.test(part) ? 'stat-add' : /^-+$/.test(part) ? 'stat-remove' : '' }));
-      card.append(display, area, save, info, stats); view.append(card);
+      const cancel = button('Cancel', () => { if (state.saving) return; state.text = state.original; state.message = ''; state.editing = false; renderView(); });
+      cancel.disabled = !!state.saving;
+      area.addEventListener('keydown', event => { if (event.key === 'Escape' && !state.saving) { event.preventDefault(); cancel.click(); } });
+      save.hidden = cancel.hidden = !state.editing;
+      card.append(display, area, save, cancel, info, stats); view.append(card);
+      if (state.editing) area.focus();
       for (const [node, lines] of [[display, 8], [stats, 6]]) {
         if (!node.hidden) { const style = getComputedStyle(node); node.style.height = `${Math.min(node.scrollHeight, parseFloat(style.lineHeight) * lines + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom))}px`; }
       }
@@ -221,48 +192,39 @@ async function renderView() {
   }
   let state = drafts.get(`doc:${id}`);
   if (!state) {
-    try { const data = await action('readDocument', { id }); state = draft(`doc:${id}`, { text: data.text, original: data.text, hash: data.hash, version: data.version }); }
+    try { const data = await action('readDocument', { id }); state = draft(`doc:${id}`, { text: data.text, original: data.text, hash: data.hash, version: data.version, preview: true }); }
     catch (error) { if (selected === id) view.append(notice(error.message)); return; }
   }
   if (selected !== id) return;
-  if (id === 'tasks') {
-    view.append(el('p', 'Toggle or edit checklist items, or edit the Markdown source below. Save to write your changes.'));
-    const list = el('ol', null, { 'aria-label': 'Tasks checklist' });
-    const lines = state.text.split('\n');
-    lines.forEach((line, index) => {
-      const match = /^(\s*[-*+]\s+\[)([ xX])(\]\s+)(.*)$/.exec(line);
-      if (!match) return;
-      const item = el('li');
-      const toggle = el('input', null, { type: 'checkbox', 'aria-label': `Complete task ${list.children.length + 1}` });
-      toggle.checked = match[2].toLowerCase() === 'x';
-      const text = el('input', null, { type: 'text', 'aria-label': `Task ${list.children.length + 1}` }); text.value = match[4];
-      const update = () => { lines[index] = `${match[1]}${toggle.checked ? 'x' : ' '}${match[3]}${text.value}`; state.text = lines.join('\n'); area.value = state.text; info.textContent = 'Unsaved changes'; };
-      toggle.addEventListener('change', update); text.addEventListener('input', update);
-      item.append(toggle, text); list.append(item);
-    });
-    view.append(list);
-    view.append(button('Add task', () => { state.text += `${state.text && !state.text.endsWith('\n') ? '\n' : ''}- [ ] New task\n`; renderView(); }));
-  }
   if (id === 'pr') view.append(el('p', 'Use # title followed by the body. Launch saves this draft before opening an interactive PR command.'));
   const info = notice(state.message || 'Ready');
   const area = editor(id === 'pr' ? 'PR Markdown' : id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? 'Ready' : 'Unsaved changes'; });
-  if (id === 'tasks') area.addEventListener('input', () => {
-    view.querySelectorAll('ol input').forEach(control => { control.disabled = true; });
-  });
+  if (id === 'tasks') {
+    const resize = () => { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; };
+    area.addEventListener('input', resize);
+    area.className = 'tasks-editor';
+    requestAnimationFrame(resize);
+  }
   const save = button('Save', async () => {
     const submitted = state.text; state.saving = true; save.disabled = true; info.textContent = 'Saving…';
     try {
       const result = await action('saveDocument', { id, version: state.version, baseHash: state.hash, text: submitted });
       state.message = result.reply;
-      if (result.reply === 'Saved') { const data = await action('readDocument', { id }); if (data.version === state.version && data.text === submitted) { state.hash = data.hash; state.original = submitted; } else state.message = 'Saved, but the source changed afterwards. Your draft is retained.'; }
+      if (result.reply === 'Saved') { const data = await action('readDocument', { id }); if (data.version === state.version && data.text === submitted) { state.hash = data.hash; state.original = submitted; if (doc && state.text === submitted) state.preview = true; } else state.message = 'Saved, but the source changed afterwards. Your draft is retained.'; }
     } catch (error) { state.message = error.message; }
     state.saving = false; save.disabled = false; info.textContent = state.message;
+    if (doc && state.preview && selected === id) renderView();
   });
-  if (doc) {
+  if (doc || id === 'tasks') {
     const preview = el('div', null, { class: 'hub-markdown', 'aria-label': 'Rendered Markdown' });
-    const base = `${config.url}/resources/${config.resourceKey}/${encodeURIComponent(id)}/${encodeURIComponent(doc.source.split('/').pop())}`;
+    const base = doc ? `${config.url}/resources/${config.resourceKey}/${encodeURIComponent(id)}/${encodeURIComponent(doc.source.split('/').pop())}` : location.href;
     const render = globalThis.hubMarkdownRenderer(area, preview, {
       hideFrontMatter: true,
+      onTaskToggle: id === 'tasks' ? (line, checked) => {
+        const lines = state.text.split('\n');
+        lines[line] = lines[line].replace(/^((?:\s*>)*\s*(?:(?:[-*+]|\d+[.)])\s+)\[)[ xX](\])/, `$1${checked ? 'x' : ' '}$2`);
+        state.text = lines.join('\n'); area.value = state.text; info.textContent = state.text === state.original ? 'Ready' : 'Unsaved changes';
+      } : undefined,
       afterRender: root => {
         for (const node of root.querySelectorAll('[src], [href]')) for (const attr of ['src', 'href']) {
           const value = node.getAttribute(attr);
@@ -271,10 +233,17 @@ async function renderView() {
       },
       onError: error => { info.textContent = `Syntax highlighting unavailable: ${error.message}`; },
     });
-    const edit = button('Edit', () => { state.preview = false; toggle(); });
-    const rendered = button('Preview', () => { state.preview = true; toggle(); });
-    const toggle = () => { area.hidden = !!state.preview; preview.hidden = !state.preview; edit.setAttribute('aria-pressed', String(!state.preview)); rendered.setAttribute('aria-pressed', String(!!state.preview)); if (state.preview) render(); };
-    view.append(edit, rendered, area, preview, save); toggle();
+    if (id === 'tasks') {
+      const edit = button('✎', () => { state.editing = !state.editing; toggle(); });
+      edit.setAttribute('aria-label', 'Edit Tasks Markdown');
+      const toggle = () => { area.hidden = !state.editing; preview.hidden = !!state.editing; edit.setAttribute('aria-pressed', String(!!state.editing)); if (state.editing) { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; area.focus(); } else render(); };
+      view.append(edit, area, preview, save); toggle();
+    } else {
+      const edit = button('Edit', () => { state.preview = false; toggle(); });
+      const rendered = button('Preview', () => { state.preview = true; toggle(); });
+      const toggle = () => { area.hidden = !!state.preview; preview.hidden = !state.preview; edit.setAttribute('aria-pressed', String(!state.preview)); rendered.setAttribute('aria-pressed', String(!!state.preview)); if (state.preview) render(); };
+      view.append(edit, rendered, area, preview, save); toggle();
+    }
   } else view.append(area, save);
   if (id === 'pr') {
     const launch = button('Launch PR command', async () => {
