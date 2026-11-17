@@ -3,7 +3,7 @@ process.env.LAVISH_KIT_LAVISH_TRANSPORT = 'cli';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, realpath, writeFile, chmod, rm, access, stat } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,6 +18,15 @@ import { sessionOpen, watchLoop } from '../src/watch.mjs';
 import { textHash } from '../src/save.mjs';
 const exec = promisify(execFile);
 const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
+const shared = await mkdtemp(path.join(os.tmpdir(), 'lavish-watch-cache-'));
+const setupBin = path.join(shared, 'bin'); await mkdir(setupBin);
+await writeFile(path.join(setupBin, 'npm'), '#!/bin/sh\nln -s "$FIXTURE" node_modules\n', { mode: 0o755 });
+const depsModule = fileURLToPath(new URL('../src/deps.mjs', import.meta.url));
+const fixture = fileURLToPath(new URL('../node_modules', import.meta.url));
+const init = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(depsModule)}).then(m=>m.ensureDeps())`], { env: { ...process.env, XDG_DATA_HOME: shared, PATH: `${setupBin}:${process.env.PATH}`, FIXTURE: fixture }, encoding: 'utf8' });
+assert.equal(init.status, 0, init.stderr);
+process.env.XDG_DATA_HOME = shared;
+test.after(() => rm(shared, { recursive: true, force: true }));
 const until = async fn => {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 25)); }
@@ -35,7 +44,7 @@ async function setup(t) {
   await writeFile(path.join(bin, 'lavish-axi'), `#!${process.execPath}\nconst fs=require('node:fs'),args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');if(!args.length)console.log(fs.readFileSync(${JSON.stringify(listing)},'utf8'));else if(args[0]==='poll'){const timer=setInterval(()=>{if(fs.readFileSync(${JSON.stringify(listing)},'utf8').trim()===${JSON.stringify(encode({ sessions: [] }))}){clearInterval(timer);console.log('session:\\n  status: ended');}},20);}else if(args[0]==='reply'){}else throw Error('unexpected Lavish command');\n`);
   await chmod(path.join(bin, 'lavish-axi'), 0o755);
   await writeFile(relayPaths(file).target, JSON.stringify({ version: 1, page: file, title: 'Watch', terminal: 'scratch' }));
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(dir, 'lavish') };
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_DATA_HOME: shared, XDG_STATE_HOME: path.join(dir, 'state'), LAVISH_AXI_STATE_DIR: path.join(dir, 'lavish') };
   const launch = () => exec(process.execPath, ['--input-type=module', '-e', `import {ensureRelay} from ${JSON.stringify(module)};console.log(JSON.stringify(await ensureRelay(${JSON.stringify(file)})));`], { env, timeout: 15000 });
   t.after(async () => {
     await writeFile(listing, encode({ sessions: [] }));
@@ -169,7 +178,7 @@ for (const snapshot of ['HTML', 'stdin']) test(`an in-flight watch cannot overwr
   let queued, resume;
   const waiting = new Promise(resolve => { queued = resolve; });
   const gate = new Promise(resolve => { resume = resolve; });
-  const loop = watchLoop(file, { deps: await ensureDeps(), readSpec: async () => JSON.parse(await readFile(relayPaths(file).watch)),
+  const loop = watchLoop(file, { deps: await ensureDeps({ cache: path.join(shared, 'lavish-kit') }), readSpec: async () => JSON.parse(await readFile(relayPaths(file).watch)),
     delivery: () => true, signal: controller.signal,
     publish: async fn => { queued(); await gate; return withPublication(file, fn); },
     sleep: async () => controller.abort(),

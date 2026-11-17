@@ -17,6 +17,12 @@ const relay = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
 const cli = fileURLToPath(new URL('../bin/lavish-kit', import.meta.url));
 const deps = fileURLToPath(new URL('../src/deps.mjs', import.meta.url));
 const fixture = fileURLToPath(new URL('../node_modules', import.meta.url));
+const shared = await mkdtemp(path.join(os.tmpdir(), 'lavish-daemon-cache-'));
+const setupBin = path.join(shared, 'bin'); await mkdir(setupBin);
+await writeFile(path.join(setupBin, 'npm'), '#!/bin/sh\nln -s "$FIXTURE" node_modules\n', { mode: 0o755 });
+const init = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(deps)}).then(m=>m.ensureDeps())`], { env: { ...process.env, XDG_DATA_HOME: shared, PATH: `${setupBin}:${process.env.PATH}`, FIXTURE: fixture }, encoding: 'utf8' });
+assert.equal(init.status, 0, init.stderr);
+test.after(() => rm(shared, { recursive: true, force: true }));
 const exists = async file => access(file).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
 async function until(fn, message = 'condition timed out') {
   const deadline = Date.now() + 20000;
@@ -39,7 +45,7 @@ async function setup(t) {
   const bin = path.join(dir, 'bin'), state = path.join(dir, 'lavish'), listing = path.join(dir, 'listing');
   await mkdir(bin);
   const daemonDir = path.join('/tmp', `lavish-kit-${process.getuid()}-${createHash('sha256').update(path.resolve(state)).digest('hex').slice(0, 24)}`);
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'state'), LAVISH_AXI_STATE_DIR: state, HC_TERMINAL_ID: '' };
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_DATA_HOME: shared, XDG_STATE_HOME: path.join(dir, 'state'), LAVISH_AXI_STATE_DIR: state, HC_TERMINAL_ID: '' };
   const pages = [];
   async function list(open) { await writeFile(listing, encode({ sessions: open.map(file => ({ file, status: 'open' })) })); }
   async function page(name) { const file = path.join(dir, `${name}.html`); await writeFile(file, '<title>Test</title>'); await recordWatch(file, null, false); pages.push(file); return file; }
@@ -53,10 +59,6 @@ async function setup(t) {
     await until(async () => !await exists(path.join(daemonDir, 'daemon.lock')), 'daemon did not exit');
     await rm(daemonDir, { recursive: true, force: true }); await rm(dir, { recursive: true, force: true });
   });
-  // Dependency installation and bundling are not part of daemon startup checks.
-  const npm = path.join(bin, 'npm'); await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o755);
-  const init = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(deps)}).then(m=>m.ensureDeps())`], { env: { ...env, FIXTURE: fixture }, encoding: 'utf8', timeout: 40000 });
-  assert.equal(init.status, 0, init.stderr);
   return { dir, bin, env, pages, page, list, launch, daemonDir };
 }
 
