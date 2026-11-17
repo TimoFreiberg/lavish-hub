@@ -39,7 +39,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(server.address().port), XDG_DATA_HOME: data, XDG_STATE_HOME: path.join(dir, 'xdg-state') };
   delete env.HC_TERMINAL_ID;
   const npm = path.join(dir, 'npm');
-  await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
+  await writeFile(npm, '#!/bin/sh\nln -s "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
   const execute = promisify(execFile);
   const depsModule = new URL('../src/deps.mjs', import.meta.url).href;
   await execute(process.execPath, ['--input-type=module', '-e', `import { ensureDeps } from ${JSON.stringify(depsModule)}; await ensureDeps();`], { env: { ...env, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
