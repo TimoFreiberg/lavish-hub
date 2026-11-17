@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { claimLock, recordWatch, relayPaths, withPublication } from '../src/relay.mjs';
 import { watchLoop } from '../src/watch.mjs';
 import { ensureDeps } from '../src/deps.mjs';
+import { registerArtifact } from '../src/lavish.mjs';
 
 const cli = fileURLToPath(new URL('../bin/lavish-kit', import.meta.url));
 const shared = await mkdtemp(path.join(os.tmpdir(), 'lavish-cli-cache-'));
@@ -214,14 +215,24 @@ test('exit zero without acknowledgement is not registration and falls back only 
   const browserLog = path.join(x.dir, 'browser');
   await x.fake(process.platform === 'darwin' ? 'open' : 'xdg-open', 'printf "%s\\n" "$1" >> "$BROWSER_LOG"');
   for (const open of [false, true]) {
-    const start = Date.now();
     const r = x.run([x.file, ...(open ? ['--open'] : [])], { HC_TERMINAL_ID:'unknown', BROWSER_LOG:browserLog });
     assert.equal(r.status, 0, r.stderr); assert.equal(r.stderr, ''); assert.match(r.stdout, /ready: http:\/\/localhost:123\/review/);
-    assert.ok(Date.now() - start < 4000, 'registration wait is bounded');
     await assertRegistration(x.env.LOG, { terminal:'unknown', path:x.file, title:'Page title' });
     if (open) assert.equal(await readFile(browserLog, 'utf8'), 'http://localhost:123/review\n');
     else await assert.rejects(access(browserLog));
   }
+});
+test('registration shares its deadline between submission and acknowledgement', async () => {
+  let time = 0, options; const delays = [];
+  const result = await registerArtifact({ terminal: 'terminal' }, {
+    now: () => time,
+    run: async (_command, _args, opts) => { options = opts; time += 1500; },
+    delay: async ms => { delays.push(ms); time += ms; },
+  });
+  assert.equal(result, false);
+  assert.equal(options.timeout, 2000);
+  assert.ok(delays.length > 0 && delays.every(ms => ms > 0 && ms <= 25));
+  assert.equal(time, 2000);
 });
 test('waits for acknowledgement after the queue command exits', async t => {
   const x = await setup(t);
@@ -241,9 +252,8 @@ test('registration rejection and hung queue commands clean up and remain optiona
 fs.writeFileSync(process.env.LOG, process.argv.slice(2).join('\\n'));
 const payload = JSON.parse(process.argv[3].slice('task-tree.artifact:'.length));
 ${failure === 'rejected' ? 'process.exit(1);' : failure === 'negative' ? 'fs.writeFileSync(payload.ack, JSON.stringify({ok:false}));' : 'setInterval(() => {}, 1000);'}`);
-    const start = Date.now(), r = x.run([x.file], { HC_TERMINAL_ID:'terminal' });
+    const r = x.run([x.file], { HC_TERMINAL_ID:'terminal' });
     assert.equal(r.status, 0, r.stderr); assert.equal(r.stderr, ''); assert.match(r.stdout, /ready:/);
-    assert.ok(Date.now() - start < 4000, 'submission and acknowledgement share a bounded wait');
     await assertRegistration(x.env.LOG, {terminal:'terminal',path:x.file,title:'Page title'});
   }
 });

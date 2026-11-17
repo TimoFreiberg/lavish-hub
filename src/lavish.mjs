@@ -10,21 +10,21 @@ import { ensureRelay, quote, recordTarget } from './relay.mjs';
 
 const exec = promisify(execFile);
 
-async function registerArtifact(payload) {
+export async function registerArtifact(payload, { now = Date.now, run = exec, delay = setTimeout } = {}) {
   let directory;
   try {
     directory = await mkdtemp(path.join(os.tmpdir(), 'lavish-artifact-'));
-    const ack = path.join(directory, 'ack.json'), deadline = Date.now() + 2000;
+    const ack = path.join(directory, 'ack.json'), deadline = now() + 2000;
     await writeFile(ack, JSON.stringify({pending:true}), { flag: 'wx', mode: 0o600 });
     // A successful command only means queued. The mod acknowledges stored artifacts.
-    await exec('herdr-app', ['do', `task-tree.artifact:${JSON.stringify({ ...payload, ack })}`], { timeout: 2000 });
-    while (Date.now() < deadline) {
+    await run('herdr-app', ['do', `task-tree.artifact:${JSON.stringify({ ...payload, ack })}`], { timeout: 2000 });
+    while (now() < deadline) {
       try {
         const reply = JSON.parse(await readFile(ack, 'utf8'));
         if (reply.ok === true) return true;
         if (reply.ok === false) return false;
       } catch { /* Not written yet, or a write is still in progress. */ }
-      await setTimeout(Math.min(25, Math.max(0, deadline - Date.now())));
+      await delay(Math.min(25, Math.max(0, deadline - now())));
     }
   } catch { /* Registration is optional. */ }
   finally { if (directory) await rm(directory, { recursive: true, force: true }); }

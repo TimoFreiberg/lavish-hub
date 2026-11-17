@@ -117,7 +117,8 @@ for (const stop of ['listing', 'SIGTERM']) test(`initial persistence survives ${
   const module = fileURLToPath(new URL('../src/relay.mjs', import.meta.url));
   const files = fileURLToPath(new URL('../src/files.mjs', import.meta.url));
   const script = `import {relayMain,relayPaths} from ${JSON.stringify(module)};import {atomicWrite} from ${JSON.stringify(files)};import {access,writeFile} from 'node:fs/promises';let attempts=0;await relayMain(${JSON.stringify(x.file)},{write:async(file,text)=>{if(++attempts===1){await writeFile(${JSON.stringify(attempt)},'failed');await new Promise(resolve=>setTimeout(resolve,400));${stop === 'SIGTERM' ? "process.kill(process.pid,'SIGTERM');" : ''}throw Error('first write failed');}await access(relayPaths(${JSON.stringify(x.file)}).lock);await atomicWrite(file,text);}});console.log(attempts);`;
-  const result = await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state') }, timeout: 12000 });
+  const result = await exec(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(x.dir, 'state'), XDG_DATA_HOME: shared }, timeout: 12000 });
+  assert.doesNotMatch(result.stderr, /lavish-kit: building/);
   assert.equal(result.stdout.trim(), '2', result.stderr);
   const [item] = JSON.parse(await readFile(relayPaths(x.file).outbox));
   assert.equal(item.pending, true); assert.deepEqual(item.feedback.prompts, feedback.prompts);
