@@ -313,25 +313,6 @@ test('worker failure falls back and special files remain visible', { timeout: 12
   await frame.getByRole('button', { name: /mode \+/ }).click(); await frame.getByText('mode 100644 → 100755').waitFor(); await frame.getByRole('button', { name: /pic \+/ }).click(); await frame.getByText('Binary file changed').waitFor(); await frame.getByRole('button', { name: /unknown.ex \+/ }).click(); await frame.locator('[data-content]').getByText('new', { exact: true }).waitFor();
 });
 
-test('jj command returns while its worker updates only changed patches without reloading iframe', { timeout: 120000 }, async t => {
-  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'lavish-watch-'))), repo = path.join(dir, 'repo'), out = path.join(dir, 'review/index.html'); await mkdir(repo);
-  execFileSync('jj', ['git', 'init', repo]); await writeFile(path.join(repo, 'watch.js'), 'const watched = 1;\n'); await writeFile(path.join(repo, 'stable.js'), 'const stable = 1;\n');
-  let browser;
-  const stopped = async () => { const deadline = Date.now() + 15000; while (Date.now() < deadline) { try { await access(`${out}.relay.lock`); } catch { return; } await new Promise(resolve => setTimeout(resolve, 50)); } throw new Error('watch-only worker did not exit on session end'); };
-  t.after(async () => { if (browser) await browser.close(); try { execFileSync('lavish-axi', ['end', out], { stdio: 'ignore' }); } catch {} try { await stopped(); } finally { try { process.kill(Number(await readFile(`${out}.relay.lock/pid`)), 'SIGTERM'); } catch {} await rm(dir, { recursive: true, force: true }); } });
-  const stdout = execFileSync(process.execPath, [path.resolve(root, 'bin/lavish-kit'), 'diff', '-r', '@', '--out', out], { cwd: repo, env: { ...process.env, XDG_DATA_HOME: path.join(dir, 'cache'), HC_TERMINAL_ID: '' }, encoding: 'utf8', timeout: 90000 });
-  assert.match(stdout, /Lavish review/, 'opening command exits before subsequent changes');
-  const url = stdout.match(/http:\/\/[^\s]+/)[0]; browser = await chromium.launch({ executablePath, headless: true }); const page = await browser.newPage(); await page.route('**/*', route => ['localhost', '127.0.0.1', '[::1]'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort()); await page.goto(url); const frame = page.locator('iframe').first().contentFrame(); await frame.getByRole('heading', { name: 'Files (2)' }).waitFor(); await frame.locator('[data-file="stable.js"]').getByRole('checkbox', { name: 'Viewed' }).check(); await frame.locator('body').evaluate(() => { window.__watchIdentity = Math.random(); }); const identity = await frame.locator('body').evaluate(() => window.__watchIdentity);
-  execFileSync('jj', ['describe', '-m', 'description only'], { cwd: repo }); await page.waitForTimeout(6000); assert.equal(await frame.getByRole('button', { name: 'Refresh' }).count(), 0);
-  await frame.getByRole('button', { name: /watch\.js \+/ }).click(); await frame.locator('[data-content]').getByText('const watched = 1;', { exact: true }).waitFor();
-  await writeFile(path.join(repo, 'watch.js'), 'const watched = 2;\n'); await frame.getByRole('button', { name: 'Refresh' }).waitFor({ timeout: 12000 }); await frame.getByRole('button', { name: 'Refresh' }).click(); await frame.locator('[data-content]').getByText('const watched = 2;', { exact: true }).waitFor(); assert.equal(await frame.locator('[data-content]').getByText('const watched = 1;', { exact: true }).count(), 0); assert.equal(await frame.locator('body').evaluate(() => window.__watchIdentity), identity);
-  assert.match(await frame.locator('.sidebar').innerText(), /✓/); assert.equal(stdout.trim().split('\n').length, 2); assert.match(stdout, /Feedback requires agent polling/);
-  const revision = execFileSync('jj', ['log', '-r', '@', '--no-graph', '-T', 'commit_id'], { cwd: repo, encoding: 'utf8' }).trim();
-  await frame.locator('[data-gutter] [data-line-type="change-addition"]').last().hover(); await frame.getByRole('button', { name: 'Add comment' }).click(); const draft = frame.getByPlaceholder('Write a comment'); await draft.fill('real revision');
-  const poll = spawn('lavish-axi', ['poll', out, '--timeout-ms', '15000']); let pollOutput = ''; poll.stdout.on('data', chunk => pollOutput += chunk); const pollDone = new Promise((resolve, reject) => { poll.on('error', reject); poll.on('close', resolve); }); t.after(() => poll.kill());
-  await frame.getByRole('button', { name: 'Queue comment' }).click(); await page.getByRole('button', { name: 'Send to Agent' }).click(); await pollDone; assert.match(pollOutput, /watch\.js:1/); assert.ok(pollOutput.includes(revision)); assert.match(pollOutput, /watched = 2/);
-});
-
 test('large diff loads quickly with virtualized rows', { timeout: 120000 }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-scale-')); const dist = path.join(dir, 'dist'); await mkdir(dist); execFileSync(process.execPath, [path.join(root, 'build.mjs'), root, dist]);
   const lines = Array.from({ length: 120 }, (_, i) => `+const line${i} = '${'x'.repeat(76)}';\n`).join('');

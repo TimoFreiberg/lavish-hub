@@ -68,7 +68,7 @@ test('legacy preview is preserved and unrelated output is refused', async () => 
     assert.equal(await readFile(path.join(parent, backup, 'preview', 'personal.txt'), 'utf8'), 'preserve me');
     assert.equal(JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8')).generator, 'lavish-kit-preview');
     await writeFile(path.join(dir, 'assets', 'personal.txt'), 'asset note');
-    await writeFile(path.join(dir, 'html-document', 'page', 'personal.txt'), 'page note');
+    await writeFile(path.join(dir, 'hub-empty', 'page', 'personal.txt'), 'page note');
     execFileSync(process.execPath, ['scripts/preview.mjs', dir], { cwd: root, stdio: 'pipe' });
     const backups = (await readdir(parent)).filter(name => name.startsWith('preview-previous-'));
     const notes = await Promise.all(backups.map(async name => {
@@ -76,7 +76,7 @@ test('legacy preview is preserved and unrelated output is refused', async () => 
     }));
     const currentBackup = backups[notes.indexOf('asset note')];
     assert.ok(currentBackup);
-    assert.equal(await readFile(path.join(parent, currentBackup, 'preview', 'html-document', 'page', 'personal.txt'), 'utf8'), 'page note');
+    assert.equal(await readFile(path.join(parent, currentBackup, 'preview', 'hub-empty', 'page', 'personal.txt'), 'utf8'), 'page note');
     const unrelated = path.join(parent, 'unrelated'); await mkdir(unrelated);
     await writeFile(path.join(unrelated, 'personal.txt'), 'untouched');
     assert.throws(() => execFileSync(process.execPath, ['scripts/preview.mjs', unrelated], { cwd: root, stdio: 'pipe' }));

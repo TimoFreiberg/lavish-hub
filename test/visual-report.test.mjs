@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { validateReport } from '../scripts/visual/report-validation.mjs';
 
 test('report validation rejects missing records and incorrect capture provenance', () => {
-  const variant = { kind: 'html', name: 'document' };
+  const variant = { kind: 'hub', name: 'stack' };
   const viewport = { width: 1440, height: 900 };
-  const manifest = { pages: [{ id: 'html-document', url: 'html-document/page/index.html' }] };
+  const manifest = { pages: [{ id: 'hub-stack', url: 'hub-stack/page/index.html' }] };
   const checks = { accessibility: [], pageErrors: [], consoleErrors: [] };
   const report = { matrix: { viewports: [viewport], colorSchemes: ['dark'] }, shots: [
-    { id: 'static-html-document-wide-dark', source: 'static', viewport, colorScheme: 'dark', selected: true, png: 'static.png', url: manifest.pages[0].url, checks, failures: [] },
-    { id: 'integration-html-document-wide-dark', source: 'integration', viewport, colorScheme: 'dark', selected: false, checks: { ...checks, lavishLayout: [] }, failures: [] },
+    { id: 'static-hub-stack-wide-dark', source: 'static', viewport, colorScheme: 'dark', selected: true, png: 'static.png', url: manifest.pages[0].url, checks, failures: [] },
+    { id: 'integration-hub-stack-wide-dark', source: 'integration', viewport, colorScheme: 'dark', selected: true, png: 'integration.png', checks: { ...checks, lavishLayout: [] }, failures: [] },
   ] };
   assert.deepEqual(validateReport(report, [variant], manifest), []);
   report.shots[0].url = 'other/page/index.html';

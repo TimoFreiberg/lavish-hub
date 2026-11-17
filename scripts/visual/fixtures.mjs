@@ -1,24 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { createRequire } from 'node:module';
-import { writeMarkdown } from '../../src/markdown.mjs';
-import { writeDiffPage } from '../../src/diff/page.mjs';
 import { prepareDiff, readDiff } from '../../src/diff/source.mjs';
-import { writeTaskPage } from '../../src/document-page.mjs';
-import { writePRPage } from '../../src/pr-page.mjs';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const fixtures = path.join(root, 'test/visual/fixtures');
-const deps = createRequire(import.meta.url);
-export const variants = [
-  { kind: 'html', name: 'document' }, { kind: 'markdown', name: 'document' },
-  ...['empty', 'stack', 'dirty', 'conflict', 'disconnected', 'changes', 'tasks', 'pr', 'markdown', 'html'].map(name => ({ kind: 'hub', name })),
-  { kind: 'diff', name: 'jj' }, { kind: 'diff', name: 'empty' },
-  ...['short', 'long', 'empty'].flatMap(name => ['edit', 'rendered'].map(view => ({ kind: 'task', name, view }))),
-  { kind: 'task', name: 'changed-on-disk', view: 'edit' },
-  ...['configured', 'unconfigured'].flatMap(name => ['edit', 'rendered'].map(view => ({ kind: 'pr', name, view }))),
-];
+export const variants = ['empty', 'stack', 'dirty', 'conflict', 'disconnected', 'changes', 'tasks', 'pr', 'markdown', 'html']
+  .map(name => ({ kind: 'hub', name }));
 export const variantId = variant => [variant.kind, variant.name, variant.view].filter(Boolean).join('-');
 
 export async function scratchDiff(dir) {
@@ -66,24 +54,6 @@ export async function makePage(variant, dir, dist, diff, { portable = false } = 
     const styles = portable ? '<link rel="stylesheet" href="hub.css">' : `<style>${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style>`;
     const scripts = portable ? '<script src="../../assets/preview.js"></script><script src="diff.js"></script><script src="markdown.js"></script><script type="module" src="hub.js"></script>' : `<script>${safe(diffScript)}</script><script>${safe(markdown)}</script><script type="module">${safe(script)}</script>`;
     await writeFile(file, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub fixture</title>${styles}</head><body><div id="app"></div><script>${safe(bootstrap)}</script>${scripts}</body></html>`);
-  } else if (variant.kind === 'html') {
-    if (portable) {
-      const html = await readFile(path.join(fixtures, 'clean.html'), 'utf8');
-      await writeFile(file, html.replace('</body>', '<style>:root[data-theme="dark"] body { color: #e6edf3; background: #0d1117; color-scheme: dark; }</style><script src="../../assets/preview.js"></script></body>'));
-    } else await cp(path.join(fixtures, 'clean.html'), file);
-  } else if (variant.kind === 'markdown') {
-    const source = path.join(dir, 'document.md'); await cp(path.join(fixtures, 'document.md'), source);
-    await writeMarkdown(source, deps, { out: file, ...(portable && { assetBase: '../../assets', bootstrap: '../../assets/preview.js' }) });
-  } else if (variant.kind === 'diff') {
-    await writeDiffPage({ ...diff, patch: variant.name === 'empty' ? '' : diff.patch }, dist, file, portable ? { bootstrap: '../../assets/preview.js' } : {});
-  } else {
-    const source = path.join(dir, `${variant.kind}.md`);
-    if (variant.name === 'empty') await writeFile(source, '');
-    else await cp(path.join(fixtures, variant.kind === 'pr' ? 'pr.md' : variant.name === 'long' ? 'task-long.md' : 'task-short.md'), source);
-    const options = { out: file, ...(portable && { sourceName: 'fixture.md', bootstrap: '../../assets/preview.js' }) };
-    if (variant.kind === 'task') await writeTaskPage(source, dist, { ...options, title: `Task: ${variant.name}` });
-    else await writePRPage(source, dist, { repo: '/example/repo', rev: '@-', head: 'a'.repeat(40), commits: ['aaaaaaa Add the document editor'] }, { ...options, createPr: variant.name === 'configured' ? { enabled: true } : { enabled: false, reason: 'Create PR is not configured' } });
-    return { file, source };
-  }
+  } else throw new Error(`Unknown visual fixture: ${variant.kind}`);
   return { file };
 }

@@ -5,7 +5,6 @@ import { isSelected } from './visual/selection.mjs';
 import { validateReport } from './visual/report-validation.mjs';
 import { runCaptureWorkers } from './visual/workers.mjs';
 import path from 'node:path';
-import { publishDocument } from '../src/document-page.mjs';
 import { variants, scratchDiff, makePage } from './visual/fixtures.mjs';
 import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues, closeVisualResources } from './visual/browser.mjs';
 import { scanDocument, failedChecks, partitionAccessibility } from './visual/checks.mjs';
@@ -17,25 +16,7 @@ const escape = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '
 async function ready(page, variant, artifact, source) {
   const frame = source === 'static' ? page.mainFrame() : page.frames().find(f => f.parentFrame() === page.mainFrame());
   if (!frame) throw new Error('Lavish artifact iframe did not load');
-  if (variant.kind === 'diff') {
-    await frame.waitForSelector('.sidebar');
-    if (variant.name !== 'empty') await frame.waitForSelector('[data-content] [data-line-type="change-addition"] span[style]', { timeout: 20000 });
-  } else if (['task', 'pr'].includes(variant.kind)) {
-    if (source !== 'static' || variant.name !== 'changed-on-disk') await frame.getByRole('status').filter({ hasText: 'Up to date with disk' }).waitFor();
-    await frame.getByRole('button', { name: variant.view === 'edit' ? 'Edit' : 'Rendered', exact: true }).click();
-    if (variant.view === 'rendered') {
-      await frame.waitForFunction(() => document.querySelector('#preview')?.hidden === false);
-      if ((variant.kind === 'task' && variant.name !== 'empty') || variant.kind === 'pr') await frame.waitForSelector('#preview pre.shiki span[style]', { timeout: 20000 });
-    }
-    if (variant.name === 'changed-on-disk') {
-      if (source === 'integration') {
-        await frame.getByRole('textbox', { name: 'Markdown text' }).fill('# Unsaved browser edit\n');
-        await writeFile(artifact.source, '# External disk update\n');
-        await publishDocument(artifact.file, artifact.source);
-      }
-      await frame.getByRole('button', { name: 'Keep mine', exact: true }).waitFor();
-    }
-  } else if (variant.kind === 'hub') {
+  if (variant.kind === 'hub') {
     await frame.getByText('Connected', { exact: true }).waitFor();
     if (['dirty', 'conflict', 'disconnected'].includes(variant.name)) {
       await frame.getByRole('textbox', { name: /Description/ }).fill('An unsaved description draft');

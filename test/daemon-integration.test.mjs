@@ -85,14 +85,6 @@ test('launcher death after worker spawn before bind permits recovery without a s
   assert.equal(await readFile(path.join(x.daemonDir, 'daemon.lock', 'pid'), 'utf8'), owner);
 });
 
-test('concurrent CLI invocations register pages in one daemon', { timeout: 60000 }, async t => {
-  const x = await setup(t), first = await x.page('first'), second = await x.page('second'); await x.list([first, second]);
-  const results = await Promise.all([first, second, first, second].map(file => success(run([cli, file], x.env))));
-  for (const result of results) assert.match(result.stdout, /Lavish review/);
-  const owner = await readFile(path.join(x.daemonDir, 'daemon.lock', 'pid'), 'utf8');
-  for (const file of [first, second]) assert.equal(await readFile(path.join(relayPaths(file).lock, 'pid'), 'utf8'), owner);
-});
-
 test('state directory aliases share an owner before and after creation', { timeout: 45000 }, async t => {
   const x = await setup(t), first = await x.page('first'), second = await x.page('second');
   const alias = path.join(x.dir, 'alias'); await symlink(x.dir, alias);

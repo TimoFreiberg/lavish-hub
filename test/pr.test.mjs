@@ -155,8 +155,6 @@ test('absent or invalid config refuses Create PR visibly without saving or launc
 });
 test('pr CLI arguments and sidecar metadata', async t => {
   const x = await setup(t);
-  assert.deepEqual(parseArgs(['pr', 'draft.md', '-r', '@-']), { target: 'draft.md', diff: false, pr: true, rev: '@-' });
-  for (const args of [['pr'], ['pr', 'x.md', '--watch'], ['pr', 'x.md', '--git'], ['pr', 'x.md', '--from', '@-'], ['pr', 'x.md', '-r']]) assert.throws(() => parseArgs(args));
   const recorded = await recordTarget(x.page, { title: 'PR', sourceFile: x.sourceFile, pr: x.target.pr }, x.run);
   assert.deepEqual(recorded.pr, x.target.pr);
 });

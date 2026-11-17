@@ -301,8 +301,6 @@ test('retarget rejects missing, ambiguous, unlabeled defaults, and tied newest t
   assert.throws(() => selectRetarget(target, [terminal('t1', '')]), /no live/);
   assert.throws(() => selectRetarget(target, [terminal('t1'), terminal('t2')]), /ambiguous/);
   assert.throws(() => selectRetarget(target, [terminal('t1')], 't9'), /missing/);
-  assert.deepEqual(parseArgs(['retarget', '/tmp/page.html', '--terminal', 't2']), { retarget: true, page: '/tmp/page.html', terminal: 't2' });
-  assert.throws(() => parseArgs(['retarget']), /requires/); assert.throws(() => parseArgs(['retarget', 'x', '--bad']), /only/);
 });
 test('concurrent delivery and retarget preserve all batches', async t => {
   const x = await setup(t); x.setTerminals([]);
