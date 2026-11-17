@@ -7,6 +7,8 @@ let diffView;
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
 let refreshTimer, rendered = false, refreshRequested = false, snapshotRequest = 0, snapshotApplied = 0;
+let modeView;
+window.addEventListener('lavish:ready', () => { if (modeView === 'commits') globalThis.lavish?.setAnnotationMode?.(false); });
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
 const button = (text, action) => { const node = el('button', text, { type: 'button' }); node.addEventListener('click', action); return node; };
@@ -55,6 +57,7 @@ async function select(id) {
     if (revision !== navigationRevision) return;
     if (leavesPage) {
       if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
+      if (selected === 'commits') await globalThis.lavish?.setAnnotationMode?.(true);
       leavingConfirmed = true; location.href = new URL(doc.sibling, location.href).href; return;
     }
     selected = id; renderNav(); await renderView();
@@ -74,7 +77,7 @@ async function refresh(force = false) {
     if (state.selected && !navigationPending && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
-    if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { location.href = new URL(selectedDoc.sibling, location.href).href; return; }
+    if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { if (oldSelected === 'commits') await globalThis.lavish?.setAnnotationMode?.(true); location.href = new URL(selectedDoc.sibling, location.href).href; return; }
     try { const request = ++snapshotRequest; snapshot = await action('snapshot', { force }); snapshotApplied = request; status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
     catch (error) { snapshot = undefined; status(error.message); }
     let documentChanged = false;
@@ -126,7 +129,11 @@ function notice(text) { return el('p', text, { role: 'status', class: 'notice' }
 async function renderView(focusChangeId) {
   const view = document.querySelector('#view'); view.replaceChildren(); rendered = true;
   const id = selected;
-  view.toggleAttribute('data-lavish-action', id === 'commits');
+  if (modeView !== id) {
+    if (id === 'commits' || modeView === 'commits') globalThis.lavish?.setAnnotationMode?.(id !== 'commits');
+    modeView = id;
+  }
+  view.classList.toggle('changes-view', id === 'changes');
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
   view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
   if (id === 'commits' || id === 'changes') {
@@ -147,7 +154,7 @@ async function renderView(focusChangeId) {
       const label = `Description ${commit.changeId.slice(0, 12)}`;
       const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}` });
       const area = editor(label, state.text, value => { state.text = value; });
-      area.className = 'commit-editor'; area.rows = 1;
+      area.className = 'commit-editor'; area.rows = 1; area.wrap = 'off';
       display.hidden = state.editing; area.hidden = !state.editing;
       const edit = editButton(label, () => { state.editing = true; renderView(commit.changeId); });
       edit.hidden = state.editing || commit.immutable || commit.divergent;
@@ -210,8 +217,8 @@ async function renderView(focusChangeId) {
     catch (error) { if (selected === id) view.append(notice(error.message)); return; }
   }
   if (selected !== id) return;
-  const info = notice(state.message || 'Ready');
-  const area = editor(id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? 'Ready' : 'Unsaved changes'; });
+  const info = notice(state.message || '');
+  const area = editor(id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? '' : 'Unsaved changes'; });
   if (id === 'tasks') {
     const resize = () => { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; };
     area.addEventListener('input', resize);
@@ -224,7 +231,7 @@ async function renderView(focusChangeId) {
     for (const checkbox of view.querySelectorAll('input[data-task-line]')) checkbox.disabled = true;
     try {
       const result = await action('saveDocument', { id, version: state.version, baseHash: state.hash, text: submitted });
-      state.message = result.reply;
+      state.message = result.reply === 'Saved' ? '' : result.reply;
       if (result.reply === 'Saved') { const data = await action('readDocument', { id }); if (data.version === state.version && data.text === submitted) { state.hash = data.hash; state.original = submitted; if (state.text === submitted) state.editing = false; } else { state.message = 'Saved, but the source changed afterwards. Your draft is retained.'; state.editing = true; } }
       else state.editing = true;
     } catch (error) { state.message = error.message; state.editing = true; }
@@ -263,7 +270,7 @@ async function renderView(focusChangeId) {
   } else view.append(area, save);
   view.append(info);
 }
-app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><nav id="navigation" aria-label="Workspace views"></nav><div><main id="view"></main><div id="frames"></div></div></div>';
+app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><nav id="navigation" aria-label="Workspace views"></nav><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
 document.querySelector('#workspace').textContent = config.workspace;
 document.querySelector('#refresh').addEventListener('click', () => refresh(true));
 refresh();

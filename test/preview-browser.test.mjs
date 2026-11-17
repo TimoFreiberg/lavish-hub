@@ -64,6 +64,17 @@ test('hub previews work without external requests or changing fixtures', async (
     await page.goto(`${base}hub-changes/page/index.html`);
     const sidebar = page.locator('.hub-diff .sidebar');
     await sidebar.getByRole('heading', { name: /Files \(/ }).waitFor();
+    for (const width of [2200, 700]) {
+      await page.setViewportSize({ width, height: 900 });
+      const geometry = await page.evaluate(() => {
+        const box = selector => document.querySelector(selector).getBoundingClientRect();
+        return { main: box('#view').width, content: box('.hub-content').width, diff: box('.hub-diff').width, layout: box('.hub-diff .layout').width, sidebar: box('.hub-diff .sidebar').width, viewport: box('.hub-diff .viewport').width, document: document.documentElement.scrollWidth, width: innerWidth };
+      });
+      assert.ok(geometry.content - geometry.main < 2 && geometry.main - geometry.diff < 70, JSON.stringify(geometry));
+      assert.ok(Math.abs(geometry.layout - geometry.diff) < 4 && geometry.viewport > geometry.layout - geometry.sidebar - 4, JSON.stringify(geometry));
+      assert.ok(geometry.sidebar <= 282 && geometry.document <= geometry.width + 1, JSON.stringify(geometry));
+      if (width === 2200) assert.ok(geometry.diff > 1700 && geometry.viewport > 1400, JSON.stringify(geometry));
+    }
     const links = sidebar.locator('.file-link');
     assert.ok(await links.count() > 2);
     await links.nth(1).click();

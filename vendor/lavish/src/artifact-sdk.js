@@ -2855,6 +2855,8 @@ export function createArtifactSdk(
     postArtifactMessage("lavish:documentMeta", payload);
   }
 
+  let annotationRequestId = 0;
+  const annotationRequests = new Map();
   /** @type {Window & { lavish?: unknown }} */ (window).lavish = {
     queuePrompt,
     sendQueuedPrompts,
@@ -2862,8 +2864,19 @@ export function createArtifactSdk(
     getQueuedPrompts: () => [],
     setStatus: (message) => postArtifactMessage("lavish:status", { message: String(message) }),
     setDocumentMeta,
+    setAnnotationMode: (enabled) => {
+      if (typeof enabled !== "boolean") return Promise.resolve(false);
+      const requestId = ++annotationRequestId;
+      return new Promise((resolve) => {
+        const timer = window.setTimeout(() => { annotationRequests.delete(requestId); resolve(false); }, 1000);
+        annotationRequests.set(requestId, () => { window.clearTimeout(timer); resolve(true); });
+        postArtifactMessage("lavish:requestAnnotationMode", { enabled, request_id: requestId });
+      });
+    },
     snapshot,
   };
+
+  window.dispatchEvent(new Event("lavish:ready"));
 
   const handleInboundMessage = (event) => {
     // The legacy transport is guarded by the parent WindowProxy. Protocol 1 is
@@ -2880,6 +2893,10 @@ export function createArtifactSdk(
     )
       return;
     if (msg.type === "lavish:setAnnotationMode") setAnnotationMode(msg.enabled);
+    if (msg.type === "lavish:annotationModeApplied") {
+      const resolve = annotationRequests.get(msg.request_id);
+      if (resolve) { annotationRequests.delete(msg.request_id); resolve(); }
+    }
     if (msg.type === "lavish:attachmentResult") {
       if (
         !isTrustedAttachmentResult(event, {

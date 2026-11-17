@@ -5765,6 +5765,13 @@ function handleArtifactMessage(event, binding = null) {
   if (msg.type === "lavish:endSession") endSession();
   if (msg.type === "lavish:revisions") applyRevisionMessage(msg);
   if (msg.type === "lavish:toggleAnnotationMode") toggleAnnotationMode();
+  if (msg.type === "lavish:requestAnnotationMode" && typeof msg.enabled === "boolean" && !ended && !terminalSubmission) {
+    annotationOverridden = true;
+    annotation = msg.enabled;
+    annotationSwitch.setAttribute("aria-pressed", String(annotation));
+    postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation });
+    postToFrame({ type: "lavish:annotationModeApplied", request_id: msg.request_id });
+  }
   if (msg.type === "lavish:editQueuedAnchor") editQueuedAnchor(String(msg.selector || ""));
 }
 

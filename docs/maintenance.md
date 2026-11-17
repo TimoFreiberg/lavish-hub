@@ -72,8 +72,12 @@ local patch matches the PR's current head.
 
 Do not remove the patch just because the PR merges or a new version appears.
 Compare the candidate release's actual source and behavior with the local patch and
-later changes, including page-scoped feedback, routing and hub integration. Retain
-or adapt any differences still needed here. Only retire code after establishing an
+later changes, including page-scoped feedback, routing and hub integration. The
+local `window.lavish.setAnnotationMode(boolean)` addition requests a chrome switch
+change over the authenticated artifact protocol and resolves on acknowledgment or
+returns false after one second. The `lavish:ready` event signals SDK availability.
+The hub uses these on view transitions.
+Retain or adapt any differences still needed here. Only retire code after establishing an
 upstream equivalent and passing the applicable regression tests and full repository
 QA, including visual inspection, on the proposed replacement. Review and document
 any upgrade separately; this procedure does not itself change the pinned version.

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 import { createHubTransport } from '../src/hub-transport.mjs';
 import { build } from 'esbuild';
+import { themeCss } from '../src/orangebox.mjs';
 
 test('refresh updates clean documents and retains dirty drafts and their target', { timeout: 30000 }, async t => {
   let selected = 'tasks';
@@ -110,7 +111,7 @@ test('commit descriptions render safely and retain draft targets across rewrites
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
   const page = await browser.newPage();
   page.setDefaultTimeout(5000);
-  await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  await page.setContent(`<style>${themeCss}${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
   const display = page.locator('.commit-description');
   const edit = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
   await edit.waitFor();
@@ -132,7 +133,7 @@ test('commit descriptions render safely and retain draft targets across rewrites
   assert.equal(await editor.evaluate(node => getComputedStyle(node).resize), 'vertical');
   const saveStyle = await page.locator('.commit-save').evaluate(node => getComputedStyle(node).backgroundColor);
   const cancelStyle = await page.locator('.commit-cancel').evaluate(node => getComputedStyle(node).backgroundColor);
-  assert.equal(saveStyle, 'rgb(36, 93, 59)'); assert.equal(cancelStyle, 'rgb(52, 58, 64)');
+  assert.equal(saveStyle, 'rgb(184, 196, 122)'); assert.equal(cancelStyle, 'rgb(49, 43, 40)');
   assert.ok(await page.locator('.commit-controls').evaluate(node => parseFloat(getComputedStyle(node).gap) > 0));
   await editor.fill('<b>draft</b>\nsecond');
   commitId = 'd'.repeat(40); description = 'External\n';
@@ -240,6 +241,38 @@ test('long rendered descriptions and statistics have resize handles, immutable c
   assert.equal(await page.getByRole('button', { name: 'Edit Description ffffffffffff' }).count(), 0);
 });
 
+test('description lines scroll horizontally without wrapping or changing text', { timeout: 30000 }, async t => {
+  const text = 'W'.repeat(300) + '\nSecond line';
+  let saved;
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [{ changeId: 'c'.repeat(32), commitId: 'b'.repeat(40), description: text }] }),
+    describe: body => { saved = body.description; return { status: 'saved', current: { commitId: 'b'.repeat(40), description: body.description } }; },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
+  const page = await browser.newPage({ viewport: { width: 2200, height: 900 } });
+  await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  const display = page.locator('.commit-description');
+  await display.waitFor();
+  const dimensions = await display.evaluate(node => ({ width: node.clientWidth, scroll: node.scrollWidth, height: node.clientHeight, line: parseFloat(getComputedStyle(node).lineHeight), max: getComputedStyle(node.parentElement).maxWidth, font: getComputedStyle(node).fontFamily, bodyFont: getComputedStyle(document.body).fontFamily, editRight: node.parentElement.querySelector('button').getBoundingClientRect().right, right: node.getBoundingClientRect().right }));
+  assert.ok(dimensions.scroll > dimensions.width && dimensions.height <= dimensions.line * 2 + 2, JSON.stringify(dimensions));
+  assert.ok(dimensions.width > 1000 && Math.abs(dimensions.width - parseFloat(dimensions.max)) < 2, JSON.stringify(dimensions)); assert.equal(dimensions.font, dimensions.bodyFont);
+  assert.ok(Math.abs(dimensions.editRight - dimensions.right) < 2);
+  assert.equal(await display.textContent(), text);
+  await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
+  const editor = page.getByRole('textbox', { name: 'Description cccccccccccc' });
+  assert.equal(await editor.inputValue(), text);
+  assert.equal(await editor.getAttribute('wrap'), 'off');
+  assert.ok(await editor.evaluate(node => node.scrollWidth > node.clientWidth));
+  await page.getByRole('button', { name: 'Save description' }).click();
+  await assertEventually(() => assert.equal(saved, text));
+  await page.setViewportSize({ width: 500, height: 900 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+});
+
 test('Markdown controls save task toggles and retain failed drafts', { timeout: 30000 }, async t => {
   let selected = 'tasks', data = { text: '- [ ] First\n- [ ] Second\n', hash: 'one', version: 'v1' }, fail = false, release;
   const requests = [];
@@ -258,10 +291,14 @@ test('Markdown controls save task toggles and retain failed drafts', { timeout: 
   const page = await browser.newPage();
   await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
   const boxes = page.locator('.hub-markdown input[type=checkbox]');
-  await boxes.first().check(); await assertEventually(() => assert.equal(requests.length, 1));
+  await boxes.first().waitFor();
+  assert.equal(await page.getByText('Ready', { exact: true }).count(), 0);
+  await boxes.first().check();
+  await page.getByText('Saving…', { exact: true }).waitFor(); await assertEventually(() => assert.equal(requests.length, 1));
   assert.equal(await boxes.nth(1).isDisabled(), true);
   assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).count(), 0);
   release(); await assertEventually(async () => assert.equal(await boxes.nth(1).isEnabled(), true));
+  assert.equal(await page.getByText('Saved', { exact: true }).count(), 0);
   assert.equal(requests[0].baseHash, 'one'); assert.match(requests[0].text, /\[x\] First/);
   fail = true; await boxes.nth(1).check();
   await page.getByText('Conflict saving task').waitFor();
@@ -269,6 +306,8 @@ test('Markdown controls save task toggles and retain failed drafts', { timeout: 
   assert.match(await editor.inputValue(), /\[x\] Second/); assert.equal(requests[1].baseHash, 'two');
   await editor.press('Escape'); assert.equal(await boxes.nth(1).isChecked(), false);
   await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit Document Markdown' }).waitFor();
+  assert.equal(await page.getByText('Ready', { exact: true }).count(), 0);
   await page.getByRole('button', { name: 'Edit Document Markdown' }).click();
   const notes = page.getByRole('textbox', { name: 'Document Markdown' }); await notes.fill('Draft'); await notes.press('Escape');
   assert.equal(await page.getByRole('button', { name: 'Edit Document Markdown' }).count(), 1);
