@@ -22,12 +22,12 @@ const languageCatalog = {
 };
 const worker = await esbuild.build({
   entryPoints: [path.join(deps, 'node_modules/@pierre/diffs/dist/worker/worker-portable.js')],
-  bundle: true, format: 'iife', platform: 'browser', write: false,
+  bundle: true, minify: true, format: 'iife', platform: 'browser', write: false,
   nodePaths: [path.join(deps, 'node_modules')], logLevel: 'silent',
 });
 await esbuild.build({
   entryPoints: [path.join(root, 'web/diff-app.mjs')],
-  outfile: path.join(out, 'diff-app.js'), bundle: true, format: 'iife',
+  outfile: path.join(out, 'diff-app.js'), bundle: true, minify: true, format: 'iife',
   platform: 'browser', splitting: false, nodePaths: [path.join(deps, 'node_modules')],
   define: { LAVISH_KIT_WORKER_SOURCE: JSON.stringify(worker.outputFiles[0].text), LAVISH_KIT_LANGUAGES: JSON.stringify(languages) },
   plugins: [languageCatalog], logLevel: 'silent',
@@ -35,7 +35,7 @@ await esbuild.build({
 await copyFile(path.join(root, 'web/diff.css'), path.join(out, 'diff.css'));
 await esbuild.build({
   entryPoints: [path.join(root, 'web/hub-markdown.mjs')],
-  outfile: path.join(out, 'hub-markdown.js'), bundle: true, format: 'iife',
+  outfile: path.join(out, 'hub-markdown.js'), bundle: true, minify: true, format: 'iife',
   platform: 'browser', nodePaths: [path.join(deps, 'node_modules')], plugins: [languageCatalog], logLevel: 'silent',
 });
 await copyFile(path.join(root, 'web/document.css'), path.join(out, 'document.css'));
