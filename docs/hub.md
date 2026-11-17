@@ -77,9 +77,12 @@ directory. Diff comments enter the Lavish sidebar queue; send them from the side
 Published HTML opens as a sibling page in the same Lavish review, where it can
 be annotated directly. Scripts, styles, and images resolve relative to its source
 file, respecting an authored `<base href>`. Local resources remain restricted to
-the source directory as described below. Use the page's hub navigation to open
-built-in views or published documents. The hub, Markdown, and diff views use the
-Orangebox dark palette. Published HTML without a root `data-theme` receives
+the source directory as described below. Use the sidebar to open built-in views or
+published documents. It shows when navigation is in progress; if navigation fails,
+select the destination again to retry. The sidebar reserves space at the left of
+the page without moving authored elements into a wrapper. Fixed-position content
+or styles that override the page's root padding can overlap it. The hub, Markdown,
+and diff views use the Orangebox dark palette. Published HTML without a root `data-theme` receives
 `data-theme="orangebox"` and a dark background and foreground fallback. Authored
 CSS can override the fallback, and an existing root `data-theme` is retained. The
 fallback does not load DaisyUI for pages that do not already include it.

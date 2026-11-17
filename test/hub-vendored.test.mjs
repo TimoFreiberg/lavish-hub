@@ -98,6 +98,13 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   assert.equal(await resourcePage.evaluate(() => self.origin), 'null');
   assert.equal(await resourcePage.evaluate(() => { try { localStorage.getItem('test'); return false; } catch { return true; } }), true);
   await resourcePage.close();
+  const publishedFrame = page.frameLocator('#artifact');
+  const navBox = await publishedFrame.getByRole('navigation', { name: 'Hub navigation' }).boundingBox();
+  const commitsBox = await publishedFrame.getByRole('link', { name: 'Commits', exact: true }).boundingBox();
+  const changesBox = await publishedFrame.getByRole('link', { name: 'Changes', exact: true }).boundingBox();
+  const authoredBox = await authored.boundingBox();
+  assert.ok(navBox && commitsBox && changesBox && authoredBox);
+  assert.ok(changesBox.y > commitsBox.y && authoredBox.x >= navBox.x + navBox.width);
   assert.match(page.frames().find(frame => frame.url().includes('document-'))?.url() || '', /document-.*\.html/);
   if (await page.locator('#annotation').getAttribute('aria-pressed') !== 'true') await page.locator('#annotation').click();
   const box = await authored.evaluate(node => {
@@ -142,9 +149,31 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await page.keyboard.press('Escape');
   assert.equal(await frame.getByLabel('Authored draft').inputValue(), 'Keep this form');
   assert.equal(await commitsLink.evaluate(el => el === document.activeElement), true);
+  let navigateRequests = 0, mode = 'fail', requestStart = 0, requestDuration = 0;
+  await page.route('**/action', async route => {
+    if (route.request().postDataJSON()?.operation !== 'navigate') return route.continue();
+    navigateRequests++;
+    requestStart = performance.now();
+    if (mode === 'fail') { await route.fulfill({ status: 503, body: 'unavailable' }); t.diagnostic(`Failed navigate response: ${(performance.now() - requestStart).toFixed(1)}ms`); return; }
+    await delay(300);
+    requestDuration = performance.now() - requestStart;
+    await route.continue();
+  });
   await commitsLink.click();
   await dialog.getByRole('button', { name: 'Leave page' }).click();
+  const status = frame.getByRole('status');
+  await status.getByText('Could not open Commits. Select it again to retry.').waitFor();
+  assert.equal(navigateRequests, 1);
+  assert.equal(await frame.getByRole('link', { name: 'Review', exact: true }).getAttribute('aria-current'), 'page');
+  mode = 'delay';
+  await commitsLink.click();
+  await dialog.getByRole('button', { name: 'Leave page' }).click();
+  await status.getByText('Opening Commits…').waitFor();
+  await commitsLink.evaluate(el => el.click());
   await frame.getByRole('heading', { name: 'Commits', exact: true }).waitFor();
+  assert.equal(navigateRequests, 2);
+  assert.ok(requestDuration >= 300, `delayed request took ${requestDuration}ms`);
+  t.diagnostic(`Injected navigate delay: ${requestDuration.toFixed(1)}ms`);
   await writeFile(path.join(repo, 'changed.txt'), 'New line\n');
   await frame.getByRole('button', { name: 'Changes', exact: true }).click();
   await frame.locator('.file-link[data-path="changed.txt"]').waitFor();
@@ -158,6 +187,18 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await frame.getByRole('button', { name: 'Review', exact: true }).click();
   await dialog.getByRole('button', { name: 'Leave page' }).click();
   await frame.getByText('Replacement document').waitFor();
+  await page.unrouteAll();
+  const normalStart = performance.now();
+  let normalRequests = 0, normalResponse;
+  page.on('response', response => {
+    if (response.request().url().endsWith('/action') && response.request().postDataJSON()?.operation === 'navigate') {
+      normalRequests++; normalResponse = performance.now();
+    }
+  });
+  await frame.getByRole('link', { name: 'Commits', exact: true }).click();
+  await frame.getByRole('heading', { name: 'Commits', exact: true }).waitFor();
+  assert.equal(normalRequests, 1);
+  t.diagnostic(`Normal click to navigate response: ${(normalResponse - normalStart).toFixed(1)}ms; click to Commits heading: ${(performance.now() - normalStart).toFixed(1)}ms`);
   const markdown = path.join(dir, 'notes.md');
   await writeFile(markdown, '# Notes\nOriginal\n');
   await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', markdown, '--id', 'notes', '--title', 'Notes', '--workspace', repo], { env });
