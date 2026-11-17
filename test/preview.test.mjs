@@ -98,7 +98,7 @@ test('preview generator writes portable fixture pages and provenance', async () 
       assert.ok(index.includes(`href="${page.url}"`));
       const html = await readFile(path.join(dir, page.url), 'utf8');
       assert.doesNotMatch(html, /https?:\/\//);
-      if (['task', 'pr', 'diff'].includes(page.kind)) assert.match(html, /\.\.\/\.\.\/assets\/preview\.js/);
+      if (['task', 'diff'].includes(page.kind)) assert.match(html, /\.\.\/\.\.\/assets\/preview\.js/);
       for (const name of await readdir(path.dirname(path.join(dir, page.url)))) {
         if (name.startsWith('data-')) assert.doesNotMatch(await readFile(path.join(dir, path.dirname(page.url), name), 'utf8'), /\/(?:Users|home|private\/var)\//);
       }

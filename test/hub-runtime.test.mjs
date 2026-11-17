@@ -95,6 +95,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const browserPage = await browser.newPage();
   await browserPage.goto(`${browserBase}/hub.html`);
   await browserPage.getByRole('button', { name: 'Tasks', exact: true }).waitFor();
+  await browserPage.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
   const taskDraft = browserPage.getByRole('textbox', { name: 'Tasks Markdown' });
   await taskDraft.fill('Unsaved task');
   await run(process.execPath, [cli, 'hub', 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
@@ -171,7 +172,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(await siblingPage.getByLabel('Frame draft').inputValue(), 'Authored draft');
   await siblingPage.getByRole('link', { name: 'Tasks', exact: true }).click();
   await siblingPage.getByRole('button', { name: 'Leave page' }).click();
-  await siblingPage.getByRole('textbox', { name: 'Tasks Markdown' }).waitFor();
+  await siblingPage.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor();
   await siblingPage.close();
   await writeFile(inside, '<p>externally updated</p>');
   await run(process.execPath, [cli, 'hub', 'publish', inside, '--id', 'inside', '--workspace', repo], { env });

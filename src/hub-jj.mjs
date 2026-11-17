@@ -93,17 +93,6 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
         force = false;
       }
     },
-    async prHead(expression = '@-') {
-      if (typeof expression !== 'string' || !expression.trim() || expression.length > 4096 || expression.includes('\0')) throw new Error('Invalid PR revision');
-      await checkWorkspace();
-      const op = await operation(cwd);
-      const heads = await rows(cwd, op, expression);
-      const working = await rows(cwd, op, '@');
-      if (heads.length !== 1 || working.length !== 1) throw new Error('PR revision must resolve to exactly one commit');
-      const changes = await run(cwd, ['--at-operation', op, 'diff', '-r', working[0].commitId, '--summary']);
-      const warning = changes.trim() ? (expression === '@-' ? 'Working-copy changes are excluded by the default @- PR head.' : `The working copy has changes. The selected PR head is ${heads[0].commitId}${heads[0].commitId === working[0].commitId ? ' (the working-copy commit)' : ' (not the working-copy commit)'}.`) : null;
-      return { revision: heads[0].commitId, expression, operationId: op, warning };
-    },
     describe(request) {
       const result = pending.then(async () => {
         generation++; cached = undefined;

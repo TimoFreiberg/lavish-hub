@@ -1,8 +1,7 @@
 # Workflows without a hub equivalent
 
-The hub retains task and Markdown editing, PR configuration, and reviews of jj
-changes. The former standalone commands also offered workflows that the hub does
-not currently replace:
+The hub supports task and Markdown editing and reviews of jj changes. The former
+standalone commands also offered workflows that the hub does not replace:
 
 - Git-only diffs and stdin patches.
 - Arbitrary standalone revision-range selection beyond the hub's jj views.

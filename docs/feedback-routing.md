@@ -4,6 +4,6 @@ The foreground hub owner is the only polling consumer for its review. It prints 
 
 ## Delivery guarantees
 
-Each save or action keeps the target it arrived with, even if navigation changes while the operation is in progress. Document saves check the version and content they were based on; a conflict keeps the draft for the user to resolve. Create PR records its launch attempt before calling herdr, so the same request is not launched twice after an ambiguous acknowledgement. Inspect the terminal before retrying a launch whose outcome is uncertain.
+Each save or action keeps the target it arrived with, even if navigation changes while the operation is in progress. Document saves check the version and content they were based on; a conflict keeps the draft for the user to resolve.
 
 A polling failure is not retried: the server may already have consumed the feedback. The owner stops rather than risk silently losing or duplicating a batch. The former standalone relay, outbox, and retarget workflows are not available; see [workflow gaps](hub-gaps.md).

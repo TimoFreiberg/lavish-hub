@@ -3,7 +3,7 @@
 `lavish-kit hub listen [--workspace DIR] [--open] [--reopen]` runs a foreground
 owner for one jj workspace. It opens a stable Lavish page without starting the
 standalone feedback relay. The page shows commit descriptions and an annotated
-diff, and provides direct Markdown editors for tasks, PR drafts, and
+diff, and provides direct Markdown editors for tasks and
 registered Markdown documents. Description and file saves report conflicts and
 keep the draft on the page. Actions require the local owner; if it is unreachable,
 the page reports the error without discarding edits. Drafts are not persisted across
@@ -142,7 +142,7 @@ surviving registered documents. Saves and repository actions remain disabled, in
 a different checkout later appears at that path; the hub does not retarget it.
 Sources and HTML resources inside the unavailable workspace cannot be read, even
 if replacement files appear there; surviving sources outside it remain readable.
-Registrations, metadata, and managed task and PR files persist across owner restarts;
+Registrations, metadata, and managed task files persist across owner restarts;
 source files are not copied. Keep published sources outside disposable checkouts if
 they must remain available. Remove unwanted hub data only after stopping its owner.
 
@@ -158,18 +158,3 @@ jj processes do not share that serialization: a small race remains between the
 check and `jj describe`. This is not an atomic compare-and-swap. Conflicts return
 current visible versions so an editor can preserve the draft and show the change.
 
-Use `lavish-kit hub pr --file FILE` to attach a valid PR draft and `lavish-kit
-hub pr --rev REV` to configure its head expression. Both options can be supplied
-together; the default head is `@-`. Launch saves the submitted draft first, then
-resolves the expression to one full commit ID and passes that ID to the configured
-`createPr` command. The receipt shows the submitted ID. With the default head,
-a nonempty working copy produces a visible warning and a warning on the owner's
-stderr. An explicit head reports whether it is the working-copy commit instead.
-
-The owner rereads `createPr` from the config file on each launch. When the owner
-has a live herdr terminal, it attempts to open an interactive tab; otherwise it
-shows a quoted command to run manually. A durable request record prevents the
-same request ID from launching twice; a new submission uses a new ID. If
-acknowledgement is lost or the owner is interrupted, check the terminal before
-trying again. A successful launch
-only opens the command; it does not confirm that a PR was created.

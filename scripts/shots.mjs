@@ -30,9 +30,8 @@ async function ready(page, variant, artifact, source) {
         await frame.getByText(/Hub actions are unreachable/).waitFor();
       }
     }
-    if (variant.name === 'tasks') await frame.getByRole('textbox', { name: 'Tasks Markdown' }).waitFor();
-    if (variant.name === 'pr') await frame.getByRole('textbox', { name: 'PR Markdown' }).waitFor();
-    if (variant.name === 'markdown') await frame.getByRole('textbox', { name: 'Document Markdown' }).waitFor();
+    if (variant.name === 'tasks') await frame.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor();
+    if (variant.name === 'markdown') await frame.getByRole('button', { name: 'Edit', exact: true }).waitFor();
     if (variant.name === 'html') await frame.locator('iframe[title="Review HTML"]').waitFor();
     if (variant.name === 'changes') await frame.locator('.hub-diff .sidebar').waitFor();
   } else await frame.waitForSelector('h1');
@@ -105,7 +104,6 @@ try {
   browser = await launch();
   if (await afterLaunch(browser) === false) throw new Error('Screenshot checks were skipped');
   const jobs = [];
-  // PR fixtures change the shared config, so prepare all pages before concurrent captures.
   for (const variant of variants) for (const viewport of report.matrix.viewports) for (const colorScheme of report.matrix.colorSchemes) {
     if (interrupted) throw new Error('Screenshot run interrupted');
     const id = [variant.kind, variant.name, variant.view, viewport.width === 1440 ? 'wide' : 'narrow', colorScheme].filter(Boolean).join('-');

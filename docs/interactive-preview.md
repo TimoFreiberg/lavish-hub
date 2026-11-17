@@ -10,9 +10,9 @@ python3 -m http.server 8000
 
 Open the server's index in a browser. The output also works under a nested URL prefix; opening it via `file://` is not supported. The index links the fixture variants and displays the source revision, dirty state and build time, also recorded in `manifest.json`. `SOURCE_DATE_EPOCH` overrides the timestamp. Local output identifies the local jj working-copy revision or Git HEAD and whether it has changes; it does not necessarily identify the published revision.
 
-The pages use the application UI with an explicit preview adapter. Saves, external edits, comments and configured Create PR actions are simulations: they do not save files or run actions. State is held in memory per page and is discarded on reload or navigation. Reset restores the fixture; the theme selector changes appearance. An unconfigured Create PR remains disabled. Fixtures are trusted project content, not an arbitrary HTML hosting service.
+The pages use the application UI with an explicit preview adapter. Saves, external edits and comments are simulations: they do not save files or send feedback. State is held in memory per page and is discarded on reload or navigation. Reset restores the fixture; the theme selector changes appearance. Fixtures are trusted project content, not an arbitrary HTML hosting service.
 
-`just shots` builds the same preview under `shots/preview/`, alongside a gallery and report. Eight wide, dark primary images represent both static and real-Lavish pages; selected scrollable pages can have additional captures. The complete static and real-Lavish matrices run checks at both widths and themes without a primary PNG for every case. See [testing](../TESTING.md) for readiness, checks and manual review.
+`just shots` builds the same preview under `shots/preview/`, alongside a gallery and report. Wide, dark primary images represent selected static and real-Lavish pages; selected scrollable pages can have additional captures. The complete static and real-Lavish matrices run checks at both widths and themes without a primary PNG for every case. See [testing](../TESTING.md) for readiness, checks and manual review.
 
 ## Public preview and operations
 

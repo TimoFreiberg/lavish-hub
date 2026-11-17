@@ -23,7 +23,7 @@ original-size image review, physical-phone testing, or desktop-app testing.
   `LAVISH_KIT_LAVISH_TRANSPORT=cli`. See `docs/lavish-http.md`.
 - Real-server transport tests cover feedback, competing listeners, reply, end,
   unsupported versions, wrong state, and truncated responses. Existing outbox,
-  handler, receipt-target, and Create PR launch-attempt guarantees are retained.
+  handler and receipt-target guarantees were retained at the time.
 - A reproducible transport RSS comparison covers 1, 5, and 20 pages. At 20,
   summed RSS dropped from 1343.9 to 123.4 MiB (22 processes to 2). This includes
   Lavish and polling processes, not herdr, a browser, or the full relay.
@@ -33,7 +33,7 @@ original-size image review, physical-phone testing, or desktop-app testing.
   target or a long-lived retention problem.
 - Relay default state paths now match the installed Lavish default,
   `$HOME/.lavish-axi`, rather than the previously assumed XDG state directory.
-- Generated Markdown, PR and diff pages default to dark mode, including syntax
+- Generated Markdown and diff pages default to dark mode, including syntax
   highlighting and native controls (issue #1's generated-page portion).
   Existing user-authored HTML preserves its appearance.
 - Task-list checkboxes have text labels. Code blocks are keyboard-focusable
@@ -96,12 +96,8 @@ fails, try XDG emergency recovery; warn loudly and stop if both fail. A failed
 poll may have consumed feedback without returning a complete response, so stop
 and ask for inspection/resend instead of silently retrying it.
 
-Each save/action keeps its receipt source and reviewed PR repository/revision.
-Create PR records its launch attempt before calling herdr. Pending recovery
-records without receipt targets may acquire only matching-generation targets;
-mismatches stop processing. Records without enough identifying information
-require manual inspection. Never replay a Create PR action manually as well.
-See `docs/feedback-routing.md` for the full procedure.
+Each save or action keeps its target. See `docs/feedback-routing.md` for the
+current delivery guarantees.
 
 `src/markdown.mjs` remains used by the watch renderer, legacy Markdown fixtures,
 and tests. It was not removed. Recheck callers before attempting removal.

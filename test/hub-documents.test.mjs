@@ -29,6 +29,22 @@ test('hub registrations persist, replace metadata, and protect save targets', as
   assert.equal(await readFile(b, 'utf8'), 'external');
 });
 
+test('obsolete attachments are ignored without affecting tasks or published documents', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-old-attachments-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const tasks = path.join(dir, 'tasks-source.md');
+  await writeFile(tasks, 'tasks');
+  await writeFile(path.join(dir, 'documents.json'), JSON.stringify({ documents: {}, attachments: { tasks: { source: tasks, version: 'task-version' }, pr: { source: path.join(dir, 'missing.md'), version: 'old' } } }));
+  const store = await createHubDocuments(dir);
+  assert.deepEqual(Object.keys(store.list().attachments), ['tasks']);
+  assert.equal((await store.read({ id: 'tasks' })).text, 'tasks');
+  await assert.rejects(store.read({ id: 'pr' }), /Unknown document/);
+  await assert.rejects(store.attach({ kind: 'pr', file: tasks }), /Invalid attachment/);
+  await store.publish({ id: 'pr', file: tasks });
+  assert.equal((await store.read({ id: 'pr' })).text, 'tasks');
+  assert.throws(() => parseArgs(['hub', 'pr', '--file', tasks]), /unknown hub command/);
+});
+
 test('hub metadata validation and CLI options', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-metadata-'));
   t.after(() => rm(dir, { recursive: true, force: true }));

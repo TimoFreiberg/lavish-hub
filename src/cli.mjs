@@ -8,13 +8,11 @@ import { createLavishClient } from './lavish-http.mjs';
 const usage = `usage: lavish-kit hub [listen|stop|status] [--workspace DIR] [--open] [--reopen]
        lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
        lavish-kit hub tasks --file FILE [--workspace DIR]
-       lavish-kit hub pr [--file FILE] [--rev REV] [--workspace DIR]
        lavish-kit reply PAGE --agent-reply TEXT`;
 const help = `${usage}
 
 Run hub listen in the foreground to own a workspace hub and receive feedback as
 agent-notification JSON lines. Use reply to respond to the page in a notification.
-The PR head defaults to @-; launch resolves it to a commit before opening a terminal.
 See docs/hub.md for configuration and workflow details.`;
 class UsageError extends Error {}
 
@@ -27,7 +25,7 @@ export function parseArgs(args) {
   }
   if (target !== 'hub') throw new UsageError(target ? `unknown command ${target}` : '');
   const command = args[0] && !args[0].startsWith('-') ? args.shift() : 'status';
-  if (!['listen', 'stop', 'status', 'publish', 'tasks', 'pr'].includes(command)) throw new UsageError(`unknown hub command ${command}`);
+  if (!['listen', 'stop', 'status', 'publish', 'tasks'].includes(command)) throw new UsageError(`unknown hub command ${command}`);
   const result = { hub: command };
   if (command === 'publish') {
     result.file = args.shift();
@@ -38,7 +36,7 @@ export function parseArgs(args) {
     if (arg === '--workspace') {
       if (result.workspace || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--workspace requires one value');
       result.workspace = args[++i];
-    } else if ((command === 'publish' && ['--id', '--title', '--metadata-file'].includes(arg)) || (['tasks', 'pr'].includes(command) && arg === '--file') || (command === 'pr' && arg === '--rev')) {
+    } else if ((command === 'publish' && ['--id', '--title', '--metadata-file'].includes(arg)) || (command === 'tasks' && arg === '--file')) {
       const key = arg === '--metadata-file' ? 'metadataFile' : arg.slice(2);
       if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
       result[key] = args[++i];
@@ -53,7 +51,6 @@ export function parseArgs(args) {
   }
   if (command === 'publish' && !result.id) throw new UsageError('hub publish requires --id');
   if (command === 'tasks' && !result.file) throw new UsageError('hub tasks requires --file');
-  if (command === 'pr' && !result.file && !result.rev) throw new UsageError('hub pr requires --file or --rev');
   return result;
 }
 
@@ -75,11 +72,11 @@ export async function main(args = process.argv.slice(2)) {
     if (options.help) { console.log(help); return 0; }
     if (options.reply) return await reply(options.page, options.text);
     if (options.hub === 'listen') return await runHubOwner(options);
-    if (['publish', 'tasks', 'pr'].includes(options.hub)) {
+    if (['publish', 'tasks'].includes(options.hub)) {
       const body = options.hub === 'publish'
         ? { id: options.id, title: options.title, file: path.resolve(options.file), ...(options.metadataFile ? { metadata: await readMetadata(options.metadataFile) } : {}) }
-        : { kind: options.hub, ...(options.file ? { file: path.resolve(options.file) } : {}), ...(options.rev ? { rev: options.rev } : {}) };
-      await callHub(options.hub === 'publish' ? 'publish' : options.hub === 'pr' ? 'configurePr' : 'attach', { ...options, body });
+        : { kind: options.hub, file: path.resolve(options.file) };
+      await callHub(options.hub === 'publish' ? 'publish' : 'attach', { ...options, body });
       if (options.open) await callHub('open', options);
       console.log(options.hub === 'publish' ? `Registered document ${options.id}.` : `Configured ${options.hub}.`);
       return 0;

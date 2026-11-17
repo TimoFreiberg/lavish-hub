@@ -5,7 +5,7 @@ import { prepareDiff, readDiff } from '../../src/diff/source.mjs';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const fixtures = path.join(root, 'test/visual/fixtures');
-export const variants = ['empty', 'stack', 'dirty', 'conflict', 'disconnected', 'changes', 'tasks', 'pr', 'markdown', 'html']
+export const variants = ['empty', 'stack', 'dirty', 'conflict', 'disconnected', 'changes', 'tasks', 'markdown', 'html']
   .map(name => ({ kind: 'hub', name }));
 export const variantId = variant => [variant.kind, variant.name, variant.view].filter(Boolean).join('-');
 
@@ -36,10 +36,10 @@ export async function makePage(variant, dir, dist, diff, { portable = false } = 
       readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8'),
     ]);
     const name = variant.name;
-    const selected = ['changes', 'tasks', 'pr', 'markdown', 'html'].includes(name) ? name : 'commits';
+    const selected = ['changes', 'tasks', 'markdown', 'html'].includes(name) ? name : 'commits';
     const commits = name === 'empty' ? [] : Array.from({ length: name === 'stack' ? 8 : 1 }, (_, i) => ({ changeId: String(i + 1).repeat(32), commitId: String(i + 1).repeat(40), description: name === 'stack' ? `Long description ${i + 1}\n\n${'A detailed explanation of this change and its consequences. '.repeat(5)}` : 'Improve the workspace review\n\nKeep the description readable.', immutable: false, divergent: false }));
     const data = { selected, commits, patch: diff.patch, stat: '4 files changed, 28 insertions(+), 7 deletions(-)', documents: [{ id: 'markdown', title: 'Review notes', source: 'review.md', metadata: { reviewedRepository: 'Example repository', headCommit: 'a'.repeat(40) } }, { id: 'html', title: 'Review HTML', source: 'review.html' }] };
-    const bootstrap = `const fixture=${JSON.stringify(data).replaceAll('<', '\\u003c')}; globalThis.hubConfig={url:${JSON.stringify(portable ? '.' : '')},capability:'fixture',resourceKey:'fixture',workspace:'/example/workspace'}; globalThis.fetch=async (_url,options)=>{const {operation,id}=JSON.parse(options.body); const result=operation==='status'?{available:true,selected:fixture.selected}:operation==='documents'?{documents:fixture.documents}:operation==='snapshot'?{base:'a'.repeat(40),head:'b'.repeat(40),stat:fixture.stat,patch:fixture.patch,commits:fixture.commits}:operation==='readDocument'?{text:id==='tasks'?'- [ ] Review the changes\\n- [x] Run the tests\\n':id==='pr'?'# Improve workspace review\\n\\nDescribe the changes and testing.\\n':'# Review notes\\n\\nA published Markdown document.\\n',hash:'fixture',version:'fixture'}:operation==='describe'?{status:'conflict',reason:'changed on disk',current:[{description:'External update'}]}:{}; return {ok:true,json:async()=>({result})};};`;
+    const bootstrap = `const fixture=${JSON.stringify(data).replaceAll('<', '\\u003c')}; globalThis.hubConfig={url:${JSON.stringify(portable ? '.' : '')},capability:'fixture',resourceKey:'fixture',workspace:'/example/workspace'}; globalThis.fetch=async (_url,options)=>{const {operation,id}=JSON.parse(options.body); const result=operation==='status'?{available:true,selected:fixture.selected}:operation==='documents'?{documents:fixture.documents}:operation==='snapshot'?{base:'a'.repeat(40),head:'b'.repeat(40),stat:fixture.stat,patch:fixture.patch,commits:fixture.commits}:operation==='readDocument'?{text:id==='tasks'?'- [ ] Review the changes\\n- [x] Run the tests\\n':'# Review notes\\n\\nA published Markdown document.\\n',hash:'fixture',version:'fixture'}:operation==='describe'?{status:'conflict',reason:'changed on disk',current:[{description:'External update'}]}:{}; return {ok:true,json:async()=>({result})};};`;
     const safe = value => value.replaceAll('</script', '<\\/script');
     if (portable) {
       const resource = path.join(path.dirname(file), 'resources/fixture/html');

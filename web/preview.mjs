@@ -1,5 +1,4 @@
 import { decodeSave, saveTag } from '../src/save-message.mjs';
-import { decodeAction, actionTag } from '../src/action-message.mjs';
 
 // This bundle is included only in generated preview pages.
 let data, initial, listener, queued = [], sequence = 0;
@@ -22,12 +21,11 @@ const adapter = {
   sendQueuedPrompts() {
     let message = 'Simulated comments sent; no action was run.';
     for (const item of queued) {
-      if (item.meta.tag !== saveTag && item.meta.tag !== actionTag) continue;
-      const action = item.meta.tag === actionTag;
-      const save = action ? decodeAction(item.prompt).save : decodeSave(item.prompt);
+      if (item.meta.tag !== saveTag) continue;
+      const save = decodeSave(item.prompt);
       if (!data || save.baseHash !== data.hash) { receipt('Simulated save conflict; the fixture changed.'); notify(); return; }
       data = { ...data, text: save.text, hash: hash() };
-      message = action ? 'Simulated Create PR acknowledged; no PR was created.' : 'Simulated save complete; no file was saved.';
+      message = 'Simulated save complete; no file was saved.';
     }
     queued = []; renderQueue(); receipt(message); if (data) notify();
   },
@@ -56,7 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
   select.onchange = () => { const url = new URL(location.href); url.searchParams.set('theme', select.value); location.href = url; };
   bar.querySelector('a').href += `?theme=${theme}`;
   bar.querySelector('#preview-reset').onclick = () => { if (confirm('Reset this demo and discard edits?')) location.reload(); };
-  const external = bar.querySelector('#preview-external'); external.hidden = !/^(task|pr)-/.test(location.pathname.split('/').at(-3));
+  const external = bar.querySelector('#preview-external'); external.hidden = !/^task-/.test(location.pathname.split('/').at(-3));
   external.onclick = () => { if (!data) return; data = { ...data, text: `${data.text}\nExternal fixture edit.\n`, hash: hash() }; notify(); receipt('Simulated external edit applied.'); };
   bar.querySelector('#preview-send').onclick = () => adapter.sendQueuedPrompts();
   const variant = location.pathname.split('/').at(-3);

@@ -14,7 +14,7 @@ ignored `preview/` directory, or `just preview /path/to/empty-directory` to
 choose an empty output directory. Serve that directory with a static HTTP server;
 `file://` is not supported. The index and manifest record the actual working
 revision and build time, not a published main revision. `SOURCE_DATE_EPOCH` sets
-the timestamp for reproducible tests. Saves, comments and Create PR are simulated
+the timestamp for reproducible tests. Saves and comments are simulated
 in disposable page memory; reload or navigation discards changes. See the
 [preview guide](docs/interactive-preview.md) for controls and hosting limits.
 Nothing is published. Do not overlap `just preview` with other commands that
@@ -106,7 +106,7 @@ repository replacement detection, state-directory aliases, recorded missing-work
 lookup, and capability-protected loopback requests. `test/hub-opening.test.mjs`
 checks that opening refuses an incompatible server. The other
 `test/hub-*.test.mjs` suites cover runtime lifecycle, documents and metadata,
-jj snapshots and edits, commands, PR launch, browser UI, refresh, and feedback.
+jj snapshots and edits, commands, browser UI, refresh, and feedback.
 The screenshot matrix below includes simulated hub states; inspect a live hub
 separately when reviewing its behavior. A disposable review-prep check should
 publish a synthetic durable document with metadata to the
@@ -133,8 +133,8 @@ It creates a scratch jj repository and isolated terminals
 - editing and saving a published Markdown document writes the expected bytes,
 - the owner stops and removes its runtime record.
 
-Hub integration tests separately cover stale saves and the PR launch checkpoint
-with a mocked herdr app. They do not exercise the removed relay or retarget workflow.
+Hub integration tests separately cover stale saves. They do not exercise the
+removed relay or retarget workflow.
 
 It ends its pages and removes only its own workers, logs, terminals, and temporary
 files. It never sends to the terminal you run it from. Don't point tests at
@@ -154,7 +154,7 @@ real Lavish sessions on a private Lavish server (temporary state, config, and
 data directories, its own port, no workers). It replaces the gitignored
 `shots/` directory with:
 
-- eight wide (1440×900), dark primary viewport PNGs covering static and real-Lavish hub views,
+- wide (1440×900), dark primary viewport PNGs covering selected static and real-Lavish hub views,
 - full-page and scrolled-pane captures for selected pages that scroll,
 - `preview/`, the generated interactive static artifact used for static checks,
 - `report.json` (schema version 2) with static and integration check records, timings, and cleanup result; unlike version 1, records distinguish their source and diagnostic-only cases need not have a PNG,
@@ -163,7 +163,7 @@ data directories, its own port, no workers). It replaces the gitignored
 Fixtures use a scratch jj diff with additions, deletions, renames and long lines.
 The simulated hub fixtures are
 `hub-empty`, `hub-stack`, `hub-dirty`, `hub-conflict`, `hub-disconnected`,
-`hub-changes`, `hub-tasks`, `hub-pr`, `hub-markdown`, and `hub-html`. They use
+`hub-changes`, `hub-tasks`, `hub-markdown`, and `hub-html`. They use
 the hub UI and deterministic action responses, not a live workspace owner.
 
 Every fixture is checked at both viewport sizes and themes, separately for the
@@ -213,7 +213,7 @@ tests and one opt-in registry skip. All original tests remain, with added
 pipeline and process-audit regression tests. The earlier baseline retained all 60 viewport
 cases and additional full-page/scroll captures, real Lavish diagnostics, accessibility,
 and geometry checks. The e2e suite still exercises real `hc`, browser save/watch,
-moved-session delivery, and Create PR's persisted launch checkpoint. The main
+and moved-session delivery. The main
 gains come from overlapping independent real browser/subprocess work and taking
 one process snapshot instead of launching `ps` once per host process. Build
 and dependency tools are unchanged because their measured cost did not justify

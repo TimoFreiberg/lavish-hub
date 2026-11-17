@@ -1,8 +1,8 @@
 import { variantId } from './fixtures.mjs';
 
 export const selectedCaptures = {
-  static: ['stack', 'changes', 'tasks', 'pr', 'markdown', 'html', 'conflict'].map(name => `hub-${name}`),
-  integration: ['empty', 'stack', 'dirty', 'conflict', 'disconnected', 'changes', 'tasks', 'pr', 'markdown', 'html'].map(name => `hub-${name}`),
+  static: ['stack', 'changes', 'tasks', 'markdown', 'html', 'conflict'].map(name => `hub-${name}`),
+  integration: ['empty', 'stack', 'dirty', 'conflict', 'disconnected', 'changes', 'tasks', 'markdown', 'html'].map(name => `hub-${name}`),
 };
 
 export function isSelected(source, variant, viewport, colorScheme) {

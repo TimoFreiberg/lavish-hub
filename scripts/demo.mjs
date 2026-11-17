@@ -163,8 +163,6 @@ export async function generateDemo(dir) {
   const base = jj('log', '--no-graph', '-r', 'main', '-T', 'commit_id');
   const head = jj('log', '--no-graph', '-r', '@', '-T', 'commit_id');
   await writeDocs(path.join(dir, 'docs'), { base, head });
-  await mkdir(path.join(dir, 'config', 'lavish-kit'), { recursive: true });
-  await writeFile(path.join(dir, 'config', 'lavish-kit', 'config.json'), JSON.stringify({ createPr: ['sh', '-c', "echo 'Demo: no PR created' \"$@\"", 'demo'] }, null, 2) + '\n');
   return { repo, docs: path.join(dir, 'docs'), base, head };
 }
 
@@ -177,27 +175,6 @@ async function writeDocs(docs, { base, head }) {
     if (i % 8 === 0) tasks.push('', `Notes after task ${i}: not a task line.`, '');
   }
   await writeFile(path.join(docs, 'tasks.md'), tasks.join('\n') + '\n');
-  await writeFile(path.join(docs, 'pr.md'), `# Load configuration from one place
-
-## Summary
-
-Moves configuration loading into one module and adds a retry helper.
-
-## Changes
-
-| Area | Change | Risk |
-| --- | --- | --- |
-| Config | Renamed loader, cached reads | Low |
-| Helpers | Moved clamp | None |
-| Retry | New helper | Medium |
-
-\`\`\`ts
-const config = load('config.json');
-\`\`\`
-
-## Checklist
-
-${lines(12, i => `- Item ${i}: ${word(i)} verified`)}`);
   await writeFile(path.join(docs, 'notes.md'), `---
 title: Review notes
 reviewer: demo
@@ -324,7 +301,6 @@ async function main() {
   }
   try {
     hub('tasks', '--file', path.join(docs, 'tasks.md'));
-    hub('pr', '--file', path.join(docs, 'pr.md'));
     hub('publish', path.join(docs, 'notes.md'), '--id', 'notes', '--title', 'Review notes', '--metadata-file', path.join(docs, 'scope.json'));
     hub('publish', path.join(docs, 'short.md'), '--id', 'short', '--title', 'A much longer document title that should wrap or truncate in the navigation');
     hub('publish', path.join(docs, 'review.html'), '--id', 'review', '--title', 'Review HTML');

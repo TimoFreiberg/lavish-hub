@@ -2,10 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { saveDocument, textHash } from './save.mjs';
-import { parsePR } from './pr-format.mjs';
 
 const maxMetadata = 16 * 1024;
-const builtins = new Set(['commits', 'changes', 'tasks', 'pr']);
+const builtins = new Set(['commits', 'changes', 'tasks']);
 
 export function validateMetadata(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Metadata must be a JSON object');
@@ -43,11 +42,9 @@ export async function createHubDocuments(directory, { guardSource = async () => 
   let state;
   try { state = JSON.parse(await readFile(stateFile, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; state = { documents: {}, attachments: {} }; }
-  for (const kind of ['tasks', 'pr']) {
-    const file = path.join(directory, `${kind}.md`);
-    try { await writeFile(file, '', { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
-    state.attachments[kind] ||= { source: file, version: randomUUID() };
-  }
+  const file = path.join(directory, 'tasks.md');
+  try { await writeFile(file, '', { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  state.attachments = { tasks: state.attachments.tasks || { source: file, version: randomUUID() } };
   let serial = Promise.resolve();
   const locked = fn => { const result = serial.then(fn); serial = result.catch(() => {}); return result; };
   async function persist(next) {
@@ -80,26 +77,12 @@ export async function createHubDocuments(directory, { guardSource = async () => 
       return document;
     }),
     attach: body => locked(async () => {
-      if (!['tasks', 'pr'].includes(body.kind)) throw new Error('Invalid attachment');
-      if (!body.file && (body.kind !== 'pr' || body.rev === undefined)) throw new Error('An attachment file or PR revision is required');
-      let attachment = state.attachments[body.kind];
-      if (body.file) {
-        const file = await source(body.file, ['.md', '.markdown']);
-        if (body.kind === 'pr') parsePR(await readFile(file, 'utf8'));
-        attachment = { source: file, version: randomUUID() };
-      }
-      if (body.kind === 'pr' && body.rev !== undefined) attachment = { ...attachment, rev: body.rev };
-      else if (body.kind === 'pr') attachment = { ...attachment, ...(state.attachments.pr.rev ? { rev: state.attachments.pr.rev } : {}) };
-      await persist({ ...state, attachments: { ...state.attachments, [body.kind]: attachment } });
+      if (body.kind !== 'tasks') throw new Error('Invalid attachment');
+      if (!body.file) throw new Error('An attachment file is required');
+      const file = await source(body.file, ['.md', '.markdown']);
+      const attachment = { source: file, version: randomUUID() };
+      await persist({ ...state, attachments: { ...state.attachments, tasks: attachment } });
       return attachment;
-    }),
-    savePrForLaunch: body => locked(async () => {
-      const target = lookup('pr');
-      if (!target || body.version !== target.version) throw new Error('Document target changed; reload before launching');
-      parsePR(body.text);
-      const saved = await saveDocument({ baseHash: body.baseHash, text: body.text }, { sourceFile: target.source });
-      if (saved.reply !== 'Saved') throw new Error(`${saved.reply} PR command was not launched.`);
-      return { source: target.source, rev: target.rev || '@-', savedHash: textHash(body.text) };
     }),
     read: body => locked(async () => {
       const target = lookup(body.id);
@@ -112,7 +95,6 @@ export async function createHubDocuments(directory, { guardSource = async () => 
       const target = lookup(body.id);
       if (!target || typeof body.version !== 'string' || body.version !== target.version) throw new Error('Document target changed; reload before saving');
       if (path.extname(target.source).toLowerCase() === '.html') throw new Error('HTML source editing is not supported');
-      if (body.id === 'pr') parsePR(body.text);
       return saveDocument({ baseHash: body.baseHash, text: body.text }, { sourceFile: target.source });
     }),
   };

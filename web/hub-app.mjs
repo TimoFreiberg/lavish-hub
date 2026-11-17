@@ -7,7 +7,7 @@ let diffView;
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
 let refreshTimer, rendered = false, refreshRequested = false, snapshotRequest = 0, snapshotApplied = 0;
-const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks', pr: 'PR draft' };
+const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
 const button = (text, action) => { const node = el('button', text, { type: 'button' }); node.addEventListener('click', action); return node; };
 async function action(operation, body = {}) {
@@ -196,9 +196,8 @@ async function renderView() {
     catch (error) { if (selected === id) view.append(notice(error.message)); return; }
   }
   if (selected !== id) return;
-  if (id === 'pr') view.append(el('p', 'Use # title followed by the body. Launch saves this draft before opening an interactive PR command.'));
   const info = notice(state.message || 'Ready');
-  const area = editor(id === 'pr' ? 'PR Markdown' : id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? 'Ready' : 'Unsaved changes'; });
+  const area = editor(id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? 'Ready' : 'Unsaved changes'; });
   if (id === 'tasks') {
     const resize = () => { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; };
     area.addEventListener('input', resize);
@@ -245,19 +244,6 @@ async function renderView() {
       view.append(edit, rendered, area, preview, save); toggle();
     }
   } else view.append(area, save);
-  if (id === 'pr') {
-    const launch = button('Launch PR command', async () => {
-      const submitted = state.text; state.saving = true; launch.disabled = true; save.disabled = true; info.textContent = 'Saving and preparing launch…';
-      try {
-        const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
-        const result = await action('launchPr', { id: requestId, version: state.version, baseHash: state.hash, text: submitted });
-        if (result.savedHash) { state.hash = result.savedHash; state.original = submitted; }
-        state.message = [result.message, result.revision && `Submitted revision: ${result.revision}`, result.warning, result.command && result.status !== 'launched' && result.command].filter(Boolean).join('\n');
-      } catch (error) { state.message = `${error.message} Launch outcome may be unknown; check the terminal before retrying.`; }
-      state.saving = false; launch.disabled = false; save.disabled = false; info.textContent = state.message;
-    });
-    view.append(launch);
-  }
   view.append(info);
 }
 app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><nav id="navigation" aria-label="Workspace views"></nav><div><main id="view"></main><div id="frames"></div></div></div>';
