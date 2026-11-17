@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, open, readFile, readdir, readlink, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
@@ -18,6 +18,33 @@ try {
   assert.equal(extract.status, 0, extract.stderr);
   const root = path.join(temp, 'package'), cli = path.join(root, 'bin/lavish-kit');
   for (const file of ['vendor/lavish/dist/cli.mjs', 'vendor/lavish/dist/server.mjs', 'vendor/lavish/dist/design/daisyui.css', 'vendor/lavish/dist/whiteboard/whiteboard.js', 'vendor/lavish/dist/whiteboard/fonts/Excalifont', 'node_modules/express/package.json', 'dist/hub-markdown.js']) await readFile(path.join(root, file)).catch(async error => { if (error.code !== 'EISDIR') throw error; });
+  const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  assert.match(pkg.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
+  assert.deepEqual(Object.keys(pkg.bin), ['lavish-kit']);
+  assert.ok(!pkg.scripts?.install && !pkg.scripts?.postinstall && !pkg.scripts?.prepare);
+  const dependencies = spawnSync('npm', ['ls', '--omit=dev', '--all'], { cwd: root, encoding: 'utf8' });
+  assert.equal(dependencies.status, 0, dependencies.stdout + dependencies.stderr);
+  async function inspect(dir) {
+    for (const entry of await readdir(dir)) {
+      const file = path.join(dir, entry), info = await lstat(file);
+      if (info.isSymbolicLink()) {
+        const target = await readlink(file);
+        assert.ok(!path.isAbsolute(target), `absolute symlink: ${file}`);
+        const resolved = await realpath(file);
+        assert.ok(resolved.startsWith(`${root}${path.sep}`), `external symlink: ${file}`);
+      } else if (info.isDirectory()) await inspect(file);
+      else if (info.isFile()) {
+        assert.doesNotMatch(file, /\.node$/i, `native addon: ${file}`);
+        const handle = await open(file, 'r');
+        try {
+          const magic = Buffer.alloc(4); await handle.read(magic, 0, 4, 0);
+          const signature = magic.toString('hex');
+          assert.ok(!['7f454c46', 'feedface', 'feedfacf', 'cefaedfe', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'].includes(signature), `native binary: ${file}`);
+        } finally { await handle.close(); }
+      }
+    }
+  }
+  await inspect(root);
   const provenance = JSON.parse(await readFile(path.join(root, 'provenance.json'), 'utf8'));
   assert.match(provenance.source, /^[0-9a-f]{40,64}$/);
   assert.equal(provenance.lavishVersion, '0.1.97');

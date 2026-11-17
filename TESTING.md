@@ -68,9 +68,7 @@ isolated groups. Each group runs files sequentially with `node --test
 subprocess/browser behavior. Each file has a ten-minute deadline. A timeout fails
 the file and stops its process group and marked descendants before the group's
 usual session and process audits. Cancellation also stops the active file and
-marked descendants. Set
-`LAVISH_KIT_REAL_NPM=1` to add
-a first-run test against the real npm registry.
+marked descendants.
 
 It includes a small real-Lavish self-test of the screenshot checks: they must
 catch overflow, clipping, an overlapped button, a zero-size or off-screen
@@ -81,8 +79,8 @@ The runner enumerates `*.test.mjs` files explicitly (passing the `test/`
 directory to Node is not portable across supported Node versions). It disables
 Lavish telemetry with `LAVISH_AXI_TELEMETRY=0` for tests and screenshots.
 `test/lavish-http.test.mjs` also checks the pinned real server without needing
-Chromium. Fake-executable suites explicitly select CLI transport; real server
-tests use the default HTTP transport.
+Chromium. `test/preview-browser.test.mjs` exercises diff navigation, worker
+fallback, and row virtualization in the hub preview.
 
 To run a single file: `node --test --test-concurrency=1 test/hub-cli-surface.test.mjs`.
 `test/hub-foundation.test.mjs` exercises canonical jj workspace identity,

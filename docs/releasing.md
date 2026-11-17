@@ -11,7 +11,10 @@ directory and writes `lavish-kit.tgz`, `SHA256SUMS`, and
 `release-metadata.json`. Set `LAVISH_KIT_SOURCE_COMMIT` to the full source
 commit when building from a Git checkout without jj. Test the archive with
 `node test/package-smoke.mjs OUTPUT_DIRECTORY/lavish-kit.tgz`. The smoke test
-requires jj. It is not a substitute for the full local checks.
+requires jj. It checks the production dependency tree, rejects external links and
+native binaries, and starts the extracted package with read-only files and an
+empty home. It does not replace the full local checks or the Linux and macOS
+smoke jobs.
 
 ## Release checklist
 
