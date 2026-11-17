@@ -26,6 +26,7 @@ const until = async fn => {
 };
 try {
   await mkdir(repo); await mkdir(state); await run('jj', ['git', 'init', repo]);
+  await writeFile(path.join(repo, 'worker-check.js'), "const workerCheck = 'rendered change';\n");
   const socket = net.createServer(); await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   port = socket.address().port; await new Promise(resolve => socket.close(resolve)); env.LAVISH_AXI_PORT = String(port);
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
@@ -39,7 +40,18 @@ try {
   const screen = await until(async () => { const text = await run('hc', ['read', result.address]); return text.match(/ready: (https?:\/\/\S+)/) ? text : null; });
   const url = screen.match(/ready: (https?:\/\/\S+)/)[1];
   browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
-  const page = await browser.newPage(); await page.goto(url);
+  const page = await browser.newPage();
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    window.workerResponses = [];
+    window.Worker = class extends NativeWorker {
+      constructor(...args) {
+        super(...args);
+        this.addEventListener('message', event => window.workerResponses.push({ type: event.data.type, requestType: event.data.requestType }));
+      }
+    };
+  });
+  await page.goto(url);
   const heading = page.frameLocator('#artifact').getByRole('heading', { name: 'Published hub review' });
   await heading.waitFor({ timeout: 20000 });
   const show = page.getByRole('button', { name: 'Show anyway' }); if (await show.isVisible()) await show.click();
@@ -66,15 +78,28 @@ try {
   await run('/bin/sh', ['-c', command], { env: { ...env, PATH: `${path.dirname(cli)}${path.delimiter}${env.PATH}` } });
   await page.getByText('Hub hc reply', { exact: false }).first().waitFor({ timeout: 20000 });
   await page.frameLocator('#artifact').getByRole('link', { name: 'Changes', exact: true }).click();
-  await page.frameLocator('#artifact').locator('.hub-diff .sidebar').getByRole('heading', { name: /Files \(/ }).waitFor({ timeout: 30000 });
+  const hub = page.frameLocator('#artifact');
+  await hub.locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
+  await hub.locator('.hub-diff [data-file="worker-check.js"]').waitFor({ timeout: 30000 });
+  await hub.locator('.hub-diff [data-content] [data-line]').filter({ hasText: 'rendered change' }).waitFor({ timeout: 30000 });
+  const hubFrame = page.frameLocator('#artifact').owner();
+  const frame = await (await hubFrame.elementHandle()).contentFrame();
+  await frame.waitForFunction(() => window.workerResponses.some(response => response.type === 'success' && response.requestType === 'diff'), null, { timeout: 30000 });
   const hubHtml = await readFile(record.page, 'utf8');
-  assert.ok(hubHtml.includes('globalThis.hubConfig=') && hubHtml.includes('hubMarkdownRenderer'));
+  assert.ok(hubHtml.includes('globalThis.hubConfig='));
   const exported = await buildSelfContainedHtml(hubHtml, { htmlPath: record.page });
   const exportPath = path.join(dir, 'hub-export.html'); await writeFile(exportPath, exported.html);
   const offline = await browser.newContext({ offline: true });
   const offlinePage = await offline.newPage(); await offlinePage.goto(pathToFileURL(exportPath).href);
   await offlinePage.getByText('Workspace hub', { exact: true }).waitFor();
   assert.equal(await offlinePage.evaluate(() => typeof globalThis.hubMarkdownRenderer), 'function');
+  const rendered = await offlinePage.evaluate(() => {
+    const body = document.createElement('textarea'), preview = document.createElement('div');
+    body.value = '# Offline renderer check\n\nA **bold** result.';
+    globalThis.hubMarkdownRenderer(body, preview)();
+    return { heading: preview.querySelector('h1')?.textContent, bold: preview.querySelector('strong')?.textContent };
+  });
+  assert.deepEqual(rendered, { heading: 'Offline renderer check #', bold: 'bold' });
   await offline.close();
   const markdown = path.join(dir, 'notes.md');
   await writeFile(markdown, '# Original\n');
