@@ -25,7 +25,11 @@ export async function runSupervised(args, { env, timeout, signal, grace = 2000, 
 
   const failures = [];
   const send = (pid, sig) => {
-    try { kill(pid, sig); } catch (error) { if (error.code !== 'ESRCH') failures.push(error); }
+    try { kill(pid, sig); } catch (error) {
+      // macOS reports EPERM when every member of our own group has exited but
+      // is not yet reaped; the audit and exit check still catch real survivors.
+      if (error.code !== 'ESRCH' && !(pid < 0 && error.code === 'EPERM')) failures.push(error);
+    }
   };
   // Capture marked detached children before stopping their parent; scan again after
   // the grace period for children created during shutdown.
