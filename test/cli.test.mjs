@@ -14,7 +14,7 @@ import { ensureDeps } from '../src/deps.mjs';
 const cli = fileURLToPath(new URL('../bin/lavish-kit', import.meta.url));
 const shared = await mkdtemp(path.join(os.tmpdir(), 'lavish-cli-cache-'));
 const setupBin = path.join(shared, 'bin'); await mkdir(setupBin);
-const npm = path.join(setupBin, 'npm'); await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o755);
+const npm = path.join(setupBin, 'npm'); await writeFile(npm, '#!/bin/sh\nln -s "$FIXTURE" node_modules\n'); await chmod(npm, 0o755);
 const depsModule = fileURLToPath(new URL('../src/deps.mjs', import.meta.url));
 const fixture = fileURLToPath(new URL('../node_modules', import.meta.url));
 const init = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(depsModule)}).then(m=>m.ensureDeps())`], { env: { ...process.env, XDG_DATA_HOME: shared, PATH: `${setupBin}:/usr/bin:/bin`, FIXTURE: fixture }, encoding: 'utf8' });
@@ -91,7 +91,7 @@ test('a custom --out reopen waits for an old tick already rendering and publishe
   await recordWatch(x.file, { kind: 'markdown', source: old });
   const started = path.join(x.dir, 'render-started'), gate = path.join(x.dir, 'render-release');
   const wrapper = path.join(x.dir, 'markdown.mjs'), attempt = path.join(x.dir, 'publication-attempt'), preload = path.join(x.dir, 'preload.mjs');
-  const deps = await ensureDeps();
+  const deps = await ensureDeps({ cache: path.join(shared, 'lavish-kit') });
   await writeFile(wrapper, `import MarkdownIt from ${JSON.stringify(deps.resolve('markdown-it'))};import {access,writeFile} from 'node:fs/promises';await writeFile(${JSON.stringify(started)},'started');while(true){try{await access(${JSON.stringify(gate)});break;}catch{await new Promise(resolve=>setTimeout(resolve,20));}}export default MarkdownIt;`);
   await writeFile(preload, `import fs from 'node:fs/promises';import {syncBuiltinESMExports} from 'node:module';const mkdir=fs.mkdir;fs.mkdir=async(file,...args)=>{if(String(file).endsWith('.publication.lock'))await fs.writeFile(${JSON.stringify(attempt)},String(file));return mkdir(file,...args);};syncBuiltinESMExports();`);
   const controller = new AbortController();
@@ -99,7 +99,14 @@ test('a custom --out reopen waits for an old tick already rendering and publishe
     deps: { ...deps, resolve: name => name === 'markdown-it' ? wrapper : deps.resolve(name) }, delivery: () => true,
     signal: controller.signal, publish: fn => withPublication(x.file, fn), sleep: async () => controller.abort(),
   });
-  let command;
+  let command, stopping;
+  const stop = () => stopping ??= (async () => {
+    await writeFile(gate, 'release'); controller.abort();
+    if (command) command.child.kill();
+    await loop;
+    if (command) await command.done;
+  })();
+  x.cleanups.push(stop);
   try {
     await until(() => exists(started));
     command = launch(x, [next, '--out', x.file], {}, ['--import', preload]);
@@ -111,7 +118,7 @@ test('a custom --out reopen waits for an old tick already rendering and publishe
     assert.match(await readFile(x.file, 'utf8'), /<title>New source<\/title>/);
     assert.equal(locked, `${x.file}.publication.lock`);
     assert.equal(JSON.parse(await readFile(relayPaths(x.file).watch)).watch.source, await (await import('node:fs/promises')).realpath(next));
-  } finally { await writeFile(gate, 'release'); controller.abort(); await loop; if (command) { command.child.kill(); await command.done; } }
+  } finally { await stop(); }
 });
 
 test('publication stays unlocked during target state wait and external opening commands', { timeout: 20000 }, async t => {

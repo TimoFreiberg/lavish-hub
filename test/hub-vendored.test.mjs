@@ -14,7 +14,7 @@ import { chromium } from 'playwright-core';
 const run = promisify(execFile);
 async function warmDeps(dir, env) {
   const npm = path.join(dir, 'npm');
-  await writeFile(npm, '#!/bin/sh\ncp -R "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
+  await writeFile(npm, '#!/bin/sh\nln -s "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
   const deps = new URL('../src/deps.mjs', import.meta.url).href;
   // Dependency installation and bundling are not part of hub startup checks.
   await run(process.execPath, ['--input-type=module', '-e', `import { ensureDeps } from ${JSON.stringify(deps)}; await ensureDeps();`], { env: { ...env, PATH: `${dir}:${env.PATH}`, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
