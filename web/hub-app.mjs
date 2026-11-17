@@ -10,6 +10,12 @@ let refreshTimer, rendered = false, refreshRequested = false, snapshotRequest = 
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
 const button = (text, action) => { const node = el('button', text, { type: 'button' }); node.addEventListener('click', action); return node; };
+function editButton(label, action) {
+  const edit = button('', action); edit.className = 'commit-edit'; edit.setAttribute('aria-label', `Edit ${label}`); edit.title = `Edit ${label}`;
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('d', 'M4 20l4-.8L19 8.2 15.8 5 4.8 16 4 20zm10.6-13.8l3.2 3.2');
+  icon.append(path); edit.append(icon); return edit;
+}
 async function action(operation, body = {}) {
   let response;
   try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
@@ -142,13 +148,7 @@ async function renderView(focusChangeId) {
       const area = editor(label, state.text, value => { state.text = value; });
       area.className = 'commit-editor'; area.rows = 1;
       display.hidden = state.editing; area.hidden = !state.editing;
-      const edit = button('', () => { state.editing = true; renderView(commit.changeId); });
-      edit.className = 'commit-edit'; edit.setAttribute('aria-label', `Edit ${label}`); edit.title = `Edit ${label}`;
-      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true');
-      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M4 20l4-.8L19 8.2 15.8 5 4.8 16 4 20zm10.6-13.8l3.2 3.2');
-      icon.append(path); edit.append(icon);
+      const edit = editButton(label, () => { state.editing = true; renderView(commit.changeId); });
       edit.hidden = state.editing || commit.immutable || commit.divergent;
       const info = el('p', state.message, { role: 'alert', class: 'save-error' });
       const save = button('Save description', async () => {
@@ -218,15 +218,22 @@ async function renderView(focusChangeId) {
     requestAnimationFrame(resize);
   }
   const save = button('Save', async () => {
-    const submitted = state.text; state.saving = true; save.disabled = true; info.textContent = 'Saving…';
+    if (state.saving) return;
+    const submitted = state.text; state.saving = true; save.disabled = true; cancel.disabled = true; info.textContent = 'Saving…';
+    for (const checkbox of view.querySelectorAll('input[data-task-line]')) checkbox.disabled = true;
     try {
       const result = await action('saveDocument', { id, version: state.version, baseHash: state.hash, text: submitted });
       state.message = result.reply;
-      if (result.reply === 'Saved') { const data = await action('readDocument', { id }); if (data.version === state.version && data.text === submitted) { state.hash = data.hash; state.original = submitted; if (doc && state.text === submitted) state.preview = true; } else state.message = 'Saved, but the source changed afterwards. Your draft is retained.'; }
-    } catch (error) { state.message = error.message; }
-    state.saving = false; save.disabled = false; info.textContent = state.message;
-    if (doc && state.preview && selected === id) renderView();
+      if (result.reply === 'Saved') { const data = await action('readDocument', { id }); if (data.version === state.version && data.text === submitted) { state.hash = data.hash; state.original = submitted; if (state.text === submitted) state.editing = false; } else { state.message = 'Saved, but the source changed afterwards. Your draft is retained.'; state.editing = true; } }
+      else state.editing = true;
+    } catch (error) { state.message = error.message; state.editing = true; }
+    state.saving = false;
+    if (selected === id) renderView();
   });
+  save.className = 'commit-save'; save.disabled = !!state.saving;
+  const cancel = button('Cancel', () => { if (state.saving) return; state.text = state.original; state.message = ''; state.editing = false; renderView(); });
+  cancel.className = 'commit-cancel'; cancel.disabled = !!state.saving;
+  area.addEventListener('keydown', event => { if (event.key === 'Escape' && !state.saving) { event.preventDefault(); cancel.click(); } });
   if (doc || id === 'tasks') {
     const preview = el('div', null, { class: 'hub-markdown', 'aria-label': 'Rendered Markdown' });
     const base = doc ? `${config.url}/resources/${config.resourceKey}/${encodeURIComponent(id)}/${encodeURIComponent(doc.source.split('/').pop())}` : location.href;
@@ -235,9 +242,10 @@ async function renderView(focusChangeId) {
       onTaskToggle: id === 'tasks' ? (line, checked) => {
         const lines = state.text.split('\n');
         lines[line] = lines[line].replace(/^((?:\s*>)*\s*(?:(?:[-*+]|\d+[.)])\s+)\[)[ xX](\])/, `$1${checked ? 'x' : ' '}$2`);
-        state.text = lines.join('\n'); area.value = state.text; info.textContent = state.text === state.original ? 'Ready' : 'Unsaved changes';
+        state.text = lines.join('\n'); area.value = state.text; save.click();
       } : undefined,
       afterRender: root => {
+        if (state.saving) for (const checkbox of root.querySelectorAll('input[data-task-line]')) checkbox.disabled = true;
         for (const node of root.querySelectorAll('[src], [href]')) for (const attr of ['src', 'href']) {
           const value = node.getAttribute(attr);
           if (value && !value.startsWith('#') && !value.startsWith('/') && !/^[a-z][a-z\d+.-]*:/i.test(value)) node.setAttribute(attr, new URL(value, base).href);
@@ -245,17 +253,12 @@ async function renderView(focusChangeId) {
       },
       onError: error => { info.textContent = `Syntax highlighting unavailable: ${error.message}`; },
     });
-    if (id === 'tasks') {
-      const edit = button('✎', () => { state.editing = !state.editing; toggle(); });
-      edit.setAttribute('aria-label', 'Edit Tasks Markdown');
-      const toggle = () => { area.hidden = !state.editing; preview.hidden = !!state.editing; edit.setAttribute('aria-pressed', String(!!state.editing)); if (state.editing) { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; area.focus(); } else render(); };
-      view.append(edit, area, preview, save); toggle();
-    } else {
-      const edit = button('Edit', () => { state.preview = false; toggle(); });
-      const rendered = button('Preview', () => { state.preview = true; toggle(); });
-      const toggle = () => { area.hidden = !!state.preview; preview.hidden = !state.preview; edit.setAttribute('aria-pressed', String(!state.preview)); rendered.setAttribute('aria-pressed', String(!!state.preview)); if (state.preview) render(); };
-      view.append(edit, rendered, area, preview, save); toggle();
-    }
+    const edit = editButton(id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', () => { state.editing = true; toggle(); area.focus(); });
+    edit.disabled = !!state.saving;
+    const wrap = el('div', null, { class: 'commit-description-wrap' }); wrap.append(preview, edit);
+    const controls = el('div', null, { class: 'commit-controls' }); controls.append(save, cancel);
+    const toggle = () => { area.hidden = !state.editing; wrap.hidden = !!state.editing; controls.hidden = !state.editing; if (state.editing && id === 'tasks') { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; } if (!state.editing) render(); };
+    view.append(wrap, area, controls); toggle();
   } else view.append(area, save);
   view.append(info);
 }

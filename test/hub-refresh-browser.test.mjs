@@ -240,6 +240,41 @@ test('long rendered descriptions and statistics have resize handles, immutable c
   assert.equal(await page.getByRole('button', { name: 'Edit Description ffffffffffff' }).count(), 0);
 });
 
+test('Markdown controls save task toggles and retain failed drafts', { timeout: 30000 }, async t => {
+  let selected = 'tasks', data = { text: '- [ ] First\n- [ ] Second\n', hash: 'one', version: 'v1' }, fail = false, release;
+  const requests = [];
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }), documents: () => ({ documents: [{ id: 'notes', title: 'Notes', source: 'notes.md' }] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    readDocument: () => ({ ...data }),
+    saveDocument: async body => { requests.push(body); if (fail) throw new Error('Conflict saving task'); await new Promise(resolve => { release = resolve; }); data = { ...data, text: body.text, hash: 'two' }; return { reply: 'Saved' }; },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
+  const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
+  const page = await browser.newPage();
+  await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  const boxes = page.locator('.hub-markdown input[type=checkbox]');
+  await boxes.first().check(); await assertEventually(() => assert.equal(requests.length, 1));
+  assert.equal(await boxes.nth(1).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).count(), 0);
+  release(); await assertEventually(async () => assert.equal(await boxes.nth(1).isEnabled(), true));
+  assert.equal(requests[0].baseHash, 'one'); assert.match(requests[0].text, /\[x\] First/);
+  fail = true; await boxes.nth(1).check();
+  await page.getByText('Conflict saving task').waitFor();
+  const editor = page.getByRole('textbox', { name: 'Tasks Markdown' });
+  assert.match(await editor.inputValue(), /\[x\] Second/); assert.equal(requests[1].baseHash, 'two');
+  await editor.press('Escape'); assert.equal(await boxes.nth(1).isChecked(), false);
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit Document Markdown' }).click();
+  const notes = page.getByRole('textbox', { name: 'Document Markdown' }); await notes.fill('Draft'); await notes.press('Escape');
+  assert.equal(await page.getByRole('button', { name: 'Edit Document Markdown' }).count(), 1);
+  assert.equal(await page.getByRole('button', { name: 'Preview', exact: true }).count(), 0);
+});
+
 async function assertEventually(check) {
   const deadline = Date.now() + 5000;
   while (true) {

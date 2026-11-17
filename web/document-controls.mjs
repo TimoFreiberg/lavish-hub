@@ -34,11 +34,12 @@ export function markdownRenderer(body, preview, { hideFrontMatter = false, onTas
     }
   });
   const render = () => {
-    metadata = ''; const html = md.render(body.value); preview.innerHTML = metadata + html; afterRender(preview);
+    metadata = ''; const html = md.render(body.value); preview.innerHTML = metadata + html;
     if (onTaskToggle) for (const checkbox of preview.querySelectorAll('input[data-task-line]')) {
       checkbox.disabled = false;
       checkbox.addEventListener('change', () => onTaskToggle(Number(checkbox.dataset.taskLine), checkbox.checked));
     }
+    afterRender(preview);
   };
   highlighting ||= shiki({ themes: { light: 'github-light', dark: 'github-dark' }, fallbackLanguage: 'text' });
   highlighting.then(plugin => { md.use(plugin).use(accessibleCodeBlocks); render(); }).catch(onError);

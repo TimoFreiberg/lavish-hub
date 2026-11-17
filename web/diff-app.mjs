@@ -12,8 +12,7 @@ const header = el('header', null, 'page-header'), toolbar = el('div', null, 'too
 // Lavish sees the shadow host, not the clicked diff line. Let CodeView handle
 // this surface even when Lavish's annotation mode is active.
 viewport.setAttribute('data-lavish-action', '');
-const sendStatus = el('div', null, 'notice'); sendStatus.setAttribute('role', 'status');
-const layout = el('div', null, 'layout'); layout.append(sidebar, viewport); app.append(header, toolbar, sendStatus, notice, layout);
+const layout = el('div', null, 'layout'); layout.append(sidebar, viewport); app.append(header, toolbar, notice, layout);
 const gutterObservers = new WeakMap();
 let view, worker, workerUrl, fallingBack = false;
 // CodeView lays items out from itemMetrics without measuring headers, so the
@@ -140,11 +139,7 @@ function renderSidebar() {
   markCurrent();
 }
 function renderToolbar() {
-  toolbar.replaceChildren(button('Send', () => {
-    if (typeof window.lavish?.sendQueuedPrompts !== 'function') { sendStatus.textContent = 'Send unavailable: open this page in Lavish'; return; }
-    sendStatus.textContent = '';
-    try { window.lavish.sendQueuedPrompts(); } catch (error) { sendStatus.textContent = `Could not send feedback: ${error.message}`; }
-  }), button(state.split ? 'Unified' : 'Split', toggleSplit), button('Keyboard shortcuts (?)', () => help.hidden = !help.hidden));
+  toolbar.replaceChildren(button(state.split ? 'Unified' : 'Split', toggleSplit), button('Keyboard shortcuts (?)', () => help.hidden = !help.hidden));
   if (state.storageFailed) toolbar.append(el('span', 'Viewed resets on reload', 'hint'));
 }
 function toggleSplit() { state.split = !state.split; view.setOptions(options()); renderToolbar(); }

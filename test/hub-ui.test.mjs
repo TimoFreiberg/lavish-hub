@@ -28,27 +28,29 @@ test('published Markdown previews relative assets and retains conflicting edits'
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, resourceKey: transport.resourceKey, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
   const area = page.getByRole('textbox', { name: 'Document Markdown' });
-  await page.getByRole('button', { name: 'Preview', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Edit Document Markdown' }).waitFor();
   assert.equal(await area.isVisible(), false);
   await page.getByRole('heading', { name: 'Review', level: 1 }).last().waitFor();
   await page.locator('.hub-markdown img').evaluate(image => image.decode());
   assert.equal(await page.locator('.hub-markdown img').evaluate(image => image.naturalWidth), 12);
-  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit Document Markdown' }).click();
   await area.fill('# Draft\n');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await page.getByText('Conflict: source changed').waitFor();
   assert.equal(await area.inputValue(), '# Draft\n');
-  await page.getByRole('button', { name: 'Preview', exact: true }).click();
-  await page.getByRole('heading', { name: 'Draft' }).waitFor();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('heading', { name: 'Review', level: 1 }).last().waitFor();
 });
 
 test('hub keeps description drafts across navigation and stale saves', { timeout: 30000 }, async t => {
   const commit = { changeId: 'a'.repeat(32), commitId: 'b'.repeat(40), description: 'Original\n', immutable: false, divergent: false };
+  let taskText = '- [ ] Task\n\n> - [ ] Quoted\n';
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
     snapshot: () => ({ base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-old\n+new\n', commits: [commit] }),
     describe: () => ({ status: 'conflict', reason: 'stale', current: [{ description: 'External\n' }] }),
-    readDocument: () => ({ text: '- [ ] Task\n\n> - [ ] Quoted\n', hash: 'hash', version: 'version' }),
+    readDocument: () => ({ text: taskText, hash: taskText, version: 'version' }),
+    saveDocument: ({ text }) => { taskText = text; return { reply: 'Saved' }; },
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
@@ -57,7 +59,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_KIT_LANGUAGES: '[]' } })).outputFiles[0].text;
   const markdown = await markdownBundle();
   const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
-  const page = await browser.newPage();
+  const page = await browser.newPage(); page.setDefaultTimeout(5000);
   await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}; globalThis.queued=[]; globalThis.lavish={queuePrompt:(...args)=>queued.push(args),sendQueuedPrompts:()=>{throw new Error('send failed')}};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
   await page.getByRole('button', { name: /Edit Description/ }).click();
   const description = page.getByRole('textbox', { name: /Description/ });
@@ -83,8 +85,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   assert.match(queued[0][0], /Hub view: Changes/);
   assert.ok(queued[0][0].includes('b'.repeat(40)));
   assert.match(queued[0][0], /1: new/);
-  await page.getByRole('button', { name: 'Send', exact: true }).click();
-  await page.getByText('Could not send feedback: send failed').waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).count(), 0);
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   assert.equal(await description.inputValue(), 'My draft');
   await page.getByRole('button', { name: 'Save description' }).click();
@@ -93,6 +94,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   const tasks = page.getByRole('textbox', { name: 'Tasks Markdown', includeHidden: true });
   await page.locator('.hub-markdown input[type=checkbox]').first().check();
+  await page.locator('.hub-markdown input[type=checkbox]').last().waitFor({ state: 'visible' });
   await page.locator('.hub-markdown input[type=checkbox]').last().check();
   await page.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
   assert.equal(await tasks.inputValue(), '- [x] Task\n\n> - [x] Quoted\n');
@@ -100,9 +102,9 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   assert.equal(await tasks.inputValue(), '- [x] Local draft\n');
+  await tasks.press('Escape');
+  assert.equal(await page.locator('.hub-markdown input[type=checkbox]').count(), 2);
   await page.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
-  await page.locator('.hub-markdown input[type=checkbox]').uncheck();
-  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
-  assert.equal(await tasks.inputValue(), '- [ ] Local draft\n');
+  assert.equal(await tasks.inputValue(), '- [x] Task\n\n> - [x] Quoted\n');
   assert.equal(await page.getByRole('button', { name: 'Add task' }).count(), 0);
 });

@@ -68,10 +68,12 @@ to edit a description; Cancel or Escape discards the edit. Descriptions and
 statistics that exceed their initial height scroll and can be resized vertically.
 A failed save keeps the draft and shows the error beside the Save button.
 
-Tasks display rendered Markdown with interactive checkboxes. Use the edit button
-to change the source; changes are written only when saved. Published Markdown
-also opens rendered, with Edit and Preview controls. Its preview includes unsaved
-edits and resolves relative links and images from the source directory.
+Tasks display rendered Markdown with interactive checkboxes. Toggling a checkbox
+saves it immediately; while saving, the other checkboxes are disabled. If saving
+fails, the source editor opens with the draft and an error. Use the pencil to edit
+the source of Tasks or published Markdown, then Save or discard with Cancel or
+Escape. Published Markdown resolves relative links and images from its source
+directory. Diff comments enter the Lavish sidebar queue; send them from the sidebar.
 Published HTML opens as a sibling page in the same Lavish review, where it can
 be annotated directly. Scripts, styles, and images resolve relative to its source
 file, respecting an authored `<base href>`. Local resources remain restricted to
