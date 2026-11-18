@@ -179,6 +179,33 @@ try {
   });
   assert.deepEqual(rendered, { heading: 'Offline renderer check #', bold: 'bold' });
   await offline.close();
+  const mocked = await browser.newContext();
+  const exportPage = await mocked.newPage();
+  const exportErrors = []; exportPage.on('pageerror', error => exportErrors.push(error.message));
+  const operations = []; let selected = 'commits';
+  await exportPage.route('**/action', async route => {
+    const request = route.request();
+    if (request.method() !== 'POST') { await route.abort(); return; }
+    const { operation, id } = request.postDataJSON(); operations.push({ operation, id });
+    let result;
+    if (operation === 'status') result = { available: true, selected };
+    else if (operation === 'documents') result = { documents: [] };
+    else if (operation === 'snapshot') result = { base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] };
+    else if (operation === 'navigate') { selected = id; result = { selected }; }
+    else if (operation === 'readDocument' && id === 'tasks') result = { text: '# Exported tasks\n\nA **lazy** renderer.', hash: 'one', version: 'one' };
+    else { await route.abort(); return; }
+    await route.fulfill({ json: { result }, headers: { 'access-control-allow-origin': '*' } });
+  });
+  await exportPage.goto(pathToFileURL(exportPath).href);
+  await exportPage.getByText('No commits in this range.').waitFor({ timeout: 10000 });
+  assert.equal(await exportPage.evaluate(() => typeof globalThis.hubMarkdownRenderer), 'undefined');
+  await exportPage.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await exportPage.locator('.hub-markdown h1').filter({ hasText: 'Exported tasks' }).waitFor({ timeout: 10000 });
+  assert.equal(await exportPage.locator('.hub-markdown strong').textContent(), 'lazy');
+  assert.equal(await exportPage.evaluate(() => typeof globalThis.hubMarkdownRenderer), 'function');
+  assert.ok(operations.some(item => item.operation === 'readDocument' && item.id === 'tasks'));
+  assert.deepEqual(exportErrors, []);
+  await mocked.close();
   const markdown = path.join(dir, 'notes.md');
   await writeFile(markdown, '# Original\n');
   await run(process.execPath, [cli, 'hub', 'publish', markdown, '--id', 'notes', '--workspace', repo]);
