@@ -2564,57 +2564,56 @@ export async function serve({
       const stats = await opened.handle.stat();
       const size = stats.size;
       const registration = hubProxy.generatedAssetRegistration(key, assetPath);
-      if ((!req.get("range") || !artifactEncoding(req.get("Accept-Encoding")).identityAllowed) && registration) {
+      let registeredEtag;
+      if (registration) {
         const bytes = await opened.handle.readFile();
         const hash = crypto.createHash("sha256").update(bytes).digest("hex");
         if (
           assetPath === `hub-asset-${hash}.js` &&
           hubProxy.generatedAssetRegistration(key, assetPath) === registration
         ) {
-          res.vary("Accept-Encoding");
-          res.setHeader("cache-control", "public, max-age=0");
           const choice = artifactEncoding(req.get("Accept-Encoding"));
-          if (!choice.encoding) return res.status(406).send("Not acceptable");
-          let encoding = choice.encoding;
-          let representation = bytes;
-          if (encoding !== "identity") {
-            const cacheKey = `${hash}:${encoding}`;
-            try {
-              representation = compressedHubAssets.get(cacheKey) || (await compressArtifact(encoding, bytes));
-              compressedHubAssets.set(cacheKey, representation);
-              if (compressedHubAssets.size > 6) compressedHubAssets.delete(compressedHubAssets.keys().next().value);
-            } catch (error) {
-              if (!choice.identityAllowed) throw error;
-              encoding = "identity";
+          registeredEtag = `W/"${hash}"`;
+          res.vary("Accept-Encoding");
+          if (!req.get("range") || !choice.identityAllowed) {
+            res.setHeader("cache-control", "public, max-age=0");
+            if (!choice.encoding) return res.status(406).send("Not acceptable");
+            let encoding = choice.encoding;
+            let representation = bytes;
+            if (encoding !== "identity") {
+              const cacheKey = `${hash}:${encoding}`;
+              try {
+                representation = compressedHubAssets.get(cacheKey) || (await compressArtifact(encoding, bytes));
+                compressedHubAssets.set(cacheKey, representation);
+                if (compressedHubAssets.size > 6) compressedHubAssets.delete(compressedHubAssets.keys().next().value);
+              } catch (error) {
+                if (!choice.identityAllowed) throw error;
+                encoding = "identity";
+              }
             }
+            if (hubProxy.generatedAssetRegistration(key, assetPath) !== registration)
+              return res.status(404).send("Not found");
+            const etag = registeredEtag;
+            res.type("js");
+            res.setHeader("last-modified", stats.mtime.toUTCString());
+            if (app.enabled("etag")) res.setHeader("etag", etag);
+            const match = req.get("if-match");
+            const unmodified = Date.parse(req.get("if-unmodified-since") || "");
+            if (
+              match
+                ? !res.getHeader("etag") || match !== "*"
+                : Number.isFinite(unmodified) && Date.parse(stats.mtime.toUTCString()) > unmodified
+            ) {
+              throw Object.assign(new Error("Precondition Failed"), { status: 412 });
+            }
+            if (encoding !== "identity") res.setHeader("content-encoding", encoding);
+            if (req.fresh) return res.status(304).end();
+            res.setHeader("content-length", String(representation.length));
+            return res.send(representation);
           }
-          if (hubProxy.generatedAssetRegistration(key, assetPath) !== registration)
-            return res.status(404).send("Not found");
-          const etag = `W/"${hash}"`;
-          res.type("js");
-          res.setHeader("last-modified", stats.mtime.toUTCString());
-          if (app.enabled("etag")) res.setHeader("etag", etag);
-          const match = req.get("if-match");
-          const unmodified = Date.parse(req.get("if-unmodified-since") || "");
-          if (
-            match
-              ? !res.getHeader("etag") ||
-                (match !== "*" &&
-                  !match.split(",").some((value) => {
-                    const tag = value.trim();
-                    return tag === etag || tag === "W/" + etag || "W/" + tag === etag;
-                  }))
-              : Number.isFinite(unmodified) && Date.parse(stats.mtime.toUTCString()) > unmodified
-          ) {
-            throw Object.assign(new Error("Precondition Failed"), { status: 412 });
-          }
-          if (encoding !== "identity") res.setHeader("content-encoding", encoding);
-          if (req.fresh) return res.status(304).end();
-          res.setHeader("content-length", String(representation.length));
-          return res.send(representation);
         }
       }
-      const etag = `W/"${size.toString(16)}-${stats.mtime.getTime().toString(16)}"`;
+      const etag = registeredEtag || `W/"${size.toString(16)}-${stats.mtime.getTime().toString(16)}"`;
       const modified = stats.mtime.toUTCString();
       res.type(path.extname(opened.file) || "application/octet-stream");
       res.setHeader("accept-ranges", "bytes");
@@ -2627,10 +2626,11 @@ export async function serve({
         match
           ? !res.getHeader("etag") ||
             (match !== "*" &&
-              !match.split(",").some((value) => {
-                const tag = value.trim();
-                return tag === etag || tag === "W/" + etag || "W/" + tag === etag;
-              }))
+              (registeredEtag ||
+                !match.split(",").some((value) => {
+                  const tag = value.trim();
+                  return tag === etag || tag === "W/" + etag || "W/" + tag === etag;
+                })))
           : Number.isFinite(unmodified) && Date.parse(modified) > unmodified
       ) {
         throw Object.assign(new Error("Precondition Failed"), { status: 412 });

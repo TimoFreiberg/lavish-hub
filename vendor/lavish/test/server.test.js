@@ -2999,7 +2999,18 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
       (await wire(url, { "accept-encoding": "gzip;q=0, identity;q=1" })).headers["content-encoding"],
       undefined,
     );
-    assert.equal((await wire(url, { "accept-encoding": "gzip", range: "bytes=0-9" })).status, 206);
+    const identity = await wire(url, { "accept-encoding": "identity" });
+    const range = await wire(url, { "accept-encoding": "gzip", range: "bytes=0-9" });
+    assert.equal(range.status, 206);
+    assert.deepEqual(range.body, content.subarray(0, 10));
+    assert.equal(range.headers.etag, identity.headers.etag);
+    assert.equal(range.headers.etag, gzip.headers.etag);
+    assert.equal((await wire(url, { range: "bytes=0-9", "if-none-match": identity.headers.etag })).status, 304);
+    for (const headers of [{}, { range: "bytes=0-9" }]) {
+      assert.equal((await wire(url, { ...headers, "if-match": identity.headers.etag })).status, 412);
+      assert.equal((await wire(url, { ...headers, "if-match": identity.headers.etag.slice(2) })).status, 412);
+      assert.equal((await wire(url, { ...headers, "if-match": "*" })).status, headers.range ? 206 : 200);
+    }
     assert.equal(
       (await wire(`${base}/artifact/${key}/${oldName}`, { "accept-encoding": "gzip" })).headers["content-encoding"],
       undefined,
