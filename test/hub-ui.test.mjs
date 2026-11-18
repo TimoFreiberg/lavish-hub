@@ -8,6 +8,18 @@ import { ensureHubAssets } from '../src/deps.mjs';
 import path from 'node:path';
 import { build } from 'esbuild';
 const markdownBundle = async () => (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
+const penPath = 'M4 20l4-.8L19 8.2 15.8 5 4.8 16 4 20zm10.6-13.8l3.2 3.2';
+async function assertEditButton(button, label) {
+  await button.waitFor();
+  assert.equal(await button.getAttribute('aria-label'), label);
+  assert.equal(await button.getAttribute('title'), label);
+  assert.equal(await button.textContent(), '');
+  assert.equal(await button.locator('svg').getAttribute('aria-hidden'), 'true');
+  assert.equal(await button.locator('svg path').getAttribute('d'), penPath);
+  await button.focus();
+  assert.equal(await button.evaluate(node => document.activeElement === node), true);
+  await button.press('Enter');
+}
 
 test('published Markdown previews relative assets and retains conflicting edits', { timeout: 120000 }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-markdown-'));
@@ -33,7 +45,8 @@ test('published Markdown previews relative assets and retains conflicting edits'
   await page.getByRole('heading', { name: 'Review', level: 1 }).last().waitFor();
   await page.locator('.hub-markdown img').evaluate(image => image.decode());
   assert.equal(await page.locator('.hub-markdown img').evaluate(image => image.naturalWidth), 12);
-  await page.getByRole('button', { name: 'Edit Document Markdown' }).click();
+  await assertEditButton(page.getByRole('button', { name: 'Edit Document Markdown' }), 'Edit Document Markdown');
+  assert.equal(await area.evaluate(node => document.activeElement === node), true);
   await area.fill('# Draft\n');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await page.getByText('Conflict: source changed').waitFor();
@@ -60,10 +73,12 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   const markdown = await markdownBundle();
   const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
   const page = await browser.newPage(); page.setDefaultTimeout(5000);
-  await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}; globalThis.queued=[]; globalThis.lavish={queuePrompt:(...args)=>queued.push(args),sendQueuedPrompts:()=>{throw new Error('send failed')}};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
-  await page.getByRole('button', { name: /Edit Description/ }).click();
+  await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}; globalThis.queued=[]; globalThis.lavish={queuePromptAcknowledged:async (...args)=>{queued.push(args);return {status:'accepted'}},releaseQueueRequest:()=>{},sendQueuedPrompts:()=>{throw new Error('send failed')}};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await assertEditButton(page.getByRole('button', { name: 'Edit Description aaaaaaaaaaaa' }), 'Edit Description aaaaaaaaaaaa');
   const description = page.getByRole('textbox', { name: /Description/ });
-  await description.waitFor(); await description.fill('My draft');
+  await description.waitFor();
+  assert.equal(await description.evaluate(node => document.activeElement === node), true);
+  await description.fill('My draft');
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
   await page.locator('.file-link[data-path="example.txt"]').waitFor();
   const zed = page.locator('.file-header a').first();
@@ -96,7 +111,9 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await page.locator('.hub-markdown input[type=checkbox]').first().check();
   await page.locator('.hub-markdown input[type=checkbox]').last().waitFor({ state: 'visible' });
   await page.locator('.hub-markdown input[type=checkbox]').last().check();
-  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
+  await page.waitForFunction(() => { const boxes = [...document.querySelectorAll('.hub-markdown input[type=checkbox]')]; return boxes.length === 2 && boxes.every(box => box.checked && !box.disabled); });
+  await assertEditButton(page.getByRole('button', { name: 'Edit Tasks Markdown' }), 'Edit Tasks Markdown');
+  assert.equal(await tasks.evaluate(node => document.activeElement === node), true);
   assert.equal(await tasks.inputValue(), '- [x] Task\n\n> - [x] Quoted\n');
   await tasks.fill('- [x] Local draft\n');
   await page.getByRole('button', { name: 'Commits', exact: true }).click();

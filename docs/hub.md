@@ -76,7 +76,10 @@ saves it immediately; while saving, the other checkboxes are disabled. If saving
 fails, the source editor opens with the draft and an error. Use the pencil to edit
 the source of Tasks or published Markdown, then Save or discard with Cancel or
 Escape. Published Markdown resolves relative links and images from its source
-directory. Diff comments enter the Lavish sidebar queue; send them from the sidebar.
+directory. Queued diff comments appear below their selected lines and in the Lavish
+sidebar. Use Edit on a comment to open the sidebar editor, and send comments from
+the sidebar. If the diff changes, comments remain in the queue but no longer appear
+inline until the same diff is displayed again.
 Published HTML opens as a sibling page in the same Lavish review, where it can
 be annotated directly. Scripts, styles, and images resolve relative to its source
 file, respecting an authored `<base href>`. Local resources remain restricted to

@@ -165,7 +165,7 @@ function notice(text) { return el('p', text, { role: 'status', class: 'notice' }
 let renderGeneration = 0;
 async function renderView(focusChangeId) {
   const generation = ++renderGeneration;
-  const view = document.querySelector('#view'); view.replaceChildren(); rendered = true;
+  const view = document.querySelector('#view'); diffView?.hide(); view.replaceChildren(); rendered = true;
   const id = selected;
   if (modeView !== id) {
     if (startsInExplore(id) || startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(!startsInExplore(id));

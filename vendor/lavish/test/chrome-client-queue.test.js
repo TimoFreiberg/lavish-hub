@@ -725,7 +725,8 @@ async function createChromeHarness({
       return event;
     },
     queued() {
-      return JSON.parse(storage.get("lavish-axi:queued:abc") || "[]");
+      const saved = JSON.parse(storage.get("lavish-axi:queued:abc") || "[]");
+      return Array.isArray(saved) ? saved : saved.prompts;
     },
     reloadCount() {
       return reloadCount;
@@ -761,6 +762,10 @@ async function createChromeHarness({
     artifactBeginRequests,
     bindingValidationRequests,
     artifactLoadToken: frameLoadToken,
+    beginLegacyQueue() {
+      frame.dispatch("load");
+      return postedToFrame.filter((message) => message.type === "lavish:setQueueEpoch").at(-1).epoch;
+    },
     mediaQueries,
     setMobile(matches) {
       for (const list of mediaQueries) {
@@ -10934,6 +10939,334 @@ function typeIntoQueuedEdit(chrome, value, index = 0) {
 function queueHeadingNote(chrome, prompt = "Make this heading bigger", selector = "main > h2") {
   chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { prompt, selector, tag: "h2", text: "Pricing" } });
 }
+
+test("retired modern bindings discard receipts while stale ports cannot duplicate accepted work", async () => {
+  const a = protocolWhiteboardBinding("a.html", "a"), b = protocolWhiteboardBinding("b.html", "b");
+  const chrome = await createChromeHarness({ artifactSrc: a.destination, sessionData: { ...defaultSessionData, pageProtocol: 1 }, modernBinding: a });
+  await flushPromises(); await flushPromises();
+  const first = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
+  const request = { ...first, type: "lavish:queuePrompt", request_id: "q-binding", prompt: { prompt: "accepted once" } };
+  chrome.sendModernMessage(request); await flushPromises(); await flushPromises();
+  assert.equal(chrome.queued().length, 1);
+  chrome.sendModernMessage(request); await flushPromises(); await flushPromises();
+  assert.equal(chrome.queued().length, 1);
+  chrome.updateModernBinding(b);
+  chrome.sendFrameMessage({ type: "lavish:ready", page_protocol: 1, document_id: b.documentId });
+  await flushPromises(); await flushPromises(); await flushPromises();
+  const second = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
+  assert.equal(second.page, b.page);
+  const saved = JSON.parse(chrome.storage.get("lavish-axi:queued:abc"));
+  assert.equal(Array.isArray(saved) ? 0 : Object.keys(saved.receipts).length, 0);
+  chrome.sendModernMessage(request, 0); await flushPromises();
+  assert.equal(chrome.queued().length, 1);
+  chrome.sendModernMessage({ ...second, type: "lavish:queuePrompt", request_id: "q-new-binding", prompt: { prompt: "fresh" } });
+  await flushPromises(); await flushPromises();
+  assert.equal(chrome.queued().length, 2);
+});
+
+test("persisted orphan receipts are retired when a new modern document binds", async () => {
+  const a = protocolWhiteboardBinding("a.html", "a");
+  const receipts = {};
+  for (let i = 0; i < 128; i++) receipts[`q-orphan-${i}`] = JSON.stringify(["old.html", "old-document", "old-token", 1, ""]);
+  const storage = new Map([["lavish-axi:queued:abc", JSON.stringify({ version: 1, prompts: [{ prompt: "preserved", prompt_id: "old-prompt" }], receipts })]]);
+  const chrome = await createChromeHarness({ storage, artifactSrc: a.destination, sessionData: { ...defaultSessionData, pageProtocol: 1 }, modernBinding: a });
+  await flushPromises(); await flushPromises();
+  const active = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
+  const saved = JSON.parse(storage.get("lavish-axi:queued:abc"));
+  assert.equal(Array.isArray(saved) ? 0 : Object.keys(saved.receipts).length, 0);
+  assert.equal(chrome.queued()[0].prompt, "preserved");
+  chrome.sendModernMessage({ ...active, type: "lavish:queuePrompt", request_id: "q-after-orphans", prompt: { prompt: "new" } });
+  await flushPromises(); await flushPromises();
+  assert.equal(chrome.queued().length, 2);
+});
+
+test("acknowledged queue requests reject reserved sends and deduplicate retries", async () => {
+  const chrome = await createChromeHarness({ fetchImpl: async () => ({ ok: false }) });
+  const request = { type: "lavish:queuePrompt", queue_epoch: chrome.beginLegacyQueue(), request_id: "q-request-1", prompt: { prompt: "review comment", tag: "code-comment" } };
+  chrome.sendFrameMessage(request);
+  assert.equal(chrome.postedToFrame.at(-1).type, "lavish:queuePromptResult");
+  assert.equal(chrome.postedToFrame.at(-1).ok, true);
+  const id = chrome.queued()[0].prompt_id;
+  chrome.sendFrameMessage(request);
+  assert.equal(chrome.queued().length, 1);
+  assert.equal(chrome.queued()[0].prompt_id, id);
+  chrome.element("sendAndEnd").click();
+  chrome.sendFrameMessage({ ...request, request_id: "q-request-2" });
+  assert.equal(chrome.postedToFrame.at(-1).ok, false);
+  assert.equal(chrome.queued().length, 1);
+  chrome.sendSnapshot("snapshot");
+  await flushPromises();
+  chrome.sendFrameMessage({ ...request, request_id: "q-request-2" });
+  assert.equal(chrome.postedToFrame.at(-1).ok, false);
+  chrome.sendFrameMessage(request);
+  assert.equal(chrome.postedToFrame.at(-1).ok, true);
+  assert.equal(chrome.queued().length, 1);
+});
+
+test("failed queue storage keeps acknowledgement uncertain and retries the same entry atomically", async () => {
+  const storage = new Map();
+  const store = storage.set.bind(storage);
+  const previous = JSON.stringify([{ prompt: "earlier", prompt_id: "earlier-id" }]);
+  store("lavish-axi:queued:abc", previous);
+  let fail = true;
+  storage.set = (key, value) => { if (fail && key === "lavish-axi:queued:abc") throw new Error("quota"); return store(key, value); };
+  const chrome = await createChromeHarness({ storage });
+  const request = { type: "lavish:queuePrompt", queue_epoch: chrome.beginLegacyQueue(), request_id: "q-storage", prompt: { prompt: "not lost" } };
+  chrome.sendFrameMessage(request);
+  assert.equal(chrome.postedToFrame.at(-1).ok, false);
+  assert.equal(chrome.postedToFrame.at(-1).uncertain, true);
+  assert.equal(storage.get("lavish-axi:queued:abc"), previous);
+  assert.equal(storage.has("lavish-axi:queued:abc:requests"), false);
+  assert.match(chrome.element("queuedLog").innerHTML, /not lost/);
+  fail = false;
+  chrome.sendFrameMessage(request);
+  assert.equal(chrome.postedToFrame.at(-1).ok, true);
+  const saved = JSON.parse(storage.get("lavish-axi:queued:abc"));
+  assert.equal(saved.prompts.length, 2);
+  assert.equal(saved.prompts[0].prompt, "earlier");
+  assert.equal(saved.prompts[1].prompt, "not lost");
+  assert.ok(saved.receipts["q-storage"]);
+  const restored = await createChromeHarness({ storage });
+  const restoredEpoch = restored.beginLegacyQueue();
+  restored.sendFrameMessage(request);
+  assert.equal(restored.queued().length, 2);
+  assert.equal(restored.postedToFrame.at(-1).uncertain, true);
+  assert.equal(restored.postedToFrame.at(-1).reason, "binding_changed");
+  assert.equal(Array.isArray(JSON.parse(storage.get("lavish-axi:queued:abc"))), true);
+  restored.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: restoredEpoch, request_id: "q-new-scope", prompt: { prompt: "fresh" } });
+  assert.equal(restored.postedToFrame.at(-1).ok, true);
+  assert.equal(restored.queued().length, 3);
+});
+
+test("acknowledged receipt admission is bounded without evicting retry identities", async () => {
+  const chrome = await createChromeHarness({ fakeClock: true });
+  const epoch = chrome.beginLegacyQueue();
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-huge", prompt: { prompt: "small", target: { extra: "x".repeat(262145) } } });
+  assert.equal(chrome.postedToFrame.at(-1).reason, "too_large");
+  chrome.advanceClock(1000);
+  for (let i = 0; i < 128; i++) chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: `q-limit-${i}`, prompt: { prompt: `note ${i}` } });
+  assert.equal(chrome.queued().length, 128);
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-over-limit", prompt: { prompt: "not admitted" } });
+  assert.equal(chrome.postedToFrame.at(-1).reason, "capacity");
+  chrome.advanceClock(1000);
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-limit-0", prompt: { prompt: "duplicate" } });
+  assert.equal(chrome.postedToFrame.at(-1).ok, true);
+  assert.equal(chrome.queued().length, 128);
+  chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: "q-limit-0" });
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-new", prompt: { prompt: "new note" } });
+  assert.equal(chrome.postedToFrame.at(-1).ok, true);
+  assert.equal(chrome.queued().length, 129);
+});
+
+test("legacy frame reload retires receipts without accepting stale retries", async () => {
+  const chrome = await createChromeHarness({ fakeClock: true });
+  const oldEpoch = chrome.beginLegacyQueue();
+  for (let i = 0; i < 128; i++) chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: oldEpoch, request_id: `q-old-${i}`, prompt: { prompt: `note ${i}` } });
+  assert.equal(chrome.queued().length, 128);
+  const newEpoch = chrome.beginLegacyQueue();
+  assert.notEqual(newEpoch, oldEpoch);
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: oldEpoch, request_id: "q-old-0", prompt: { prompt: "duplicate" } });
+  assert.equal(chrome.postedToFrame.at(-1).reason, "binding_changed");
+  assert.equal(chrome.postedToFrame.at(-1).queue_epoch, oldEpoch);
+  chrome.advanceClock(1000);
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: newEpoch, request_id: "q-fresh", prompt: { prompt: "fresh" } });
+  assert.equal(chrome.postedToFrame.at(-1).ok, true);
+  assert.equal(chrome.postedToFrame.at(-1).queue_epoch, newEpoch);
+  assert.equal(chrome.queued().length, 129);
+});
+
+test("released acknowledged comments remain admissible beyond 256 requests", async () => {
+  const chrome = await createChromeHarness({ fakeClock: true });
+  const epoch = chrome.beginLegacyQueue();
+  for (let i = 0; i < 300; i++) {
+    const id = `q-replenish-${i}`;
+    chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: id, prompt: { prompt: `comment ${i}` } });
+    assert.equal(chrome.postedToFrame.at(-1).ok, true, `request ${i}`);
+    chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: id });
+    chrome.advanceClock(1000);
+  }
+  assert.equal(chrome.queued().length, 300);
+});
+
+test("request bursts throttle retries without losing their live identity", async () => {
+  const chrome = await createChromeHarness({ fakeClock: true });
+  const epoch = chrome.beginLegacyQueue();
+  for (let i = 0; i < 128; i++) {
+    const id = `q-burst-${i}`;
+    chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: id, prompt: { prompt: `note ${i}` } });
+    assert.equal(chrome.postedToFrame.at(-1).ok, true);
+    if (i) chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: id });
+  }
+  const retry = { type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-burst-0", prompt: { prompt: "duplicate" } };
+  chrome.sendFrameMessage(retry);
+  assert.equal(chrome.postedToFrame.at(-1).reason, "rate_limited");
+  assert.equal(chrome.postedToFrame.at(-1).uncertain, true);
+  chrome.sendFrameMessage({ ...retry, request_id: "q-burst-new" });
+  assert.equal(chrome.postedToFrame.at(-1).reason, "rate_limited");
+  assert.equal(chrome.postedToFrame.at(-1).uncertain, false);
+  chrome.advanceClock(1000);
+  chrome.sendFrameMessage(retry);
+  assert.equal(chrome.postedToFrame.at(-1).ok, true);
+  assert.equal(chrome.queued().length, 128);
+});
+
+test("large comment rate replenishes while bounding bursts", async () => {
+  const chrome = await createChromeHarness({ fakeClock: true });
+  const epoch = chrome.beginLegacyQueue();
+  for (let i = 0; i < 2; i++) {
+    const id = `q-size-${i}`;
+    chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: id, prompt: { prompt: "x".repeat(200000) } });
+    assert.equal(chrome.postedToFrame.at(-1).ok, true);
+    chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: id });
+  }
+  const request = { type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-size-2", prompt: { prompt: "x".repeat(200000) } };
+  chrome.sendFrameMessage(request);
+  assert.equal(chrome.postedToFrame.at(-1).reason, "rate_limited");
+  assert.equal(chrome.queued().length, 2);
+  for (let i = 2; i < 13; i++) {
+    const id = `q-size-${i}`;
+    chrome.advanceClock(2000);
+    chrome.sendFrameMessage({ ...request, request_id: id });
+    assert.equal(chrome.postedToFrame.at(-1).ok, true);
+    chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: id });
+  }
+  assert.equal(chrome.queued().length, 13);
+});
+
+test("a render failure after queue insertion still makes an acknowledged retry idempotent", async () => {
+  const chrome = await createChromeHarness();
+  const log = chrome.element("queuedLog"), descriptor = Object.getOwnPropertyDescriptor(log, "innerHTML");
+  Object.defineProperty(log, "innerHTML", { configurable: true, get: descriptor.get, set() { throw new Error("render failed"); } });
+  const request = { type: "lavish:queuePrompt", queue_epoch: chrome.beginLegacyQueue(), request_id: "q-render-failure", prompt: { prompt: "once" } };
+  assert.throws(() => chrome.sendFrameMessage(request), /render failed/);
+  Object.defineProperty(log, "innerHTML", descriptor);
+  chrome.sendFrameMessage(request);
+  assert.equal(chrome.postedToFrame.at(-1).ok, true);
+  assert.equal(chrome.queued().length, 1);
+  assert.equal(chrome.queued()[0].prompt, "once");
+});
+
+test("diff overlays keep text in chrome, clip placements and preserve duplicate queue identities", async () => {
+  const chrome = await createChromeHarness();
+  chrome.frame.clientWidth = 200;
+  chrome.frame.clientHeight = 100;
+  const target = { type: "diff-line", digest: "a".repeat(64), fileIndex: 0, oldPath: "old", newPath: "new", side: "additions", start: 4, end: 5, revision: "rev", extra: "do not echo" };
+  const prefix = "context\n\nquoted lines\n\n";
+  const prompt = { tag: "code-comment", prompt: prefix + "private instructions", target, _lavishDiffPrefix: prefix, _lavishQueueKey: "same" };
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: structuredClone(prompt) });
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: structuredClone(prompt) });
+  assert.equal(chrome.queued().length, 2);
+  assert.notEqual(chrome.queued()[0].prompt_id, chrome.queued()[1].prompt_id);
+  const message = chrome.postedToFrame.filter((item) => item.type === "lavish:queuedDiffAnchors").at(-1);
+  assert.equal(message.anchors.length, 2);
+  assert.doesNotMatch(JSON.stringify(message), /private instructions|do not echo/);
+  const ids = message.anchors.map((item) => item.id);
+  const overlay = chrome.element("diffCommentOverlay");
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation - 1, placements: [{ id: ids[0], x: 0, y: 0, width: 30, height: 30 }] });
+  assert.equal(overlay.children.length, 0);
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id: ids[0], x: -10, y: 70, width: 250, height: 80, clip: { x: 0, y: 80, width: 150, height: 20 } }, { id: ids[1], x: NaN, y: 0, width: 1, height: 1 }] });
+  assert.equal(overlay.children.length, 1);
+  const wrapper = overlay.children[0], card = wrapper.children[0];
+  assert.equal(wrapper.style.left, "0px");
+  assert.equal(wrapper.style.top, "80px");
+  assert.equal(wrapper.style.width, "150px");
+  assert.equal(wrapper.style.height, "20px");
+  assert.equal(card.style.left, "-10px");
+  assert.equal(card.style.top, "-10px");
+  assert.equal(card.style.width, "250px");
+  assert.equal(card.style.height, "80px");
+  assert.equal(card.children[1].children[0].textContent, "private instructions");
+  const text = card.children[1];
+  text.scrollTop = 10; text.scrollHeight = 110; text.clientHeight = 10;
+  card.children[0].focus();
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id: ids[0], x: -10, y: 65, width: 250, height: 80, clip: { x: 0, y: 80, width: 150, height: 20 } }] });
+  assert.equal(overlay.children[0], wrapper);
+  assert.equal(overlay.children[0].children[0], card);
+  assert.equal(chrome.focusLog.at(-1), card.children[0].id);
+  assert.equal(text.scrollTop, 10);
+  for (const pointerType of ["touch", "pen"]) {
+    card.dispatch("pointerdown", { pointerType, isPrimary: true, pointerId: 7, clientX: 20, clientY: 80, target: card });
+    overlay.dispatch("pointermove", { pointerId: 7, clientX: 20, clientY: 40, preventDefault() {} });
+    assert.equal(chrome.postedToFrame.at(-1).type, "lavish:scrollDiff");
+    assert.equal(chrome.postedToFrame.at(-1).y, 40);
+    overlay.dispatch("pointerup", { pointerId: 7 });
+  }
+  card.dispatch("wheel", { target: text, deltaMode: 0, deltaX: 0, deltaY: 50, preventDefault() {} });
+  assert.equal(text.scrollTop, 60);
+  card.dispatch("wheel", { target: text, deltaMode: 0, deltaX: 0, deltaY: 100, preventDefault() {} });
+  assert.equal(text.scrollTop, 100);
+  assert.equal(chrome.postedToFrame.at(-1).type, "lavish:scrollDiff");
+  assert.equal(chrome.postedToFrame.at(-1).y, 60);
+  card.children[0].click();
+  typeIntoQueuedEdit(chrome, "edited in chrome");
+  chrome.element("queuedLog").dispatch("click", { target: queuedLogNode(["queued-edit-save"]) });
+  assert.equal(chrome.queued()[0].prompt, prefix + "edited in chrome");
+  assert.equal(chrome.queued()[0].prompt_id, ids[0]);
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { prompt: "forged replacement", _lavishQueueKey: "same" } });
+  assert.equal(chrome.queued()[0].prompt, prefix + "edited in chrome");
+  assert.equal(chrome.queued()[1].prompt, prefix + "private instructions");
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [] });
+  assert.equal(overlay.children.length, 0);
+});
+
+test("an invalid placement removes the card safely without removing the queued prompt", async () => {
+  const chrome = await createChromeHarness();
+  chrome.frame.clientWidth = 200; chrome.frame.clientHeight = 100;
+  const target = { type: "diff-line", digest: "c".repeat(64), fileIndex: 0, oldPath: "old", newPath: "new", side: "additions", start: 1, end: 1, revision: "" };
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { tag: "code-comment", prompt: "retained", target } });
+  const message = chrome.postedToFrame.filter((item) => item.type === "lavish:queuedDiffAnchors").at(-1);
+  const id = message.anchors[0].id;
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id, x: 0, y: 0, width: 100, height: 50 }] });
+  const overlay = chrome.element("diffCommentOverlay");
+  overlay.children[0].children[0].children[0].focus();
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id, x: NaN, y: 0, width: 100, height: 50 }] });
+  assert.equal(overlay.children.length, 0);
+  assert.equal(chrome.focusLog.at(-1), "artifact");
+  assert.equal(chrome.queued()[0].prompt, "retained");
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id, x: 0, y: 0, width: 100, height: 50 }] });
+  assert.equal(overlay.children.length, 1);
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: "invalid" });
+  assert.equal(overlay.children.length, 0);
+  assert.equal(chrome.queued()[0].prompt, "retained");
+});
+
+test("editing a diff comment preserves delivery context and target without sending chrome metadata", async () => {
+  const posts = [];
+  const chrome = await createChromeHarness({ fetchImpl: async (url, init = {}) => {
+    if (String(url).endsWith("/prompts")) posts.push(JSON.parse(init.body));
+    return { ok: true, json: async () => ({}) };
+  } });
+  const target = { type: "diff-line", digest: "b".repeat(64), fileIndex: 1, oldPath: "old", newPath: "new", side: "deletions", start: 3, end: 5, revision: "rev" };
+  const prefix = "path and revision\n\nquoted code\n\n";
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { tag: "code-comment", prompt: prefix + "original", target, _lavishDiffPrefix: prefix } });
+  const id = chrome.queued()[0].prompt_id;
+  chrome.element("queuedLog").dispatch("click", { target: queuedLogNode(["bubble", "queued"], 0) });
+  typeIntoQueuedEdit(chrome, "updated comment");
+  chrome.element("queuedLog").dispatch("click", { target: queuedLogNode(["queued-edit-save"]) });
+  assert.equal(chrome.queued()[0].prompt_id, id);
+  chrome.element("send").click();
+  chrome.sendSnapshot("snapshot");
+  await flushPromises();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].prompts[0].prompt, prefix + "updated comment");
+  assert.deepEqual(posts[0].prompts[0].target, target);
+  assert.equal(Object.hasOwn(posts[0].prompts[0], "_lavishDiffPrefix"), false);
+});
+
+test("diff overlay editing is disabled while the note is sending", async () => {
+  const chrome = await createChromeHarness({ fetchImpl: () => new Promise(() => {}) });
+  chrome.frame.clientWidth = 200;
+  chrome.frame.clientHeight = 100;
+  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { tag: "code-comment", prompt: "original", target: { type: "diff-line", digest: "a".repeat(64), fileIndex: 0, oldPath: "old", newPath: "new", side: "additions", start: 1, end: 1, revision: "" } } });
+  const message = chrome.postedToFrame.filter((item) => item.type === "lavish:queuedDiffAnchors").at(-1);
+  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id: message.anchors[0].id, x: 0, y: 0, width: 100, height: 50 }] });
+  chrome.element("send").click();
+  const button = chrome.element("diffCommentOverlay").children[0].children[0].children[0];
+  assert.equal(button.disabled, true);
+  button.click();
+  assert.doesNotMatch(chrome.element("queuedLog").innerHTML, /queued-edit-input/);
+  assert.equal(chrome.queued()[0].prompt, "original");
+});
 
 test("clicking a queued note opens it for editing and reveals its element", async () => {
   const chrome = await createChromeHarness();

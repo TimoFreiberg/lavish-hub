@@ -6,6 +6,14 @@ const key = String(sessionData.key || "");
 const filePath = String(sessionData.file || "");
 const entryPage = typeof sessionData.entryPage === "string" ? sessionData.entryPage : "";
 const queueStorageKey = "lavish-axi:queued:" + key;
+const queueReceiptStorageKey = queueStorageKey + ":requests";
+const MAX_QUEUE_RECEIPTS = 128;
+const QUEUE_RATE_REQUEST_BURST = 128;
+const QUEUE_RATE_CHARACTER_BURST = 524288;
+const queueAdmission = { requests: QUEUE_RATE_REQUEST_BURST, characters: QUEUE_RATE_CHARACTER_BURST, last: Date.now() };
+let queueReceipts = {};
+let queueReceiptCount = 0;
+let queueReceiptEnvelope = false;
 const terminalStorageKey = "lavish-axi:terminal:" + key;
 // Review-chrome state that must survive a browser refresh. Keyed per session so one review's
 // triage can never leak into another artifact's.
@@ -116,6 +124,13 @@ function isModeToggleHotkeyEvent(event) {
 }
 
 const frame = /** @type {HTMLIFrameElement} */ (document.getElementById("artifact"));
+const diffCommentOverlay = /** @type {HTMLDivElement} */ (document.getElementById("diffCommentOverlay"));
+let diffAnchorSignature = "[]";
+let diffAnchorGeneration = 0;
+let diffPlacements = [];
+let diffSizeFrame = 0;
+const diffCards = new Map();
+let diffTouch = null;
 const panelScroll = /** @type {HTMLDivElement} */ (document.getElementById("panelScroll"));
 const queuedLog = /** @type {HTMLDivElement} */ (document.getElementById("queuedLog"));
 const chatLog = /** @type {HTMLDivElement} */ (document.getElementById("chatLog"));
@@ -341,6 +356,7 @@ const HEALTH_NO_ANSWER_TITLE = "Lavish did not answer.";
 const HEALTH_NO_ANSWER_COPY =
   "Lavish did not answer the check, so this page cannot tell whether it is running. Try again in a moment.";
 let artifactLoadToken = "";
+let legacyQueueEpoch = "";
 let artifactLoadRevision = Number(sessionData.initialArtifactRevision) || 0;
 let artifactLoadRequestSequence = Number(sessionData.initialArtifactLoadSequence) || 0;
 let chromeLoadToken = String(sessionData.chromeLoadToken || "");
@@ -671,6 +687,9 @@ function destinationPayload(candidate) {
 }
 
 function navigateArtifactFrame(destination) {
+  clearDiffPlacements();
+  diffAnchorGeneration++;
+  diffAnchorSignature = "[]";
   const next = String(destination || "");
   // Legacy loads intentionally assign `src`: existing recovery/availability
   // accounting observes that navigation, and the legacy URL carries its load
@@ -901,7 +920,20 @@ function sanitizeQueuedPrompt(prompt) {
 
 function loadQueuedPrompts() {
   try {
-    const parsed = JSON.parse(sessionStorage.getItem(queueStorageKey) || "[]");
+    const saved = JSON.parse(sessionStorage.getItem(queueStorageKey) || "[]");
+    let parsed = saved;
+    if (saved && !Array.isArray(saved) && saved.version === 1 && Array.isArray(saved.prompts)) {
+      parsed = saved.prompts;
+      queueReceiptEnvelope = true;
+      if (saved.receipts && typeof saved.receipts === "object" && !Array.isArray(saved.receipts)) queueReceipts = saved.receipts;
+    } else {
+      try {
+        const legacy = JSON.parse(sessionStorage.getItem(queueReceiptStorageKey) || "{}");
+        if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) queueReceipts = legacy;
+      } catch {}
+    }
+    queueReceiptCount = Object.keys(queueReceipts).length;
+    if (queueReceiptCount) queueReceiptEnvelope = true;
     // Also sanitize on restore: a tab poisoned before this guard existed still has
     // the bad prompt on disk and would otherwise stay wedged after an upgrade.
     // Keep a stored identity so a reload can settle an already-accepted note; mint
@@ -925,13 +957,19 @@ function loadQueuedPrompts() {
 
 function persistQueuedPrompts() {
   try {
-    if (queued.length) {
-      sessionStorage.setItem(queueStorageKey, JSON.stringify(queued));
+    if (queueReceiptCount) {
+      sessionStorage.setItem(queueStorageKey, JSON.stringify({ version: 1, prompts: queued, receipts: queueReceipts }));
+      queueReceiptEnvelope = true;
     } else {
-      sessionStorage.removeItem(queueStorageKey);
+      if (queueReceiptEnvelope) sessionStorage.removeItem(queueReceiptStorageKey);
+      if (queued.length) sessionStorage.setItem(queueStorageKey, JSON.stringify(queued));
+      else sessionStorage.removeItem(queueStorageKey);
+      queueReceiptEnvelope = false;
     }
+    return true;
   } catch {
     // The in-memory queue still works if browser storage is unavailable.
+    return false;
   }
 }
 
@@ -975,7 +1013,7 @@ function queuedForPage(page = currentArtifactBinding?.page) {
 const REMOVE_ICON_SVG =
   '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" focusable="false"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 const EDIT_ICON_SVG =
-  '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" focusable="false"><path d="M6.5 1.5L8.5 3.5L3.5 8.5H1.5V6.5L6.5 1.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path d="M4 20l4-.8L19 8.2 15.8 5 4.8 16 4 20zm10.6-13.8l3.2 3.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ANCHOR_EXCERPT_MAX = 120;
 const ANCHOR_SELECTOR_MAX = 512;
 const ANCHOR_LABEL_MAX = 40;
@@ -1089,7 +1127,7 @@ function queuedBubbleHtml(prompt, index) {
     index +
     '"><small>' +
     (sending ? "Sending\u2026" : "Queued") +
-    ' <button class="queued-edit" type="button" aria-label="Edit queued prompt" data-index="' +
+    ' <button class="queued-edit" type="button" aria-label="Edit queued prompt" title="Edit queued prompt" data-index="' +
     index +
     '">' +
     EDIT_ICON_SVG +
@@ -1186,6 +1224,8 @@ function render() {
     }
   }
   postQueuedAnchors();
+  postQueuedDiffAnchors();
+  renderDiffPlacements();
   updateSendState();
   scrollPanelToBottom();
   renderSheetSummary();
@@ -1875,7 +1915,11 @@ async function refreshChromeLoadHandoff(requestSequence) {
   const revision = Number(data?.artifact_revision);
   const loadToken = String(data?.artifact_load_token || "");
   if (Number.isSafeInteger(revision) && revision >= 0) artifactLoadRevision = revision;
-  if (loadToken) artifactLoadToken = loadToken;
+  if (loadToken) {
+    const changed = artifactLoadToken !== loadToken;
+    artifactLoadToken = loadToken;
+    if (changed && !modernArtifactProtocol) retireQueueReceipts(queueReceiptScope(null));
+  }
   return true;
 }
 
@@ -2158,6 +2202,16 @@ function isPromptEditable(prompt) {
   return Boolean(prompt) && !terminalSubmission && !isPromptSending(prompt);
 }
 
+function diffCommentPrefix(prompt) {
+  const prefix = prompt?._lavishDiffPrefix;
+  return diffAnchorOf(prompt) && typeof prefix === "string" && String(prompt.prompt || "").startsWith(prefix) ? prefix : null;
+}
+
+function diffCommentText(prompt) {
+  const prefix = diffCommentPrefix(prompt);
+  return prefix === null ? String(prompt?.prompt || "") : String(prompt.prompt).slice(prefix.length);
+}
+
 function editQueuedPrompt(index, { reveal = true } = {}) {
   const prompt = queued[index];
   if (ended || !isPromptEditable(prompt)) return;
@@ -2175,7 +2229,7 @@ function editQueuedPrompt(index, { reveal = true } = {}) {
   // Moving to another note keeps what was typed into the first, the way leaving a field does.
   commitQueuedEdit();
   editingPromptId = id;
-  editingDraft = String(prompt.prompt || "");
+  editingDraft = diffCommentText(prompt);
   editFocusPending = true;
   revealConversation();
   render();
@@ -2201,7 +2255,8 @@ function commitQueuedEdit() {
     afterQueuedPromptRemoved();
   } else {
     // In place, not replaced: the send bookkeeping tracks notes by object identity.
-    prompt.prompt = text;
+    const prefix = diffCommentPrefix(prompt);
+    prompt.prompt = prefix === null ? text : prefix + text;
     persistQueuedPrompts();
   }
   return true;
@@ -2241,6 +2296,7 @@ function editQueuedAnchor(selector) {
 // Notes that point at a whole element, cell, or diagram node, which a later click on that same
 // target can find again. A text selection's note is about the words, not the element around them.
 function isElementAnchoredPrompt(prompt) {
+  if (diffAnchorOf(prompt)) return false;
   const kind = promptAnchor(prompt)?.kind;
   return Boolean(prompt.selector) && (kind === "element" || kind === "cell" || kind === "node");
 }
@@ -2256,6 +2312,156 @@ function queuedAnchorSelectorsOf(prompt) {
 // Tells the artifact which element selectors carry a queued note. Only selectors cross into the
 // frame: the artifact is agent-authored, and the note text stays in the chrome. Each selector is
 // listed where its newest note sits, oldest first, so the artifact can prefer an element's newest note.
+function diffAnchorOf(prompt) {
+  const a = prompt?.tag === "code-comment" && prompt.target?.type === "diff-line" ? prompt.target : null;
+  if (!a || !/^[a-f0-9]{64}$/.test(a.digest) || !["additions", "deletions"].includes(a.side) ||
+      !Number.isSafeInteger(a.fileIndex) || a.fileIndex < 0 || a.fileIndex > 1000000 ||
+      !Number.isSafeInteger(a.start) || !Number.isSafeInteger(a.end) || a.start < 1 || a.end < a.start ||
+      typeof a.oldPath !== "string" || typeof a.newPath !== "string" || !a.oldPath || !a.newPath ||
+      a.oldPath.length > 4096 || a.newPath.length > 4096 || typeof a.revision !== "string" || a.revision.length > 512) return null;
+  return { digest: a.digest, fileIndex: a.fileIndex, oldPath: a.oldPath, newPath: a.newPath, side: a.side, start: a.start, end: a.end, revision: a.revision };
+}
+
+function clearDiffPlacements() {
+  diffPlacements = [];
+  diffTouch = null;
+  renderDiffPlacements();
+}
+
+function postQueuedDiffAnchors(force = false) {
+  const anchors = queued.filter((prompt) => belongsToReviewPage(prompt)).map((prompt) => {
+    const anchor = diffAnchorOf(prompt);
+    return anchor ? { id: promptIdentity(prompt), ...anchor } : null;
+  }).filter(Boolean);
+  const signature = JSON.stringify(anchors);
+  if (!force && signature === diffAnchorSignature) return;
+  diffAnchorSignature = signature;
+  diffAnchorGeneration++;
+  for (const nodes of diffCards.values()) nodes.reportedHeight = 0;
+  postToFrame({ type: "lavish:queuedDiffAnchors", generation: diffAnchorGeneration, anchors });
+}
+
+function forwardDiffScroll(text, overText, x, y) {
+  x = Math.max(-4000, Math.min(4000, x));
+  y = Math.max(-4000, Math.min(4000, y));
+  if (overText && y) {
+    const before = text.scrollTop;
+    text.scrollTop = Math.max(0, Math.min(text.scrollHeight - text.clientHeight, before + y));
+    y -= text.scrollTop - before;
+  }
+  if (x || y) postToFrame({ type: "lavish:scrollDiff", x, y });
+}
+
+function createDiffCard(id) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "diff-comment-clip";
+  const card = document.createElement("section");
+  card.className = "diff-comment-card";
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.innerHTML = EDIT_ICON_SVG;
+  edit.setAttribute("aria-label", "Edit queued diff comment");
+  edit.setAttribute("title", "Edit queued diff comment");
+  edit.addEventListener("click", () => {
+    const index = queued.findIndex((prompt) => promptIdentity(prompt) === id && belongsToReviewPage(prompt));
+    if (index !== -1) editQueuedPrompt(index, { reveal: false });
+  });
+  const text = document.createElement("div");
+  text.className = "diff-comment-text";
+  const content = document.createElement("div");
+  text.appendChild(content);
+  card.appendChild(edit);
+  card.appendChild(text);
+  card.addEventListener("wheel", (event) => {
+    if (event.ctrlKey) return;
+    const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? frame.clientHeight : 1;
+    forwardDiffScroll(text, text.contains(/** @type {Node} */ (event.target)), event.deltaX * scale, event.deltaY * scale);
+    event.preventDefault();
+  }, { passive: false });
+  card.addEventListener("pointerdown", (event) => {
+    if (!["touch", "pen"].includes(event.pointerType) || event.isPrimary === false) return;
+    diffTouch = { id: event.pointerId, x: event.clientX, y: event.clientY, text, moved: false, overText: text.contains(/** @type {Node} */ (event.target)) };
+  });
+  wrapper.appendChild(card);
+  diffCommentOverlay.appendChild(wrapper);
+  return { wrapper, card, edit, text, content, reportedHeight: 0 };
+}
+
+diffCommentOverlay.addEventListener("pointermove", (event) => {
+  if (!diffTouch || event.pointerId !== diffTouch.id) return;
+  const x = diffTouch.x - event.clientX, y = diffTouch.y - event.clientY;
+  if (!diffTouch.moved) {
+    if (Math.abs(x) + Math.abs(y) < 5) return;
+    diffTouch.moved = true;
+    try { diffCommentOverlay.setPointerCapture?.(event.pointerId); } catch {}
+  }
+  diffTouch.x = event.clientX; diffTouch.y = event.clientY;
+  forwardDiffScroll(diffTouch.text, diffTouch.overText, x, y);
+  event.preventDefault();
+});
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) diffCommentOverlay.addEventListener(type, (event) => {
+  if (diffTouch?.id === event.pointerId) diffTouch = null;
+});
+
+function scheduleDiffSizes() {
+  if (diffSizeFrame || typeof window.requestAnimationFrame !== "function") return;
+  diffSizeFrame = window.requestAnimationFrame(() => {
+    diffSizeFrame = 0;
+    const sizes = [];
+    for (const [id, nodes] of diffCards) {
+      const contentHeight = Math.max(nodes.content.offsetHeight, nodes.edit.offsetHeight);
+      if (!Number.isFinite(contentHeight) || contentHeight <= 0) continue;
+      const height = Math.min(320, Math.max(38, Math.ceil(contentHeight + 14)));
+      if (nodes.reportedHeight === height) continue;
+      nodes.reportedHeight = height;
+      sizes.push({ id, height });
+    }
+    if (sizes.length) postToFrame({ type: "lavish:queuedDiffSizes", generation: diffAnchorGeneration, sizes });
+  });
+}
+
+function renderDiffPlacements() {
+  const width = frame.clientWidth, height = frame.clientHeight, visible = new Set();
+  const prompts = new Map();
+  for (const item of queued) if (belongsToReviewPage(item) && diffAnchorOf(item)) prompts.set(promptIdentity(item), item);
+  for (const placement of diffPlacements) {
+    const prompt = prompts.get(placement.id);
+    if (!prompt) continue;
+    const clip = placement.clip || { x: 0, y: 0, width, height };
+    const left = Math.max(0, clip.x, placement.x), top = Math.max(0, clip.y, placement.y);
+    const right = Math.min(width, clip.x + clip.width, placement.x + placement.width);
+    const bottom = Math.min(height, clip.y + clip.height, placement.y + placement.height);
+    if (right <= left || bottom <= top) continue;
+    visible.add(placement.id);
+    let nodes = diffCards.get(placement.id);
+    if (!nodes) { nodes = createDiffCard(placement.id); diffCards.set(placement.id, nodes); }
+    Object.assign(nodes.wrapper.style, { left: left + "px", top: top + "px", width: right - left + "px", height: bottom - top + "px" });
+    Object.assign(nodes.card.style, { left: placement.x - left + "px", top: placement.y - top + "px", width: placement.width + "px", height: placement.height + "px" });
+    nodes.edit.disabled = ended || !isPromptEditable(prompt);
+    const text = diffCommentText(prompt);
+    if (nodes.content.textContent !== text) nodes.content.textContent = text;
+  }
+  for (const [id, nodes] of diffCards) if (!visible.has(id)) {
+    if (nodes.wrapper.contains(document.activeElement)) frame.focus();
+    nodes.wrapper.remove();
+    diffCards.delete(id);
+  }
+  scheduleDiffSizes();
+}
+
+function acceptDiffPlacements(msg) {
+  if (msg.generation !== diffAnchorGeneration) return;
+  if (!Array.isArray(msg.placements) || msg.placements.length > 1000) { clearDiffPlacements(); return; }
+  const ids = new Set();
+  diffPlacements = msg.placements.filter((p) => {
+    if (!p || typeof p.id !== "string" || ids.has(p.id) || ![p.x, p.y, p.width, p.height].every(Number.isFinite) || p.width <= 0 || p.height <= 0) return false;
+    if (p.clip && (![p.clip.x, p.clip.y, p.clip.width, p.clip.height].every(Number.isFinite) || p.clip.width <= 0 || p.clip.height <= 0)) return false;
+    ids.add(p.id);
+    return true;
+  }).map((p) => ({ id: p.id, x: p.x, y: p.y, width: p.width, height: p.height, clip: p.clip ? { x: p.clip.x, y: p.clip.y, width: p.clip.width, height: p.clip.height } : null }));
+  renderDiffPlacements();
+}
+
 function postQueuedAnchors(force = false) {
   const anchored = queued
     .filter((prompt) => belongsToReviewPage(prompt) && isElementAnchoredPrompt(prompt))
@@ -2353,10 +2559,57 @@ function beginFeedbackPreparation() {
   return preparation;
 }
 
+function queueReceiptScope(binding = currentArtifactBinding) {
+  return JSON.stringify([binding?.page ?? null, binding?.documentId || "", binding?.token || artifactLoadToken, binding?.documentSequence || 0, binding ? "" : legacyQueueEpoch]);
+}
+
+function retireQueueReceipts(keepScope = null, retiredScope = null) {
+  let changed = false;
+  for (const id of Object.keys(queueReceipts)) {
+    const scope = queueReceipts[id];
+    if ((retiredScope !== null && scope === retiredScope) || (keepScope !== null && scope !== keepScope)) {
+      delete queueReceipts[id];
+      queueReceiptCount--;
+      changed = true;
+    }
+  }
+  if (changed) persistQueuedPrompts();
+}
+
+function refillQueueAdmission() {
+  const now = Date.now();
+  const elapsed = Math.max(0, now - queueAdmission.last);
+  queueAdmission.last = Math.max(queueAdmission.last, now);
+  queueAdmission.requests = Math.min(QUEUE_RATE_REQUEST_BURST, queueAdmission.requests + elapsed * 0.032);
+  queueAdmission.characters = Math.min(QUEUE_RATE_CHARACTER_BURST, queueAdmission.characters + elapsed * 131.072);
+}
+
+function acknowledgedPayloadSize(value) {
+  const pending = [value], seen = new Set();
+  let size = 0, nodes = 0;
+  while (pending.length) {
+    const item = pending.pop();
+    if (typeof item === "string") size += item.length;
+    else if (item && typeof item === "object") {
+      if (seen.has(item) || ++nodes > 2048) return -1;
+      seen.add(item);
+      if (Array.isArray(item) && item.length > 2048) return -1;
+      for (const key in item) if (Object.hasOwn(item, key)) {
+        size += key.length;
+        if (++nodes > 2048 || size > 262144) return -1;
+        pending.push(item[key]);
+      }
+    }
+    if (size > 262144) return -1;
+  }
+  return size;
+}
+
 function enqueuePrompt(
   rawPrompt,
   /** @type {FeedbackPreparation | null} */ preparation = null,
   /** @type {any} */ sourceBinding = currentArtifactBinding,
+  /** @type {(() => void) | null} */ onQueued = null,
 ) {
   if ((preparation && !feedbackPreparations.has(preparation)) || (terminalSubmission && !preparation)) return false;
   // The sandboxed iframe is untrusted: never accept a caller-supplied settlement identity.
@@ -2364,9 +2617,11 @@ function enqueuePrompt(
   if (!prompt) return false;
   stampPromptBinding(prompt, sourceBinding);
 
+  if (diffAnchorOf(prompt)) delete prompt[internalQueueKeyField];
+  if (diffCommentPrefix(prompt) === null) delete prompt._lavishDiffPrefix;
   const queueKey = promptQueueKey(prompt);
   if (queueKey) {
-    const index = queued.findIndex((item) => promptQueueKey(item) === queueKey);
+    const index = queued.findIndex((item) => !diffAnchorOf(item) && promptQueueKey(item) === queueKey);
     if (index !== -1) {
       // The replacement is the artifact's newer answer. Words typed against the old answer never
       // move onto it; they are handed back to the reviewer instead.
@@ -2382,6 +2637,7 @@ function enqueuePrompt(
   } else {
     queued.push(prompt);
   }
+  onQueued?.();
   persistQueuedPrompts();
   render();
   return true;
@@ -2392,6 +2648,7 @@ function stripInternalPromptFields(prompt) {
   const clean = { ...prompt };
   delete clean[internalQueueKeyField];
   delete clean[legacyQueuedPageField];
+  delete clean._lavishDiffPrefix;
   return clean;
 }
 
@@ -2428,20 +2685,24 @@ function bindingTuple(binding = currentArtifactBinding) {
 }
 
 function retireArtifactBinding() {
+  clearDiffPlacements();
+  diffAnchorGeneration++;
+  diffAnchorSignature = "[]";
   const binding = currentArtifactBinding;
   if (binding) retireWhiteboardChannelsForBinding?.(binding);
   currentArtifactBinding = null;
-  if (modernArtifactProtocol) {
-    activateComposerPage(null);
-    render();
-    renderWarnings();
-  }
   if (binding?.port) {
     try {
       binding.port.close();
     } catch {
       // A closed MessagePort is already retired.
     }
+    retireQueueReceipts(null, queueReceiptScope(binding));
+  }
+  if (modernArtifactProtocol) {
+    activateComposerPage(null);
+    render();
+    renderWarnings();
   }
 }
 
@@ -4557,7 +4818,9 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   if (!Number.isSafeInteger(revision) || revision < 0 || !token) return recoverLater();
   artifactLoadRecoveryAttempt = 0;
   artifactLoadRevision = revision;
+  const previousQueueToken = artifactLoadToken;
   artifactLoadToken = token;
+  if (!modernArtifactProtocol && previousQueueToken !== token) retireQueueReceipts(queueReceiptScope(null));
   artifactSpokeToken = "";
   annotationDefaultReceived = false;
   retireAllWhiteboardChannels();
@@ -5709,10 +5972,63 @@ function handleArtifactMessage(event, binding = null) {
     // Reconcile even if frame load replayed the old mode before this report arrived.
     postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
   }
+  if (msg.type === "lavish:requestDiffAnchors") postQueuedDiffAnchors(true);
+  if (msg.type === "lavish:diffPlacements") acceptDiffPlacements(msg);
   if (msg.type === "lavish:queuePrompt") {
-    enqueuePrompt(msg.prompt, null, binding || currentArtifactBinding);
-    // Queued from inside the artifact, where the closed dock is the only sign it landed.
-    pulseSheetDock();
+    const requestId = typeof msg.request_id === "string" && /^q-[A-Za-z0-9_-]{1,120}$/.test(msg.request_id) ? msg.request_id : "";
+    if (!requestId) {
+      enqueuePrompt(msg.prompt, null, binding || currentArtifactBinding);
+      pulseSheetDock();
+    } else if (!modernArtifactProtocol && (!legacyQueueEpoch || msg.queue_epoch !== legacyQueueEpoch)) {
+      postToBindingFrame(binding, { type: "lavish:queuePromptResult", request_id: requestId, queue_epoch: msg.queue_epoch, ok: false, uncertain: true, reason: "binding_changed" });
+    } else {
+      const source = binding || currentArtifactBinding;
+      const scope = queueReceiptScope(source);
+      const previous = Object.hasOwn(queueReceipts, requestId) ? queueReceipts[requestId] : null;
+      let known = previous === scope, inserted = false, reason = "";
+      if (previous && !known) reason = "binding_changed";
+      else if (!known && ended) reason = "ended";
+      else if (!known && terminalSubmission) reason = "reserved";
+      else if (!known && queueReceiptCount >= MAX_QUEUE_RECEIPTS) reason = "capacity";
+      else if (!known && typeof msg.prompt?.prompt !== "string") reason = "invalid";
+      else {
+        refillQueueAdmission();
+        if (queueAdmission.requests < 1) reason = "rate_limited";
+        else {
+          queueAdmission.requests--;
+          if (!known) {
+            const charge = acknowledgedPayloadSize(msg.prompt);
+            if (charge < 0) reason = "too_large";
+            else if (queueAdmission.characters < charge) reason = "rate_limited";
+            else {
+              queueAdmission.characters -= charge;
+              inserted = enqueuePrompt(msg.prompt, null, source, () => {
+                queueReceipts[requestId] = scope;
+                queueReceiptCount++;
+              });
+              known = inserted;
+              if (!inserted) reason = "invalid";
+            }
+          }
+        }
+      }
+      const durable = known && !reason && persistQueuedPrompts();
+      if (known && !reason && !durable) reason = "storage";
+      if (inserted) pulseSheetDock();
+      postToBindingFrame(binding, { type: "lavish:queuePromptResult", request_id: requestId, ...(!modernArtifactProtocol ? { queue_epoch: msg.queue_epoch } : {}), ok: Boolean(durable), uncertain: Boolean((known && !durable) || reason === "binding_changed"), reason });
+    }
+  }
+  if (msg.type === "lavish:requestQueueEpoch" && !modernArtifactProtocol && legacyQueueEpoch) {
+    postToFrame({ type: "lavish:setQueueEpoch", epoch: legacyQueueEpoch });
+  }
+  if (msg.type === "lavish:releaseQueueRequest" && typeof msg.request_id === "string" && (modernArtifactProtocol || msg.queue_epoch === legacyQueueEpoch)) {
+    const source = binding || currentArtifactBinding;
+    const scope = queueReceiptScope(source);
+    if (Object.hasOwn(queueReceipts, msg.request_id) && queueReceipts[msg.request_id] === scope) {
+      delete queueReceipts[msg.request_id];
+      queueReceiptCount--;
+      if (!persistQueuedPrompts()) { queueReceipts[msg.request_id] = scope; queueReceiptCount++; }
+    }
   }
   if (msg.type === "lavish:snapshot") {
     completeSnapshotRequest(
@@ -5943,6 +6259,7 @@ function challengeArtifactDocument(expectedDocumentId = "", chromeAuth = "") {
     retireArtifactBinding();
     pendingArtifactFailureBinding = null;
     currentArtifactBinding = binding;
+    retireQueueReceipts(queueReceiptScope(binding));
     const resumed = acceptedDocumentIds.has(binding.documentId);
     acceptedDocumentIds.add(binding.documentId);
     if (acceptedDocumentIds.size > 256) {
@@ -5973,6 +6290,7 @@ function challengeArtifactDocument(expectedDocumentId = "", chromeAuth = "") {
     channel.port1.start?.();
     channel.port1.postMessage({ type: "lavish:activate", ...bindingTuple(binding) });
     postQueuedAnchors(true);
+    postQueuedDiffAnchors(true);
     artifactSpokeToken = binding.token;
     clearTimeout(artifactSilenceTimer);
     // The initial load handler may have run before the SDK announced readiness.
@@ -6344,6 +6662,14 @@ document.addEventListener(
   true,
 );
 frame.addEventListener("load", () => {
+  clearDiffPlacements();
+  diffAnchorGeneration++;
+  diffAnchorSignature = "[]";
+  if (!modernArtifactProtocol) {
+    legacyQueueEpoch = randomBindingChallenge();
+    retireQueueReceipts(queueReceiptScope(null));
+    postToFrame({ type: "lavish:setQueueEpoch", epoch: legacyQueueEpoch });
+  }
   if (modernArtifactProtocol && !currentArtifactBinding) {
     const announcedDocumentLoaded = pendingReadyLoadDocumentId && pendingReadyLoadDocumentId === latestReadyDocumentId;
     pendingReadyLoadDocumentId = "";
@@ -6359,10 +6685,12 @@ frame.addEventListener("load", () => {
   }
   if (artifactSpokeToken !== artifactLoadToken) armArtifactAvailabilityProbe(artifactLoadToken);
   postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
+  if (modernArtifactProtocol && currentArtifactBinding) postQueuedDiffAnchors(true);
   if (!modernArtifactProtocol) {
     postToFrame({ type: "lavish:restoreScroll", x: lastScroll.x, y: lastScroll.y });
     if (lastReviewState) postToFrame({ type: "lavish:restoreReviewState", state: lastReviewState });
     postQueuedAnchors(true);
+    postQueuedDiffAnchors(true);
   }
   if (overlayContext && overlayIndex !== null && whiteboardContextIsLive(overlayContext)) {
     inlineWhiteboardChannels.delete(whiteboardChannelKey(overlayContext));

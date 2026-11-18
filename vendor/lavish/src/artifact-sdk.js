@@ -1579,9 +1579,16 @@ export function createArtifactSdk(
     setMermaidFrozen(annotationMode);
   }
 
+  const queueRequests = new Map();
+  const queueRequestBindings = new Map();
+  let legacyQueueEpoch = "";
+  const acceptedQueueRequests = new Set();
+  const legacyChromeOrigin = (() => {
+    try { return new URL(/** @type {HTMLScriptElement | null} */ (document.currentScript)?.src).origin; } catch { return ""; }
+  })();
   function queuePrompt(prompt, options = {}) {
     const originElement = options.element || document.activeElement || document.body;
-    /** @type {{ uid: string, prompt: string, selector: string, tag: string, text: string, target?: unknown, attachments?: Array<{ id: string, name?: string }>, _lavishQueueKey?: string }} */
+    /** @type {{ uid: string, prompt: string, selector: string, tag: string, text: string, target?: unknown, attachments?: Array<{ id: string, name?: string }>, _lavishQueueKey?: string, _lavishDiffPrefix?: string }} */
     const item = {
       ...context(originElement),
       prompt: String(prompt || ""),
@@ -1608,8 +1615,25 @@ export function createArtifactSdk(
       if (attachments.length) item.attachments = attachments;
     }
 
+    if (typeof options.commentPrefix === "string" && item.prompt.startsWith(options.commentPrefix)) item._lavishDiffPrefix = options.commentPrefix;
     if (options.element) rememberQueuedAnchor(item, options.element);
-    postArtifactMessage("lavish:queuePrompt", { prompt: item });
+    if (!options.requestId) {
+      postArtifactMessage("lavish:queuePrompt", { prompt: item });
+      return;
+    }
+    const requestId = String(options.requestId);
+    if (!/^q-[A-Za-z0-9_-]{1,120}$/.test(requestId)) return Promise.resolve({ status: "rejected" });
+    const sequence = transportPort ? binding?.documentSequence || 0 : legacyQueueEpoch;
+    if (!sequence) return Promise.resolve({ status: "unknown", reason: "binding_changed" });
+    if (queueRequests.has(requestId)) return Promise.resolve({ status: "busy", reason: "busy" });
+    if (queueRequestBindings.has(requestId) && queueRequestBindings.get(requestId) !== sequence) return Promise.resolve({ status: "unknown", reason: "binding_changed" });
+    if (!queueRequestBindings.has(requestId) && [...queueRequestBindings.values()].filter((value) => value === sequence).length >= 128) return Promise.resolve({ status: "rejected", reason: "capacity" });
+    queueRequestBindings.set(requestId, sequence);
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => { queueRequests.delete(requestId); resolve({ status: "unknown" }); }, 3000);
+      queueRequests.set(requestId, { resolve, timer, sequence });
+      postArtifactMessage("lavish:queuePrompt", { prompt: item, request_id: requestId, ...(!transportPort ? { queue_epoch: sequence } : {}) });
+    });
   }
 
   function sendQueuedPrompts() {
@@ -2859,9 +2883,20 @@ export function createArtifactSdk(
   const annotationRequests = new Map();
   /** @type {Window & { lavish?: unknown }} */ (window).lavish = {
     queuePrompt,
+    queuePromptAcknowledged: (prompt, options) => queuePrompt(prompt, options),
+    releaseQueueRequest: (requestId) => {
+      if (queueRequests.has(requestId) || !acceptedQueueRequests.has(requestId)) return;
+      acceptedQueueRequests.delete(requestId);
+      const sequence = queueRequestBindings.get(requestId);
+      queueRequestBindings.delete(requestId);
+      if (sequence !== (transportPort ? binding?.documentSequence || 0 : legacyQueueEpoch)) return;
+      postArtifactMessage("lavish:releaseQueueRequest", { request_id: requestId, ...(!transportPort ? { queue_epoch: sequence } : {}) });
+    },
     sendQueuedPrompts,
     endSession,
     getQueuedPrompts: () => [],
+    requestDiffAnchors: () => postArtifactMessage("lavish:requestDiffAnchors"),
+    reportDiffPlacements: (generation, placements) => postArtifactMessage("lavish:diffPlacements", { generation, placements }),
     setStatus: (message) => postArtifactMessage("lavish:status", { message: String(message) }),
     setDocumentMeta,
     setAnnotationMode: (enabled) => {
@@ -2893,6 +2928,32 @@ export function createArtifactSdk(
     )
       return;
     if (msg.type === "lavish:setAnnotationMode") setAnnotationMode(msg.enabled);
+    if (msg.type === "lavish:setQueueEpoch" && !transportPort) {
+      if (!event.isTrusted || !legacyChromeOrigin || event.origin !== legacyChromeOrigin) return;
+      if (typeof msg.epoch === "string" && msg.epoch.length > 0 && msg.epoch.length <= 200 && msg.epoch !== legacyQueueEpoch) {
+        legacyQueueEpoch = msg.epoch;
+        for (const [id, request] of queueRequests) {
+          window.clearTimeout(request.timer);
+          queueRequests.delete(id);
+          request.resolve({ status: "unknown", reason: "binding_changed" });
+        }
+        for (const id of acceptedQueueRequests) queueRequestBindings.delete(id);
+        acceptedQueueRequests.clear();
+      }
+    }
+    if (msg.type === "lavish:queuePromptResult") {
+      if (!transportPort && (!event.isTrusted || !legacyChromeOrigin || event.origin !== legacyChromeOrigin)) return;
+      const request = queueRequests.get(msg.request_id);
+      if (request && (transportPort ? request.sequence === binding?.documentSequence : msg.queue_epoch === request.sequence) && typeof msg.ok === "boolean") {
+        window.clearTimeout(request.timer);
+        queueRequests.delete(msg.request_id);
+        if (msg.ok) acceptedQueueRequests.add(msg.request_id);
+        if (!msg.ok && !msg.uncertain) queueRequestBindings.delete(msg.request_id);
+        const reasons = ["reserved", "ended", "capacity", "too_large", "rate_limited", "storage", "binding_changed", "invalid"];
+        const reason = reasons.includes(msg.reason) ? msg.reason : "";
+        request.resolve({ status: msg.ok ? "accepted" : msg.uncertain ? "unknown" : "rejected", reason });
+      }
+    }
     if (msg.type === "lavish:annotationModeApplied") {
       const resolve = annotationRequests.get(msg.request_id);
       if (resolve) { annotationRequests.delete(msg.request_id); resolve(); }
@@ -2921,6 +2982,15 @@ export function createArtifactSdk(
     if (msg.type === "lavish:queuedAnchors") {
       queuedAnchorSelectors = new Set(Array.isArray(msg.selectors) ? msg.selectors.map(String) : []);
     }
+    if (msg.type === "lavish:queuedDiffSizes") {
+      window.dispatchEvent(new CustomEvent("lavish:queuedDiffSizes", { detail: { generation: msg.generation, sizes: msg.sizes } }));
+    }
+    if (msg.type === "lavish:scrollDiff") {
+      window.dispatchEvent(new CustomEvent("lavish:scrollDiff", { detail: { x: msg.x, y: msg.y } }));
+    }
+    if (msg.type === "lavish:queuedDiffAnchors") {
+      window.dispatchEvent(new CustomEvent("lavish:queuedDiffAnchors", { detail: { generation: msg.generation, anchors: msg.anchors } }));
+    }
     if (msg.type === "lavish:annotateElement" && annotationMode) {
       const queued = queuedAnchorElements.get(msg.selector)?.deref();
       const target = queued && queued.isConnected !== false ? queued : safeQuerySelector(msg.selector);
@@ -2944,6 +3014,8 @@ export function createArtifactSdk(
     }
   } else {
     window.addEventListener("message", handleInboundMessage);
+    postArtifactMessage("lavish:requestQueueEpoch");
+    window.addEventListener("pageshow", () => postArtifactMessage("lavish:requestQueueEpoch"));
   }
 
   // Bring a warning's element into view and flash it. The marker is Lavish UI, so it is excluded

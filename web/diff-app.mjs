@@ -4,11 +4,13 @@ registerCustomTheme('orangebox', async () => syntaxTheme);
 import { WorkerPoolManager } from '@pierre/diffs/worker';
 import { modelPatch } from '../src/diff/model.mjs';
 import { commentLocation, quoteSelection, zedCommand, zedUrl } from './locations.mjs';
+import { diffDigest, matchesDiffAnchor } from './diff-anchors.mjs';
 
 export function mountDiff(app, { embedded = false } = {}) {
 const el = (tag, text, cls) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; };
 const button = (text, action) => { const node = el('button', text); node.type = 'button'; node.addEventListener('click', action); return node; };
 const state = { data: null, files: [], hash: null, latest: null, pending: null, split: false, viewed: new Set(), collapsed: new Set(), current: 0, hunk: -1, draft: null, storageFailed: false };
+if (!embedded) window.addEventListener('beforeunload', event => { if (state.draft?.textarea.value) { event.preventDefault(); event.returnValue = ''; } });
 if (!window.lavishPreview) try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-kit-viewed') || '[]')); } catch { state.storageFailed = true; }
 const header = el('header', null, 'page-header'), toolbar = el('div', null, 'toolbar'), sidebar = el('nav', null, 'sidebar'), viewport = el('div', null, 'viewport'), notice = el('div', null, 'notice');
 // Lavish sees the shadow host, not the clicked diff line. Let CodeView handle
@@ -17,6 +19,76 @@ viewport.setAttribute('data-lavish-action', '');
 const layout = el('div', null, 'layout'); layout.append(sidebar, viewport); app.append(header, toolbar, notice, layout);
 const gutterObservers = new WeakMap();
 let view, worker, workerUrl, fallingBack = false;
+let diffAnchors = [], slots = [], generation = null, placementFrame = 0;
+const slotHeights = new Map();
+function reportPlacements(placements) { if (generation !== null) window.lavish?.reportDiffPlacements?.(generation, placements); }
+function schedulePlacements() {
+  if (placementFrame) cancelAnimationFrame(placementFrame);
+  placementFrame = requestAnimationFrame(() => {
+    placementFrame = 0;
+    if (!app.isConnected) return;
+    const bounds = viewport.getBoundingClientRect();
+    let clipTop = bounds.top;
+    for (const header of viewport.querySelectorAll('.file-header')) {
+      const rect = header.getBoundingClientRect();
+      if (rect.top <= bounds.top + 1 && rect.bottom > bounds.top && rect.right > bounds.left && rect.left < bounds.right) clipTop = Math.max(clipTop, rect.bottom);
+    }
+    const placements = [];
+    for (const slot of slots) {
+      if (!slot.box.isConnected) continue;
+      const rect = slot.box.getBoundingClientRect();
+      const left = Math.max(rect.left, bounds.left, 0), top = Math.max(rect.top, clipTop, 0);
+      const right = Math.min(rect.right, bounds.right, window.innerWidth), bottom = Math.min(rect.bottom, bounds.bottom, window.innerHeight);
+      if (right > left && bottom > top) placements.push({ id: slot.id, x: rect.left, y: rect.top, width: rect.width, height: rect.height, clip: { x: bounds.left, y: clipTop, width: bounds.width, height: bounds.bottom - clipTop } });
+    }
+    reportPlacements(placements);
+  });
+}
+function updateSlots() {
+  slots = [];
+  if (state.digest) for (const anchor of diffAnchors) {
+    const index = anchor.fileIndex;
+    if (!Number.isSafeInteger(index) || index < 0 || !state.files[index] || !matchesDiffAnchor(anchor, state.digest, state.files[index])) continue;
+    const box = el('div', null, 'queued-diff-slot');
+    box.style.height = `${slotHeights.get(anchor.id) || 38}px`;
+    slots.push({ id: anchor.id, index, box, annotation: { side: anchor.side, lineNumber: anchor.end, metadata: { box } } });
+  }
+  setItems();
+  schedulePlacements();
+}
+window.addEventListener('lavish:queuedDiffSizes', event => {
+  if (event.detail?.generation !== generation || !Array.isArray(event.detail?.sizes) || event.detail.sizes.length > 1000) return;
+  const changed = new Set(), slotsById = new Map(slots.map(slot => [slot.id, slot]));
+  for (const item of event.detail.sizes) {
+    const slot = slotsById.get(item?.id);
+    if (!slot || !Number.isInteger(item.height) || item.height < 38 || item.height > 320 || slotHeights.get(item.id) === item.height) continue;
+    slotHeights.set(item.id, item.height);
+    slot.box.style.height = `${item.height}px`;
+    changed.add(slot.index);
+  }
+  if (changed.size) {
+    state.version++;
+    for (const index of changed) view.updateItem(itemFor(state.files[index], index));
+    schedulePlacements();
+  }
+});
+window.addEventListener('lavish:scrollDiff', event => {
+  if (!app.isConnected) return;
+  const { x, y } = event.detail || {};
+  if (Number.isFinite(x) && Number.isFinite(y)) viewport.scrollBy({ left: x, top: y, behavior: 'instant' });
+});
+window.addEventListener('lavish:queuedDiffAnchors', event => {
+  generation = event.detail?.generation;
+  diffAnchors = Array.isArray(event.detail?.anchors) ? event.detail.anchors : [];
+  const activeIds = new Set(diffAnchors.map(anchor => anchor?.id));
+  for (const id of slotHeights.keys()) if (!activeIds.has(id)) slotHeights.delete(id);
+  updateSlots();
+});
+function requestDiffAnchors() { window.lavish?.requestDiffAnchors?.(); }
+window.addEventListener('lavish:ready', requestDiffAnchors);
+requestDiffAnchors();
+window.addEventListener('resize', schedulePlacements);
+window.addEventListener('scroll', schedulePlacements, true);
 // CodeView lays items out from itemMetrics without measuring headers, so the
 // header must render at exactly this height or every later file drifts.
 const HEADER_HEIGHT = 64;
@@ -40,6 +112,7 @@ function options() { return {
   enableGutterUtility: true,
   onPostRender: (node, instance, phase, context) => {
     gutterObservers.get(node)?.disconnect();
+    schedulePlacements();
     if (phase === 'unmount') { gutterObservers.delete(node); return; }
     const label = () => {
       const add = node.shadowRoot?.querySelector('[data-utility-button]');
@@ -61,7 +134,7 @@ function options() { return {
   renderAnnotation: annotation => annotation.metadata.box,
 }; }
 function currentAt(top) { let low = 0, high = state.files.length; while (low < high) { const mid = (low + high) >>> 1, itemTop = view.getTopForItem(String(mid)); if (itemTop != null && itemTop <= top + 1) low = mid + 1; else high = mid; } return Math.max(0, low - 1); }
-function createView() { view = new CodeView(options(), worker); view.setup(viewport); view.subscribeToScroll(top => { const current = currentAt(top); if (current !== state.current) { state.current = current; state.hunk = -1; markCurrent(); } }); }
+function createView() { view = new CodeView(options(), worker); view.setup(viewport); view.subscribeToScroll(top => { schedulePlacements(); const current = currentAt(top); if (current !== state.current) { state.current = current; state.hunk = -1; markCurrent(); } }); }
 createView();
 // Scroll only the sidebar; scrollIntoView would also scroll Lavish's parent page.
 function markCurrent() {
@@ -119,7 +192,7 @@ function fileHeader(index) {
 }
 const supportedLanguages = new Set(LAVISH_KIT_LANGUAGES);
 function itemFor(file, index) {
-  if (file.parsed && !file.parseError) { const lang = getFiletypeFromFileName(file.parsed.name); file.parsed.lang = supportedLanguages.has(lang) ? lang : 'text'; return { id: String(index), type: 'diff', fileDiff: file.parsed, version: state.version, collapsed: state.collapsed.has(file.newPath), annotations: state.draft?.index === index ? [state.draft.annotation] : [] }; }
+  if (file.parsed && !file.parseError) { const lang = getFiletypeFromFileName(file.parsed.name); file.parsed.lang = supportedLanguages.has(lang) ? lang : 'text'; return { id: String(index), type: 'diff', fileDiff: file.parsed, version: state.version, collapsed: state.collapsed.has(file.newPath), annotations: [...slots.filter(slot => slot.index === index).map(slot => slot.annotation), ...(state.draft?.index === index ? [state.draft.annotation] : [])] }; }
   return { id: String(index), type: 'file', file: { name: file.newPath, contents: '' }, collapsed: true };
 }
 function setItems() { state.version = (state.version || 0) + 1; if (view) view.setItems(state.files.map(itemFor)); }
@@ -178,10 +251,42 @@ function openDraft(index, range) {
   const box = el('section', null, 'draft'), textarea = el('textarea'); textarea.placeholder = 'Write a comment'; textarea.setAttribute('aria-label', 'Write a comment');
   box.setAttribute('data-lavish-action', '');
   const where = `${location.side} ${location.where} (${location.revision})`; box.append(el('strong', where), textarea);
-  const actions = el('div', null, 'draft-actions');
-  const queue = button('Queue comment', () => { if (!textarea.value.trim()) return; if (!window.lavish?.queuePrompt) { box.append(el('p', 'Comments require an active Lavish session.')); return; } const quote = quoteSelection(file.parsed, range); try { window.lavish.queuePrompt(`${embedded ? `Hub view: Changes (changes)\nRevision range: ${state.data.range}\n\n` : ''}${where}\n\n${quote}\n\n${textarea.value}`, { tag: 'code-comment', text: where }); closeDraft(); } catch (error) { box.append(el('p', `Could not queue comment: ${error.message}. Your draft is retained.`)); } });
+  const actions = el('div', null, 'draft-actions'), status = el('p', '', 'hint');
+  const cancel = button('Cancel', closeDraft);
+  let attempt = null;
+  const queue = button('Queue comment', async () => {
+    if (!textarea.value.trim() || queue.disabled) return;
+    if (!window.lavish?.queuePromptAcknowledged) { status.textContent = 'Comments require an active, up-to-date Lavish session.'; return; }
+    const data = state.data; queue.disabled = true; cancel.disabled = true;
+    try {
+      if (!attempt) {
+        const digest = state.digest || await state.digestPromise;
+        if (state.draft?.box !== box || state.data !== data) return;
+        if (!digest) throw new Error('Could not identify the current diff');
+        const quote = quoteSelection(file.parsed, range);
+        const target = { type: 'diff-line', digest, fileIndex: index, oldPath: file.oldPath, newPath: file.newPath, side: range.side || 'additions', start: location.start, end: location.end, revision: String(data.revision || '') };
+        const prefix = `${embedded ? `Hub view: Changes (changes)\nRevision range: ${data.range}\n\n` : ''}${where}\n\n${quote}\n\n`;
+        const random = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+        attempt = { prompt: prefix + textarea.value, options: { tag: 'code-comment', text: where, queueKey: '', target, commentPrefix: prefix, requestId: `q-${random}` } };
+      }
+      textarea.readOnly = true;
+      const result = await window.lavish.queuePromptAcknowledged(attempt.prompt, attempt.options);
+      if (state.draft?.box !== box) return;
+      if (result?.status === 'accepted') { const requestId = attempt.options.requestId; closeDraft(); window.lavish.releaseQueueRequest?.(requestId); return; }
+      if (result?.status === 'rejected') {
+        attempt = null; textarea.readOnly = false;
+        const reasons = { reserved: 'A send is reserved; finish or retry it before queueing.', ended: 'This review has ended.', capacity: 'Too many queue requests are awaiting confirmation; finish them or reload the review.', too_large: 'This comment or its quoted context is too large; select fewer lines or shorten it.', rate_limited: 'Queueing is temporarily busy; wait a moment and retry.', invalid: 'The comment could not be validated.' };
+        status.textContent = `${reasons[result.reason] || 'The comment could not be queued.'} Your draft is retained.`;
+      } else {
+        const reasons = { storage: 'The browser could not save the queue; free storage and retry.', rate_limited: 'Queueing is temporarily busy; wait a moment and retry this same request.', binding_changed: 'The review page changed; check the conversation before cancelling this draft.' };
+        status.textContent = reasons[result?.reason] || 'Queue confirmation is uncertain. Retry to check, or check the conversation before cancelling.';
+      }
+    } catch (error) { status.textContent = `Could not queue comment: ${error.message}. Your draft is retained.`; }
+    finally { queue.disabled = false; cancel.disabled = false; }
+  });
   queue.title = 'Queue comment (⌘Enter)'; textarea.setAttribute('aria-keyshortcuts', 'Meta+Enter');
-  actions.append(queue, button('Cancel', closeDraft));
+  actions.append(queue, cancel);
+  box.append(status);
   box.append(actions); textarea.addEventListener('input', updateNotice);
   textarea.addEventListener('keydown', event => {
     if (event.key !== 'Enter' || !event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing || event.repeat) return;
@@ -206,12 +311,14 @@ function updateNotice() {
 }
 function render(data) {
   closeDraft();
+  reportPlacements([]); state.digest = null; slots = [];
   const top = view.getScrollTop(), current = currentAt(top), previous = state.files[current]?.newPath, itemTop = view.getTopForItem(String(current)), offset = itemTop == null ? 0 : itemTop - top; state.data = data; state.version = (state.version || 0) + 1; state.files = modelPatch(data.patch); state.current = Math.max(0, state.files.findIndex(f => f.newPath === previous));
   const heading = el('div', null, 'heading'), titles = el('div', null, 'titles'); const range = el('span', `${data.range} · ${data.rangeSource}`, 'range'); range.title = range.textContent; titles.append(el('h1', 'Diff review'), range, el('span', `Generated ${data.generated || 'unknown'}`, 'hint')); heading.append(titles, toolbar); header.replaceChildren(heading);
   const commits = Array.isArray(data.commits) ? data.commits : data.commits ? String(data.commits).split('\n') : [];
   if (commits.length) { const details = el('details', null, 'commits'); details.open = state.commitsOpen ?? commits.length <= 3; details.addEventListener('toggle', () => { state.commitsOpen = details.open; }); details.append(el('summary', `${commits.length} commit${commits.length === 1 ? '' : 's'}`), el('pre', commits.join('\n'))); header.append(details); }
   renderToolbar(); renderSidebar(); setItems(); if (previous && state.files[state.current]?.newPath === previous) view.scrollTo({ type: 'item', id: String(state.current), align: 'start', offset }); else view.scrollTo({ type: 'position', position: top });
   if (!state.files.length) notice.textContent = `No changes in ${data.range}`; else updateNotice();
+  state.digestPromise = diffDigest(data).then(digest => { if (state.data === data) { state.digest = digest; updateSlots(); } return digest; }).catch(() => { if (state.data === data) { state.digest = null; reportPlacements([]); } return null; });
 }
 let loadingHash;
 function script(src, onerror) { const node = document.createElement('script'); node.src = src; node.onload = () => node.remove(); node.onerror = () => { node.remove(); onerror?.(); }; document.head.append(node); }
@@ -222,7 +329,7 @@ if (!embedded) {
   globalThis.lavishViewLatest = hash => { state.latest = hash; if (!state.hash && !loadingHash) loadData(hash); else if (state.hash) { state.pending = hash !== state.hash ? hash : null; updateNotice(); } };
   function poll() { script(`./latest.js?t=${Date.now()}`); } poll(); if (!window.lavishPreview) setInterval(poll, 2000);
 }
-return { hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range) { state.pending = null; updateNotice(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
+return { hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, hide() { reportPlacements([]); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range && state.data.root === data.root && state.data.revision === data.revision) { state.pending = null; updateNotice(); schedulePlacements(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
 }
 if (document.querySelector('#app') && !globalThis.hubConfig) mountDiff(document.querySelector('#app'));
 globalThis.mountLavishDiff = mountDiff;

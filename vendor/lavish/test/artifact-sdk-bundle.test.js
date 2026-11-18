@@ -188,6 +188,8 @@ function bootSdk({
     navigator: { platform },
     CSS: { escape: (value) => String(value) },
     Element: class Element {},
+    Event: class Event { constructor(type) { this.type = type; } },
+    CustomEvent: class CustomEvent { constructor(type, options) { this.type = type; this.detail = options?.detail; } },
     MutationObserver: class MutationObserver {
       observe() {}
       disconnect() {}
@@ -232,6 +234,7 @@ function bootSdk({
   const windowListeners = [];
   sandbox.window = {
     addEventListener: (type, handler) => windowListeners.push({ type, handler }),
+    dispatchEvent: (event) => { for (const listener of windowListeners.filter((entry) => entry.type === event.type)) listener.handler(event); },
     removeEventListener() {},
     setTimeout: scheduleTimer,
     clearTimeout: cancelTimer,
@@ -258,7 +261,7 @@ function bootSdk({
     Element: sandbox.Element,
     posted,
     body,
-    api: sandbox.window.lavish,
+    get api() { return sandbox.window.lavish; },
     // The SDK checks `instanceof Element`, so a stub that must pass that check takes this prototype.
     asElement(stub) {
       return Object.setPrototypeOf(stub, sandbox.Element.prototype);
@@ -571,6 +574,22 @@ test("the protocol-1 SDK rebinds a BFCache document without reinstalling its DOM
   assert.equal(revisions.document_sequence, 1);
   const clickListeners = sdk.documentListenerCount("click");
   assert.ok(clickListeners > 0, "the accepted document installs the full SDK once");
+  const sentAck = nextPortMessage(first.port1, "lavish:queuePrompt");
+  const accepted = sdk.api.queuePromptAcknowledged("context\n\ncomment", { requestId: "q-success", commentPrefix: "context\n\n" });
+  const ackRequest = await sentAck;
+  assert.equal(ackRequest.request_id, "q-success");
+  assert.equal(ackRequest.prompt._lavishDiffPrefix, "context\n\n");
+  first.port1.postMessage({ ...firstResponse, type: "lavish:queuePromptResult", document_sequence: 1, request_id: "q-success", ok: true });
+  assert.equal((await accepted).status, "accepted");
+  const staleSent = nextPortMessage(first.port1, "lavish:queuePrompt");
+  const uncertain = sdk.api.queuePromptAcknowledged("keep", { requestId: "q-stale" });
+  await staleSent;
+  first.port1.postMessage({ ...firstResponse, type: "lavish:queuePromptResult", document_sequence: 99, request_id: "q-stale", ok: true });
+  const barrier = nextPortMessage(first.port1, "lavish:snapshot");
+  first.port1.postMessage({ ...firstResponse, type: "lavish:requestSnapshot", document_sequence: 1 });
+  await barrier;
+  sdk.runTimersOf(3000);
+  assert.equal((await uncertain).status, "unknown");
 
   const heading = appendTo(sdk.body, cell("h1", "Headline"));
   sdk.click(heading);
@@ -605,6 +624,9 @@ test("the protocol-1 SDK rebinds a BFCache document without reinstalling its DOM
   });
   assert.equal((await uploadedSnapshotPromise).snapshot_request_id, "after-upload");
 
+  const rebindSent = nextPortMessage(first.port1, "lavish:queuePrompt");
+  const rebindPending = sdk.api.queuePromptAcknowledged("pending before rebind", { requestId: "q-rebind" });
+  await rebindSent;
   const departingPromise = nextPortMessage(first.port1, "lavish:documentDeparting");
   sdk.dispatchWindowEvent("pagehide");
   const departing = await departingPromise;
@@ -650,6 +672,17 @@ test("the protocol-1 SDK rebinds a BFCache document without reinstalling its DOM
   assert.equal(snapshot.type, "lavish:snapshot");
   assert.equal(snapshot.document_sequence, 2);
   assert.equal(snapshot.snapshot_request_id, "after-bfcache");
+  const received = [];
+  second.port1.addEventListener("message", (event) => received.push(event.data));
+  sdk.api.releaseQueueRequest("q-success");
+  second.port1.postMessage({ ...secondResponse, type: "lavish:queuePromptResult", document_sequence: 2, request_id: "q-rebind", ok: true });
+  const rebindBarrier = nextPortMessage(second.port1, "lavish:snapshot");
+  second.port1.postMessage({ ...secondResponse, type: "lavish:requestSnapshot", document_sequence: 2 });
+  await rebindBarrier;
+  assert.equal(received.some((message) => message.type === "lavish:releaseQueueRequest"), false);
+  sdk.runTimersOf(3000);
+  assert.equal((await rebindPending).status, "unknown");
+  assert.equal((await sdk.api.queuePromptAcknowledged("keep", { requestId: "q-stale" })).status, "unknown");
   assert.equal(sdk.documentListenerCount("click"), clickListeners, "rebind does not duplicate the SDK");
   assert.equal(sdk.card(), card, "BFCache preserves the live annotation card");
   assert.equal(card.querySelector("textarea").value, "Keep my annotated image");
@@ -821,6 +854,85 @@ test("a requested layout diagnostic publishes even when the result is unchanged"
   assert.equal(diagnostics.length, 2);
   assert.equal(diagnostics[1].artifact_pass_sequence, diagnostics[0].artifact_pass_sequence + 1);
   assert.deepEqual(diagnostics[1].findings, diagnostics[0].findings);
+});
+
+test("legacy queue acknowledgements ignore forged events and resolve only from the chrome origin", async () => {
+  const sdk = bootSdk();
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:setQueueEpoch", epoch: "epoch-1" } });
+  const first = sdk.api.queuePromptAcknowledged("draft", { requestId: "q-legacy" });
+  sdk.dispatchWindowEvent("message", { isTrusted: false, data: { type: "lavish:queuePromptResult", request_id: "q-legacy", ok: true } });
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://foreign.invalid", data: { type: "lavish:queuePromptResult", request_id: "q-legacy", ok: true } });
+  sdk.runTimersOf(3000);
+  assert.equal((await first).status, "unknown");
+  const retry = sdk.api.queuePromptAcknowledged("draft", { requestId: "q-legacy" });
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:queuePromptResult", queue_epoch: "epoch-1", request_id: "q-legacy", ok: false } });
+  assert.equal((await retry).status, "rejected");
+});
+
+test("a legacy epoch change rejects stale retries and ignores forged epoch messages", async () => {
+  const sdk = bootSdk();
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:setQueueEpoch", epoch: "epoch-1" } });
+  const pending = sdk.api.queuePromptAcknowledged("draft", { requestId: "q-epoch" });
+  assert.equal(sdk.posted.at(-1).queue_epoch, "epoch-1");
+  sdk.dispatchWindowEvent("message", { isTrusted: false, origin: "http://127.0.0.1", data: { type: "lavish:setQueueEpoch", epoch: "forged" } });
+  sdk.runTimersOf(3000);
+  assert.equal((await pending).status, "unknown");
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:setQueueEpoch", epoch: "epoch-2" } });
+  const count = sdk.posted.filter((message) => message.type === "lavish:queuePrompt").length;
+  const retry = await sdk.api.queuePromptAcknowledged("draft", { requestId: "q-epoch" });
+  assert.equal(retry.status, "unknown");
+  assert.equal(retry.reason, "binding_changed");
+  assert.equal(sdk.posted.filter((message) => message.type === "lavish:queuePrompt").length, count);
+});
+
+test("legacy rebinding retires capacity and ignores a delayed response from the old epoch", async () => {
+  const sdk = bootSdk();
+  const epoch = (value) => sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:setQueueEpoch", epoch: value } });
+  const result = (id, value) => sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:queuePromptResult", queue_epoch: value, request_id: id, ok: true } });
+  epoch("epoch-1");
+  const pending = Array.from({ length: 128 }, (_, i) => sdk.api.queuePromptAcknowledged("draft", { requestId: `q-old-${i}` }));
+  epoch("epoch-2");
+  for (const request of pending) assert.equal((await request).reason, "binding_changed");
+  assert.equal((await sdk.api.queuePromptAcknowledged("draft", { requestId: "q-old-0" })).reason, "binding_changed");
+  const fresh = sdk.api.queuePromptAcknowledged("new", { requestId: "q-new" });
+  result("q-new", "epoch-1");
+  result("q-new", "epoch-2");
+  assert.equal((await fresh).status, "accepted");
+});
+
+test("an uncertain storage acknowledgement keeps the request available for retry", async () => {
+  const sdk = bootSdk();
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:setQueueEpoch", epoch: "epoch-1" } });
+  const first = sdk.api.queuePromptAcknowledged("draft", { requestId: "q-storage" });
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:queuePromptResult", queue_epoch: "epoch-1", request_id: "q-storage", ok: false, uncertain: true } });
+  assert.equal((await first).status, "unknown");
+  sdk.api.releaseQueueRequest("q-storage");
+  assert.equal(sdk.posted.some((message) => message.type === "lavish:releaseQueueRequest"), false);
+  const retry = sdk.api.queuePromptAcknowledged("draft", { requestId: "q-storage" });
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:queuePromptResult", queue_epoch: "epoch-1", request_id: "q-storage", ok: true } });
+  assert.equal((await retry).status, "accepted");
+});
+
+test("queue acknowledgement waiters reject concurrent IDs and bound outstanding bindings", async () => {
+  const sdk = bootSdk();
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:setQueueEpoch", epoch: "epoch-1" } });
+  const first = sdk.api.queuePromptAcknowledged("first", { requestId: "q-shared" });
+  const concurrent = sdk.api.queuePromptAcknowledged("second", { requestId: "q-shared" });
+  assert.equal((await concurrent).status, "busy");
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:queuePromptResult", queue_epoch: "epoch-1", request_id: "q-shared", ok: true } });
+  assert.equal((await first).status, "accepted");
+  const pending = [];
+  for (let i = 0; i < 127; i++) pending.push(sdk.api.queuePromptAcknowledged("note", { requestId: `q-cap-${i}` }));
+  assert.equal((await sdk.api.queuePromptAcknowledged("overflow", { requestId: "q-overflow" })).status, "rejected");
+  sdk.runTimersOf(3000);
+  for (const promise of pending) assert.equal((await promise).status, "unknown");
+  const retry = sdk.api.queuePromptAcknowledged("note", { requestId: "q-cap-0" });
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:queuePromptResult", queue_epoch: "epoch-1", request_id: "q-cap-0", ok: true } });
+  assert.equal((await retry).status, "accepted");
+  sdk.api.releaseQueueRequest("q-cap-0");
+  const fresh = sdk.api.queuePromptAcknowledged("new", { requestId: "q-fresh" });
+  sdk.dispatchWindowEvent("message", { isTrusted: true, origin: "http://127.0.0.1", data: { type: "lavish:queuePromptResult", queue_epoch: "epoch-1", request_id: "q-fresh", ok: false } });
+  assert.equal((await fresh).status, "rejected");
 });
 
 test("the served SDK echoes the snapshot request id", () => {

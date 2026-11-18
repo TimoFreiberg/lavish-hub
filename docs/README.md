@@ -6,6 +6,7 @@ Start with the [README](../README.md) for installation and the [hub guide](hub.m
 | --- | --- |
 | [cli.md](cli.md) | Commands and exit status |
 | [hub.md](hub.md) | Workspace owner, publication, actions, and feedback |
+| [ui-conventions.md](ui-conventions.md) | UI interaction, layout, accessibility, and sandbox rules |
 | [hub-gaps.md](hub-gaps.md) | Removed workflows without hub equivalents |
 | [feedback-routing.md](feedback-routing.md) | Feedback and action delivery guarantees |
 | [files-and-logs.md](files-and-logs.md) | Local state and diagnostics |
