@@ -414,6 +414,7 @@ export async function serve({
   compressArtifact = compressArtifactBytes,
   onHubCompressionJoin,
   onHubCompressionQueued,
+  onHubCompressionCancel,
 } = {}) {
   // Keep the transport dependency off fast metadata paths such as `--version`.
   const { WebSocket, WebSocketServer } = await import("ws");
@@ -2433,46 +2434,74 @@ export async function serve({
   let compressedHubAssetBytes = 0;
   const maxCompressedHubAssetBytes = 8 * 1024 * 1024;
 
-  async function cachedHubCompression(cacheKey, encoding, bytes) {
+  async function cachedHubCompression(cacheKey, encoding, bytes, res) {
+    if (shuttingDown || res.destroyed) throw Object.assign(new Error("Compression cancelled"), { status: 503 });
     if (compressedHubAssets.has(cacheKey)) return compressedHubAssets.get(cacheKey);
-    if (compressingHubAssets.has(cacheKey)) {
+    let job = compressingHubAssets.get(cacheKey);
+    if (job) {
       onHubCompressionJoin?.();
-      return compressingHubAssets.get(cacheKey);
-    }
-    if (compressingHubAssets.size >= 12)
-      throw Object.assign(new Error("Hub compression capacity exceeded"), { status: 503 });
-    const pending = (async () => {
-      if (activeHubCompressions >= 6) {
-        await new Promise((resolve) => {
-          hubCompressionQueue.push(resolve);
-          onHubCompressionQueued?.();
-        });
-      } else {
-        activeHubCompressions++;
-      }
-      try {
-        return await compressArtifact(encoding, bytes);
-      } finally {
-        const next = hubCompressionQueue.shift();
-        if (next) next();
-        else activeHubCompressions--;
-      }
-    })();
-    compressingHubAssets.set(cacheKey, pending);
-    try {
-      const result = await pending;
-      if (result.length <= maxCompressedHubAssetBytes) {
-        while (compressedHubAssets.size >= 6 || compressedHubAssetBytes + result.length > maxCompressedHubAssetBytes) {
-          const oldest = compressedHubAssets.keys().next().value;
-          compressedHubAssetBytes -= compressedHubAssets.get(oldest).length;
-          compressedHubAssets.delete(oldest);
+    } else {
+      if (compressingHubAssets.size >= 12)
+        throw Object.assign(new Error("Hub compression capacity exceeded"), { status: 503 });
+      job = { consumers: 0, queued: false, reject: null, pending: null };
+      const current = job;
+      const pending = (async () => {
+        if (activeHubCompressions >= 6) {
+          await new Promise((resolve, reject) => {
+            current.queued = true;
+            current.reject = reject;
+            hubCompressionQueue.push({ job: current, resolve });
+            onHubCompressionQueued?.();
+          });
+        } else {
+          activeHubCompressions++;
         }
-        compressedHubAssets.set(cacheKey, result);
-        compressedHubAssetBytes += result.length;
+        try {
+          const result = await compressArtifact(encoding, bytes);
+          if (result.length <= maxCompressedHubAssetBytes && !shuttingDown) {
+            while (
+              compressedHubAssets.size >= 6 ||
+              compressedHubAssetBytes + result.length > maxCompressedHubAssetBytes
+            ) {
+              const oldest = compressedHubAssets.keys().next().value;
+              compressedHubAssetBytes -= compressedHubAssets.get(oldest).length;
+              compressedHubAssets.delete(oldest);
+            }
+            compressedHubAssets.set(cacheKey, result);
+            compressedHubAssetBytes += result.length;
+          }
+          return result;
+        } finally {
+          const next = hubCompressionQueue.shift();
+          if (next) {
+            next.job.queued = false;
+            next.resolve();
+          } else activeHubCompressions--;
+        }
+      })();
+      current.pending = pending.finally(() => {
+        if (compressingHubAssets.get(cacheKey) === current) compressingHubAssets.delete(cacheKey);
+      });
+      compressingHubAssets.set(cacheKey, current);
+    }
+    job.consumers++;
+    const current = job;
+    const disconnect = () => {
+      current.consumers--;
+      if (current.consumers === 0 && current.queued) {
+        const index = hubCompressionQueue.findIndex((entry) => entry.job === current);
+        if (index !== -1) hubCompressionQueue.splice(index, 1);
+        current.queued = false;
+        if (compressingHubAssets.get(cacheKey) === current) compressingHubAssets.delete(cacheKey);
+        current.reject(Object.assign(new Error("Compression cancelled"), { status: 503 }));
+        onHubCompressionCancel?.();
       }
-      return result;
+    };
+    res.once("close", disconnect);
+    try {
+      return await current.pending;
     } finally {
-      compressingHubAssets.delete(cacheKey);
+      res.removeListener("close", disconnect);
     }
   }
 
@@ -2633,7 +2662,7 @@ export async function serve({
             if (encoding !== "identity") {
               const cacheKey = `${hash}:${encoding}`;
               try {
-                representation = await cachedHubCompression(cacheKey, encoding, bytes);
+                representation = await cachedHubCompression(cacheKey, encoding, bytes, res);
               } catch (error) {
                 if (!choice.identityAllowed) throw error;
                 encoding = "identity";
@@ -3488,6 +3517,10 @@ export async function serve({
   function shutdown(reloadKey = "", reason = "", cause = "requested") {
     if (shuttingDown) return;
     shuttingDown = true;
+    for (const { job } of hubCompressionQueue.splice(0)) {
+      job.queued = false;
+      job.reject(Object.assign(new Error("Server shutting down"), { status: 503 }));
+    }
     hubProxy.clear();
     writeLog(`[lavish] shutting down: ${cause}${reason ? ` (reason=${reason})` : ""}`);
     if (idleTimer) {

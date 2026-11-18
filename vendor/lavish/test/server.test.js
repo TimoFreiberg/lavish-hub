@@ -3146,107 +3146,160 @@ test("concurrent registered asset compression shares failures and retries", asyn
   }
 });
 
-test("registered asset compression queues a seventh key without serving forbidden identity", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "lavish-hub-capacity-"));
-  const artifact = path.join(dir, "artifact.html");
-  await writeFile(artifact, "<!doctype html><title>Hub</title>");
-  const contents = Array.from({ length: 7 }, (_, i) => Buffer.from(`asset ${i};`.repeat(1000)));
-  const names = contents.map((bytes) => `hub-asset-${createHash("sha256").update(bytes).digest("hex")}.js`);
-  await Promise.all(names.map((name, i) => writeFile(path.join(dir, name), contents[i])));
-  let release = () => {};
-  let allStarted = () => {};
-  let queueEntered = () => {};
-  const queued = /** @type {Promise<void>} */ (
-    new Promise((resolve) => {
-      queueEntered = resolve;
-    })
-  );
-  let calls = 0;
-  const gate = /** @type {Promise<void>} */ (
-    new Promise((resolve) => {
-      release = resolve;
-    })
-  );
-  const started = /** @type {Promise<void>} */ (
-    new Promise((resolve) => {
-      allStarted = resolve;
-    })
-  );
-  const server = await serve({
-    port: 0,
-    stateFile: path.join(dir, "state.json"),
-    onHubCompressionQueued: () => queueEntered(),
-    compressArtifact: async (_encoding, bytes) => {
-      if (++calls === 6) allStarted();
-      await gate;
-      return zlib.gzipSync(bytes);
-    },
-  });
-  const abort = new AbortController();
-  const pending = [];
-  try {
-    const base = `http://127.0.0.1:${server.port}`;
-    const urls = [];
-    for (let i = 0; i < names.length; i += 3) {
-      const file = path.join(dir, `artifact-${i}.html`);
-      await writeFile(file, "<!doctype html><title>Hub</title>");
-      const { key } = await fetch(`${base}/api/sessions`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ file }),
-      }).then((res) => res.json());
-      const assets = names.slice(i, i + 3);
-      assert.equal(
-        (
-          await fetch(`${base}/api/hub-proxy/register`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              key,
-              port: 12345,
-              capability: "a".repeat(64),
-              resourceKey: "b".repeat(64),
-              identityKey: "c".repeat(64),
-              assets,
-            }),
-          })
-        ).status,
-        200,
-      );
-      urls.push(...assets.map((name) => `${base}/artifact/${key}/${name}`));
-    }
-    const request = (url) =>
-      fetch(url, {
-        headers: { "accept-encoding": "gzip, identity;q=0" },
-        signal: abort.signal,
+for (const shutdown of [false, true])
+  test(`registered asset compression ${shutdown ? "drains on shutdown" : "reclaims abandoned queue capacity"}`, async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "lavish-hub-capacity-"));
+    const artifact = path.join(dir, "artifact.html");
+    await writeFile(artifact, "<!doctype html><title>Hub</title>");
+    const contents = Array.from({ length: 13 }, (_, i) => Buffer.from(`asset ${i};`.repeat(1000)));
+    const names = contents.map((bytes) => `hub-asset-${createHash("sha256").update(bytes).digest("hex")}.js`);
+    await Promise.all(names.map((name, i) => writeFile(path.join(dir, name), contents[i])));
+    let release = () => {};
+    let allStarted = () => {};
+    let queueEntered = () => {};
+    let joined = () => {};
+    let cancelled = () => {};
+    const queued = /** @type {Promise<void>} */ (
+      new Promise((resolve) => {
+        queueEntered = () => resolve(undefined);
+      })
+    );
+    let calls = 0;
+    const gate = /** @type {Promise<void>} */ (
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+    const started = /** @type {Promise<void>} */ (
+      new Promise((resolve) => {
+        allStarted = resolve;
+      })
+    );
+    const server = await serve({
+      port: 0,
+      stateFile: path.join(dir, "state.json"),
+      onHubCompressionQueued: () => queueEntered(),
+      onHubCompressionJoin: () => joined(),
+      onHubCompressionCancel: () => cancelled(),
+      compressArtifact: async (_encoding, bytes) => {
+        if (++calls === 6) allStarted();
+        await gate;
+        return zlib.gzipSync(bytes);
+      },
+    });
+    const abort = new AbortController();
+    const pending = [];
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const urls = [];
+      for (let i = 0; i < names.length; i += 3) {
+        const file = path.join(dir, `artifact-${i}.html`);
+        await writeFile(file, "<!doctype html><title>Hub</title>");
+        const { key } = await fetch(`${base}/api/sessions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ file }),
+        }).then((res) => res.json());
+        const assets = names.slice(i, i + 3);
+        assert.equal(
+          (
+            await fetch(`${base}/api/hub-proxy/register`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                key,
+                port: 12345,
+                capability: "a".repeat(64),
+                resourceKey: "b".repeat(64),
+                identityKey: "c".repeat(64),
+                assets,
+              }),
+            })
+          ).status,
+          200,
+        );
+        urls.push(...assets.map((name) => `${base}/artifact/${key}/${name}`));
+      }
+      const request = (url) =>
+        fetch(url, {
+          headers: { "accept-encoding": "gzip, identity;q=0" },
+          signal: abort.signal,
+        });
+      pending.push(...urls.slice(0, 6).map(request));
+      await Promise.race([
+        started,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("compression timed out")), 2000)),
+      ]);
+      pending.push(request(urls[6]));
+      await Promise.race([
+        queued,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("queue timed out")), 2000)),
+      ]);
+      assert.equal(calls, 6);
+      const joinPromise = new Promise((resolve) => {
+        joined = () => resolve(undefined);
       });
-    pending.push(...urls.slice(0, 6).map(request));
-    await Promise.race([
-      started,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("compression timed out")), 2000)),
-    ]);
-    pending.push(request(urls[6]));
-    await Promise.race([
-      queued,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("queue timed out")), 2000)),
-    ]);
-    assert.equal(calls, 6);
-    release();
-    const responses = await Promise.all(pending);
-    for (const [i, response] of responses.entries()) {
-      assert.equal(response.status, 200);
-      assert.equal(response.headers.get("content-encoding"), "gzip");
-      assert.deepEqual(Buffer.from(await response.arrayBuffer()), contents[i]);
+      const firstAbort = new AbortController();
+      const shared = fetch(urls[6], {
+        headers: { "accept-encoding": "gzip, identity;q=0" },
+        signal: firstAbort.signal,
+      });
+      const sharedSettled = shared.catch(() => null);
+      await joinPromise;
+      firstAbort.abort();
+      await sharedSettled;
+      const abandonedAbort = new AbortController();
+      let cancelledPromise = new Promise((resolve) => {
+        cancelled = () => resolve(undefined);
+      });
+      let queuePromise = new Promise((resolve) => {
+        queueEntered = () => resolve(undefined);
+      });
+      const abandoned = fetch(urls[7], {
+        headers: { "accept-encoding": "gzip, identity;q=0" },
+        signal: abandonedAbort.signal,
+      }).catch(() => null);
+      await queuePromise;
+      for (const url of urls.slice(8, 12)) {
+        queuePromise = new Promise((resolve) => {
+          queueEntered = () => resolve(undefined);
+        });
+        pending.push(request(url));
+        await queuePromise;
+      }
+      assert.equal((await request(urls[12])).status, 503);
+      abandonedAbort.abort();
+      await abandoned;
+      await cancelledPromise;
+      queuePromise = new Promise((resolve) => {
+        queueEntered = () => resolve(undefined);
+      });
+      pending.push(request(urls[12]));
+      await queuePromise;
+      if (shutdown) {
+        const closing = server.close();
+        await closing;
+        release();
+        await Promise.allSettled(pending);
+        assert.equal(calls, 6);
+        return;
+      }
+      release();
+      const responses = await Promise.all(pending);
+      for (const [i, response] of responses.entries()) {
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("content-encoding"), "gzip");
+        assert.deepEqual(Buffer.from(await response.arrayBuffer()), contents[i < 7 ? i : i + 1]);
+      }
+      assert.equal(calls, 12);
+    } finally {
+      release();
+      abort.abort();
+      await Promise.allSettled(pending);
+      await server.close();
+      await rm(dir, { recursive: true, force: true });
     }
-    assert.equal(calls, 7);
-  } finally {
-    release();
-    abort.abort();
-    await Promise.allSettled(pending);
-    await server.close();
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+  });
 
 test("the artifact revision advances on each begun artifact load", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
