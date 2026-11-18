@@ -212,7 +212,20 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const [script, style, diffScript, diffStyle, markdownScript, documentStyle] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8'), readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'), readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8')]);
     await writeSiblings();
     const config = JSON.stringify({ url: browserUrl, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root }).replaceAll('<', '\\u003c');
-    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><style>${themeCss}\n${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><script>${diffScript.replaceAll('</script', '<\\/script')}</script><script>${markdownScript.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script></body></html>`;
+    async function asset(content, extension) {
+      const name = `hub-asset-${digest(content)}.${extension}`;
+      const target = path.join(identity.directory, name);
+      try { await writeFile(target, content, { mode: 0o600, flag: 'wx' }); }
+      catch (error) {
+        if (error.code !== 'EEXIST' || await readFile(target, 'utf8') !== content) throw error;
+      }
+      return name;
+    }
+    const [cssAsset, diffAsset, markdownAsset, appAsset] = await Promise.all([
+      asset(`${themeCss}\n${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }`, 'css'),
+      asset(diffScript, 'js'), asset(markdownScript, 'js'), asset(script, 'js'),
+    ]);
+    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><link rel="stylesheet" href="${cssAsset}"></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><script src="${diffAsset}"></script><script src="${markdownAsset}"></script><script src="${appAsset}"></script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);
     const review = await prepare(page, { reopen: options.reopen, log: console.error, vendored: true });

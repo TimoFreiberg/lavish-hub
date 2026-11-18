@@ -13,6 +13,7 @@ import { chromium } from 'playwright-core';
 import express from 'express';
 import { EventEmitter } from 'node:events';
 import { createHubProxy } from '../vendor/lavish/src/hub-proxy.js';
+import { buildSelfContainedHtml } from '../vendor/lavish/src/export-bundle.js';
 
 const cli = path.resolve('bin/lavish-kit');
 test('hub foreground owner rejects duplicates and stops without a relay', async t => {
@@ -73,6 +74,23 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.match((await run(process.execPath, [cli, 'hub'], { env, cwd: subdir })).stdout, /Hub owner running/);
   const other = path.join(dir, 'other'); await mkdir(other); execFileSync('jj', ['git', 'init', other]);
   await assert.rejects(run(process.execPath, [cli, 'hub', '--workspace', other], { env }), /No live hub owner/);
+  const hubHtml = await readFile(path.join(identity.directory, 'hub.html'), 'utf8');
+  const bundleNames = [...hubHtml.matchAll(/(?:src|href)="(hub-asset-[a-f0-9]{64}\.(?:js|css))"/g)].map(match => match[1]);
+  assert.equal(bundleNames.length, 4);
+  let assetBytes = 0;
+  for (const name of bundleNames) {
+    const response = await fetch(`${browserBase}/${name}`);
+    assert.equal(response.status, 200);
+    assetBytes += (await response.arrayBuffer()).byteLength;
+    const status = await new Promise((resolve, reject) => http.get(`${browserBase}/${name}`, { headers: { 'if-none-match': response.headers.get('etag') } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }).on('error', reject));
+    assert.equal(status, 304);
+  }
+  assert.ok(assetBytes > Buffer.byteLength(hubHtml));
+  console.log(`Hub HTML: ${Buffer.byteLength(hubHtml)} bytes; cacheable assets: ${assetBytes} bytes`);
+  const exported = await buildSelfContainedHtml(hubHtml, { baseDir: identity.directory, confineDir: identity.directory });
+  assert.deepEqual(exported.warnings, []);
+  for (const name of bundleNames) assert.ok(!exported.html.includes(name));
+  assert.ok(exported.html.includes('globalThis.hubConfig'));
   const connection = JSON.parse(await readFile(runtime, 'utf8'));
   const request = async (operation, body = {}) => {
     const response = await fetch(`${connection.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': connection.capability }, body: JSON.stringify({ operation, ...body }) });
