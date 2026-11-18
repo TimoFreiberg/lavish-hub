@@ -229,7 +229,8 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       asset(diffScript, 'js'), asset(markdownScript, 'js'), asset(script, 'js'),
     ]);
     transport.assets = [diffAsset, markdownAsset, appAsset];
-    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><link rel="stylesheet" href="${cssAsset}"></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><script type="application/x-hub-lazy" data-hub-bundle="diff" src="${diffAsset}"></script><script type="application/x-hub-lazy" data-hub-bundle="markdown" src="${markdownAsset}"></script><script src="${appAsset}"></script></body></html>`;
+    // Media references stay unloaded until requested and export as data URLs without executing scripts.
+    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><link rel="stylesheet" href="${cssAsset}"></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><audio preload="none" data-hub-bundle="diff" src="${diffAsset}"></audio><audio preload="none" data-hub-bundle="markdown" src="${markdownAsset}"></audio><script src="${appAsset}"></script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);
     const review = await prepare(page, { reopen: options.reopen, log: console.error, vendored: true });

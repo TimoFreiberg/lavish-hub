@@ -159,7 +159,9 @@ try {
   const offline = await browser.newContext({ offline: true });
   const offlinePage = await offline.newPage(); await offlinePage.goto(pathToFileURL(exportPath).href);
   await offlinePage.getByText('Workspace hub', { exact: true }).waitFor();
-  assert.equal(await offlinePage.evaluate(() => typeof globalThis.hubMarkdownRenderer), 'function');
+  assert.equal(await offlinePage.evaluate(() => typeof globalThis.hubMarkdownRenderer), 'undefined');
+  await offlinePage.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await offlinePage.waitForFunction(() => typeof globalThis.hubMarkdownRenderer === 'function');
   const rendered = await offlinePage.evaluate(() => {
     const body = document.createElement('textarea'), preview = document.createElement('div');
     body.value = '# Offline renderer check\n\nA **bold** result.';

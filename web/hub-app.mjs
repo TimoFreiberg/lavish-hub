@@ -8,7 +8,7 @@ const bundleLoads = new Map();
 function loadBundle(name, globalName) {
   if (typeof globalThis[globalName] === 'function') return Promise.resolve();
   if (bundleLoads.has(name)) return bundleLoads.get(name);
-  const reference = document.querySelector(`script[data-hub-bundle="${name}"]`);
+  const reference = document.querySelector(`audio[data-hub-bundle="${name}"]`);
   const loading = new Promise((resolve, reject) => {
     if (!reference?.src) { reject(new Error(`Missing ${name} renderer`)); return; }
     const script = document.createElement('script');

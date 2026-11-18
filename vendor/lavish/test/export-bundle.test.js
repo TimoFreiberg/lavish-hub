@@ -58,27 +58,24 @@ function decodeFirstSvgDataUri(html) {
   return Buffer.from(match[1], "base64").toString("utf8");
 }
 
-test("activates only successfully inlined digest-matching hub assets", async () => {
+test("keeps an authored inert script inert even when its hub-style digest matches", async () => {
   const script = "globalThis.renderer = true;";
   const digest = createHash("sha256").update(script).digest("hex");
-  const good = `hub-asset-${digest}.js`;
-  const bad = `hub-asset-${"0".repeat(64)}.js`;
-  const marker = 'type="application/x-hub-lazy" data-hub-bundle="diff"';
-  const html =
-    `<script ${marker} src="${good}"></script>` +
-    `<script ${marker}>globalThis.inline = true;</script>` +
-    `<script ${marker} src="https://example.com/${good}"></script>` +
-    `<script ${marker} src="${bad}"></script>` +
-    `<script ${marker} src="hub-asset-malformed.js"></script>` +
-    `<script ${marker} src="hub-asset-${"1".repeat(64)}.js"></script>`;
+  const name = `hub-asset-${digest}.js`;
+  const html = `<script type="application/x-hub-lazy" data-hub-bundle="diff" src="${name}"></script><script src="app.js"></script>`;
+  const reads = [];
+  const read = localReader({ [`/art/${name}`]: script, "/art/app.js": "globalThis.app = true;" });
   const { html: out } = await buildSelfContainedHtml(html, {
     baseDir: "/art",
-    readLocalFile: localReader({ [`/art/${good}`]: script, [`/art/${bad}`]: script }),
+    readLocalFile: async (file) => {
+      reads.push(file);
+      return read(file);
+    },
   });
-  assert.match(out, /<script>globalThis\.renderer = true;<\/script>/);
-  assert.equal((out.match(/type="application\/x-hub-lazy"/g) || []).length, 5);
-  assert.match(out, /globalThis\.inline = true/);
-  assert.match(out, /https:\/\/example\.com\//);
+  assert.match(out, /<script type="application\/x-hub-lazy" data-hub-bundle="diff" src="hub-asset-/);
+  assert.doesNotMatch(out, /globalThis\.renderer/);
+  assert.match(out, /<script>globalThis\.app = true;<\/script>/);
+  assert.ok(!reads.some((file) => file.endsWith(name)));
 });
 
 test("inlines a local stylesheet link as a <style> block", async () => {

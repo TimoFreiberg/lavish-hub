@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -742,21 +741,6 @@ function isCspMeta(attrs) {
 
 async function inlineScript(tag, attrs, body, closeTag, baseDir, ctx) {
   const src = getAttr(attrs, "src");
-  const hubDigest =
-    getAttr(attrs, "type") === "application/x-hub-lazy" &&
-    ["diff", "markdown"].includes(getAttr(attrs, "data-hub-bundle")) &&
-    !hasAttr(attrs, "async") &&
-    !hasAttr(attrs, "defer") &&
-    /^hub-asset-([0-9a-f]{64})\.js$/.exec(src)?.[1];
-  if (hubDigest) {
-    const loaded = await loadText(src, baseDir, ctx, HTML_REF_OPTIONS);
-    if (loaded && createHash("sha256").update(loaded.text).digest("hex") === hubDigest) {
-      const cleanedAttrs = removeAttrs(attrs, ["src", "integrity", "crossorigin", "type", "data-hub-bundle"]);
-      const startTag = await transformStartTag(tag, cleanedAttrs, false, baseDir, ctx);
-      warnClassicScriptDynamicImports(loaded.text, loaded.baseDir, ctx);
-      return `${startTag}${escapeRawText(scrubClassicScriptFileUrlComments(loaded.text, ctx), "script")}${closeTag}`;
-    }
-  }
   if (!src) {
     let inlineBody = body;
     if (isModuleScript(attrs)) {
