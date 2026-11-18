@@ -30,6 +30,14 @@ deletes and recreates that directory. Restart it to pick up code changes. Stop
 it with Ctrl-C or `just demo-stop`. Use `--dir`, `--port` and `--no-open` to
 change the defaults.
 
+For remote development, forward the demo URL's port (4399 by default). The UI,
+actions and published document assets all use that browser-facing address, even
+if the tunnel assigns a different local port. No callback tunnel is needed.
+With [Rex](https://www.superlogical.com/rex/docs/reference/cli#rex-forward-open-flags-url--hostport--block),
+open the printed UI URL or explicitly forward port 4399. Terminal-block port
+discovery can find both the UI and the owner's private control listener and
+refuse to choose between them. The private listener is not for browser access.
+
 ## Complete correctness run
 
 Run `just check` (or `node scripts/check.mjs all`) for the entire pipeline.

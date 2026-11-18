@@ -24,6 +24,32 @@ Live-event WebSockets carry an application-level ping/pong (`liveEventHeartbeatM
 State lives at `~/.lavish-axi/state.json` (`LAVISH_AXI_STATE_DIR`), shared across all projects and keyed by a sha256 prefix of the canonicalized file path - the canonical HTML path _is_ the identity, so the CLI never needs opaque session IDs (`src/session-store.js:sessionKey`).
 That makes the session key **derived, not secret**: anyone who learns the artifact path (or sees a session URL) knows it, so no route may treat key possession as authorization.
 
+### Hub callbacks
+
+The packaged lavish-kit hub registers a per-session callback through loopback-only
+`/api/hub-proxy/register` control. Registration rejects Origin, Referer and
+forwarded-host/client-address headers and requires an active session. Browser
+`/hub-proxy/:key` requests pass the existing Host guard, then only the narrow
+capability-protected action, null-origin preflight and resource-key-protected
+resource routes bypass the generic mutating-route origin check. The session key
+alone authorizes nothing. CLI control keeps using the private owner listener.
+
+The proxy connects only to the registered `127.0.0.1` port and proves the owner's
+identity with a fresh HMAC challenge before sending capabilities or resource
+paths on that same socket. It never reconnects that socket or follows redirects,
+so a reused port cannot receive secrets. In-flight requests keep their captured
+target. End, unregister and shutdown invalidate registrations, including pending
+ones. Owner cleanup cannot revoke a replacement with a different identity.
+Registrations are in memory and the owner refreshes them before polling. An
+interrupted consuming poll is not retried to recover a registration.
+
+Proxied resources carry the artifact sandbox CSP, nosniff and no-referrer even
+when opened outside an iframe. Browser addresses resolve from the actual loaded
+URL, not the server's configured address or the opaque iframe's `location.origin`.
+Only required headers cross the proxy, actions retain the 64 KiB body limit, and
+each upstream request has a bounded lifetime. A failed acknowledgement does not
+prove a mutating action failed, so the proxy does not retry it.
+
 ### Request flow
 
 1. `lavish-axi <file.html>` (`openCommand`) -> POST `/api/sessions` -> `SessionStore.upsertSession` -> the CLI opens the returned session URL in the browser.

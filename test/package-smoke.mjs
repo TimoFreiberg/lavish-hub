@@ -93,7 +93,7 @@ try {
   const config = JSON.parse(generated.match(/globalThis\.hubConfig=(\{[^<]+?\});/)?.[1] || 'null');
   assert.ok(config?.resourceKey);
   for (const [name, expected] of [['example.css', 'color: red'], ['example.js', 'window.example']]) {
-    const response = await fetch(`${config.url}/resources/${config.resourceKey}/example/${name}`);
+    const response = await fetch(new URL(`${config.url}/resources/${config.resourceKey}/example/${name}`, url));
     assert.equal(response.status, 200);
     assert.ok((await response.text()).includes(expected));
   }

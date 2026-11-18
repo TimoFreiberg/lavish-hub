@@ -51,6 +51,28 @@ test('hub HTTP requires the patched version and matching state before polling', 
   assert.equal(polls, 1);
 });
 
+test('hub registration recognizes only the specific ended-session response', async t => {
+  const x = await fixture(t);
+  const transport = { url: 'http://127.0.0.1:1234', capability: 'a'.repeat(64), resourceKey: 'b'.repeat(64), identityKey: 'c'.repeat(64) };
+  let registration = { status: 404, body: { code: 'HUB_SESSION_ENDED', error: 'Session not active' } }, healthFailure = false;
+  const client = createLavishClient({ env: x.env, fetch: async url => {
+    if (new URL(url).pathname === '/health') return healthFailure ? Response.json(registration.body, { status: registration.status }) : Response.json(x.health);
+    return Response.json(registration.body, { status: registration.status });
+  } });
+  assert.equal(await client.registerHub(x.file, transport), false);
+  healthFailure = true;
+  await assert.rejects(client.registerHub(x.file, transport), error => error.code === 'HUB_SESSION_ENDED' && error.status === 404);
+  healthFailure = false;
+  registration = { status: 404, body: { error: 'Session not active' } };
+  await assert.rejects(client.registerHub(x.file, transport), error => error.code === 'NOT_FOUND');
+  registration = { status: 500, body: { code: 'HUB_SESSION_ENDED', error: 'Session not active' } };
+  await assert.rejects(client.registerHub(x.file, transport), error => error.status === 500);
+  registration = { status: 404, body: { code: 'HUB_SESSION_ENDED', error: 'Other problem' } };
+  await assert.rejects(client.registerHub(x.file, transport), /Other problem/);
+  registration = { status: 200, body: { ok: true } };
+  assert.equal(await client.registerHub(x.file, transport), true);
+});
+
 test('vendored preflight only permits refusal or a compatible server', async t => {
   const x = await fixture(t); let calls = 0;
   const refused = createLavishClient({ env: x.env, vendored: true, fetch: async () => {

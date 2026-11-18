@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { readFile, realpath, stat } from 'node:fs/promises';
@@ -10,6 +10,7 @@ const allowedHeaders = new Set(['content-type', 'x-lavish-capability']);
 export async function createHubTransport(operations, { resource, guardSource = async () => {} } = {}) {
   const capability = randomBytes(32).toString('hex');
   const resourceKey = randomBytes(32).toString('hex');
+  const identityKey = randomBytes(32).toString('hex');
   const server = http.createServer(async (req, res) => {
     const respond = (status, value) => {
       res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...(req.headers.origin === 'null' ? { 'access-control-allow-origin': 'null', vary: 'Origin' } : {}) });
@@ -18,6 +19,10 @@ export async function createHubTransport(operations, { resource, guardSource = a
     const address = server.address();
     if (req.headers.host !== `127.0.0.1:${address.port}` || !['127.0.0.1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return respond(403, { error: 'Invalid host' });
     if (req.headers.origin && req.headers.origin !== 'null') return respond(403, { error: 'Invalid origin' });
+    if (req.method === 'GET' && /^\/identity\/[a-f0-9]{64}$/.test(req.url) && !req.headers.origin && !req.headers.referer) {
+      const challenge = req.url.slice('/identity/'.length);
+      return respond(200, { proof: createHmac('sha256', identityKey).update(challenge).digest('hex') });
+    }
     if (req.method === 'GET' && resource && req.url.startsWith(`/resources/${resourceKey}/`)) {
       try {
         const parts = new URL(req.url, 'http://127.0.0.1').pathname.split('/');
@@ -68,5 +73,5 @@ export async function createHubTransport(operations, { resource, guardSource = a
   server.headersTimeout = 10000;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const url = `http://127.0.0.1:${server.address().port}`;
-  return { url, capability, resourceKey, close: () => new Promise((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); }) };
+  return { url, capability, resourceKey, identityKey, close: () => new Promise((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); }) };
 }

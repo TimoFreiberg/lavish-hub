@@ -21,7 +21,7 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
     const response = await request(url, { redirect: 'error', ...options });
     const data = await response.json();
     if (!response.ok || data.code === 'LISTENER_REPLACED') {
-      throw failure(data.code || (response.status === 404 ? 'NOT_FOUND' : 'LAVISH_HTTP_ERROR'), data.error || data.status || `HTTP ${response.status}`);
+      throw Object.assign(failure(data.code || (response.status === 404 ? 'NOT_FOUND' : 'LAVISH_HTTP_ERROR'), data.error || data.status || `HTTP ${response.status}`), { status: response.status });
     }
     return data;
   }
@@ -61,6 +61,22 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
         session: { file: absolute, status: data.status, ...(data.session_ended ? { session_ended: true } : {}), ...(data.ended_by ? { ended_by: data.ended_by } : {}) },
         ...(data.status === 'feedback' ? { prompts: data.prompts || [], dom_snapshot: data.dom_snapshot || '', ...(Object.hasOwn(data, 'snapshot_page') ? { snapshot_page: data.snapshot_page } : {}), ...(data.artifact_failures?.length ? { artifact_failures: data.artifact_failures } : {}) } : {}),
       };
+    },
+    async registerHub(file, transport) {
+      const absolute = await realpath(file);
+      const port = Number(new URL(transport.url).port);
+      await verify();
+      try {
+        await json(`${base}/api/hub-proxy/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: keyFor(absolute), port, capability: transport.capability, resourceKey: transport.resourceKey, identityKey: transport.identityKey }), signal: boundedSignal() });
+        return true;
+      } catch (error) {
+        if (error.code === 'HUB_SESSION_ENDED' && error.status === 404 && error.message === 'HUB_SESSION_ENDED: Session not active') return false;
+        throw error;
+      }
+    },
+    async unregisterHub(file, transport) {
+      const absolute = await realpath(file);
+      return post('/api/hub-proxy/unregister', { key: keyFor(absolute), identityKey: transport.identityKey });
     },
     async reply(file, text) {
       if (!text.trim()) throw new Error('Agent reply must not be empty');

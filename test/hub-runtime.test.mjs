@@ -10,6 +10,9 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveWorkspace } from '../src/hub-workspace.mjs';
 import { chromium } from 'playwright-core';
+import express from 'express';
+import { EventEmitter } from 'node:events';
+import { createHubProxy } from '../vendor/lavish/src/hub-proxy.js';
 
 const cli = path.resolve('bin/lavish-kit');
 test('hub foreground owner rejects duplicates and stops without a relay', async t => {
@@ -19,17 +22,26 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await mkdir(repo); await mkdir(state);
   execFileSync('jj', ['git', 'init', repo]);
   const canonicalState = await realpath(state);
-  let pollMode = 'waiting', polls = 0;
-  const server = http.createServer((req, res) => {
+  let pollMode = 'waiting', polls = 0, generatedDirectory, registrationFailure = null;
+  let failureAfterPoll = { status: 404, body: { code: 'HUB_SESSION_ENDED', error: 'Session not active' } };
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json() });
+  app.post('/api/hub-proxy/register', proxy.control, (req, res, next) => registrationFailure ? res.status(registrationFailure.status).json(registrationFailure.body) : next(), proxy.register);
+  app.post('/api/hub-proxy/unregister', proxy.control, proxy.unregister);
+  app.use('/hub-proxy', (req, res, next) => { if (req.headers.origin) req.headers.origin = 'null'; next(); }, proxy.handle);
+  app.use((req, res, next) => generatedDirectory ? express.static(generatedDirectory)(req, res, next) : next());
+  app.use((req, res) => {
     res.setHeader('content-type', 'application/json');
     if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.97', lavish_kit_page_reviews: 1, state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
     else {
       polls++;
       if (pollMode === 'feedback') { pollMode = 'waiting'; res.end(JSON.stringify({ status: 'feedback', prompts: ['Review this'], dom_snapshot: 'quoted context' })); }
+      else if (pollMode === 'end-between') { registrationFailure = failureAfterPoll; res.end(JSON.stringify({ status: 'waiting' })); }
       else if (pollMode === 'truncated') { res.write('{"status":"feedback"'); res.destroy(); }
       else setTimeout(() => res.end(JSON.stringify({ status: 'waiting' })), 50);
     }
   });
+  const server = http.createServer(app);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.closeAllConnections() || server.close());
   const stub = path.join(dir, 'lavish-axi');
@@ -44,6 +56,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const depsModule = new URL('../src/deps.mjs', import.meta.url).href;
   await execute(process.execPath, ['--input-type=module', '-e', `import { ensureHubAssets } from ${JSON.stringify(depsModule)}; await ensureHubAssets();`], { env: { ...env, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
+  generatedDirectory = identity.directory;
+  const browserBase = `http://127.0.0.1:${server.address().port}`;
   const ownerScript = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; process.exitCode = await runHubOwner({ workspace: process.argv[1] }, { prepare: async (_page, options) => { if (!options.vendored) throw Error('expected vendored'); return { url: 'http://localhost:123/review' }; } });`;
   const ownerArgs = ['--input-type=module', '-e', ownerScript, repo];
   const owner = spawn(process.execPath, ownerArgs, { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -79,7 +93,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
   const browserPage = await browser.newPage();
-  await browserPage.goto(`file://${path.join(identity.directory, 'hub.html')}`);
+  await browserPage.goto(`${browserBase}/hub.html`);
   await browserPage.getByRole('button', { name: 'Tasks', exact: true }).waitFor();
   const taskDraft = browserPage.getByRole('textbox', { name: 'Tasks Markdown' });
   await taskDraft.fill('Unsaved task');
@@ -100,7 +114,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(path.join(repo, 'change.txt'), 'A changed line\n');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'changes'], { env });
   const diffPage = await browser.newPage();
-  await diffPage.goto(`file://${path.join(identity.directory, 'hub.html')}`);
+  await diffPage.goto(`${browserBase}/hub.html`);
   await diffPage.locator('.file-link[data-path="change.txt"]').waitFor();
   await diffPage.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
   await diffPage.getByRole('button', { name: 'Add comment' }).click();
@@ -123,7 +137,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await diffPage.getByText('original', { exact: true }).waitFor();
   await diffPage.close();
   const siblingPage = await browser.newPage();
-  await siblingPage.goto(`file://${path.join(identity.directory, sibling)}`);
+  await siblingPage.goto(`${browserBase}/${sibling}`);
   assert.equal(await siblingPage.evaluate(() => document.compatMode), 'CSS1Compat');
   assert.equal(await siblingPage.evaluate(() => window.tagText), '<body>');
   assert.equal(await siblingPage.evaluate(() => window.assetLoaded), true);
@@ -163,7 +177,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await run(process.execPath, [cli, 'hub', 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
   assert.match(await readFile(path.join(identity.directory, sibling), 'utf8'), /externally updated/);
   const updatedPage = await browser.newPage();
-  await updatedPage.goto(`file://${path.join(identity.directory, sibling)}`);
+  await updatedPage.goto(`${browserBase}/${sibling}`);
   await updatedPage.getByText('externally updated').waitFor();
   await updatedPage.close();
   const outsideHtml = path.join(dir, 'outside.html');
@@ -178,7 +192,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const replacementMetadata = path.join(dir, 'replacement.json');
   await writeFile(replacementMetadata, JSON.stringify({ reviewedRepository: 'Replacement' }));
   const existingPage = await browser.newPage();
-  await existingPage.goto(`file://${path.join(identity.directory, sibling)}`);
+  await existingPage.goto(`${browserBase}/${sibling}`);
   await existingPage.getByRole('link', { name: 'Tasks', exact: true }).focus();
   await existingPage.evaluate(() => { window.focusedNavigationLink = document.activeElement; });
   const newDocument = path.join(dir, 'new.html');
@@ -332,4 +346,27 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(polls, stoppedPolls, 'ambiguous poll must not be retried');
   await assert.rejects(readFile(runtime), { code: 'ENOENT' });
   await assert.rejects(run(process.execPath, [cli, 'hub', '--workspace', repo], { env }), /No live hub owner/);
+  const pollsBeforeEnd = polls;
+  pollMode = 'end-between';
+  const endedOwner = spawn(process.execPath, ownerArgs, { env, stdio: ['ignore', 'ignore', 'pipe'] });
+  let endedError = ''; endedOwner.stderr.on('data', chunk => { endedError += chunk; });
+  t.after(() => { if (endedOwner.exitCode === null) endedOwner.kill('SIGKILL'); });
+  const endedExit = await new Promise(resolve => endedOwner.once('exit', resolve));
+  assert.equal(endedExit, 0, endedError);
+  assert.equal(polls, pollsBeforeEnd + 1, 'ended registration must not retry a consuming poll');
+  await assert.rejects(readFile(runtime), { code: 'ENOENT' });
+  for (const failure of [
+    { status: 404, body: { error: 'Session not active' } },
+    { status: 500, body: { code: 'HUB_SESSION_ENDED', error: 'Server error' } },
+  ]) {
+    registrationFailure = null; failureAfterPoll = failure;
+    const before = polls;
+    const failedOwner = spawn(process.execPath, ownerArgs, { env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let failureText = ''; failedOwner.stderr.on('data', chunk => { failureText += chunk; });
+    t.after(() => { if (failedOwner.exitCode === null) failedOwner.kill('SIGKILL'); });
+    assert.notEqual(await new Promise(resolve => failedOwner.once('exit', resolve)), 0, failureText);
+    assert.equal(polls, before + 1, 'registration failures must not retry a consuming poll');
+    assert.match(failureText, failure.status === 404 ? /NOT_FOUND/ : /HUB_SESSION_ENDED/);
+    await assert.rejects(readFile(runtime), { code: 'ENOENT' });
+  }
 });

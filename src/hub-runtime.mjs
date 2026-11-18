@@ -71,7 +71,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
   const instance = randomUUID();
   const lock = await acquire(identity, instance);
   const abort = new AbortController();
-  let transport, commands, stopping = false;
+  let transport, commands, registeredPage, stopping = false;
   const generatedSiblings = new Set();
   const siblingContents = new Map();
   const recordFile = path.join(identity.directory, 'generated-documents.json');
@@ -98,6 +98,12 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     if (!(await workspaceMatches(identity))) console.error('Workspace is unavailable or has changed; repository actions are disabled.');
     await recordWorkspace(identity);
     const page = path.join(identity.directory, 'hub.html');
+    const canonicalPage = await realpath(page).catch(async error => {
+      if (error.code !== 'ENOENT') throw error;
+      return path.join(await realpath(identity.directory), 'hub.html');
+    });
+    const sessionKey = createHash('sha256').update(canonicalPage).digest('hex').slice(0, 16);
+    const browserUrl = `/hub-proxy/${sessionKey}`;
     const jj = createHubJj(identity.root, { validate: () => workspaceMatches(identity) });
     const guardSource = async file => {
       const withinWorkspace = candidate => {
@@ -131,13 +137,13 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
           console.error(`Document source is unavailable for ${doc.id}: ${error.message}`);
           continue;
         }
-        const base = `${transport.url}/resources/${transport.resourceKey}/${encodeURIComponent(doc.id)}/${encodeURIComponent(path.basename(doc.source))}`;
+        const base = `${browserUrl}/resources/${transport.resourceKey}/${encodeURIComponent(doc.id)}/${encodeURIComponent(path.basename(doc.source))}`;
         const destinations = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks', pr: 'PR draft' }).map(([id, title]) => ({ id, title, href: 'hub.html' })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : 'hub.html' }))];
         const nav = `<nav aria-label="Hub navigation" data-lavish-action style="position:relative;z-index:2147483647;padding:8px;background:#171923;color:white;font:14px system-ui;display:flex;gap:12px;flex-wrap:wrap">${destinations.map(item => `<a style="color:white" href="${item.href}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}>${escapeHtml(item.title)}</a>`).join('')}</nav>`;
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope" data-lavish-action style="padding:8px;background:#171923;color:white;font:14px system-ui;overflow-wrap:anywhere">${scope}</aside>` : '';
-        const navConfig = JSON.stringify({ url: transport.url, capability: transport.capability, id: doc.id }).replaceAll('<', '\\u003c');
-        const navigation = `${nav}${reviewedScope}<script>${confirmNavigation}</script><script>{const c=${navConfig};let navigating=false,dirty=false,leaving=false,edits=0;for(const type of ['input','change'])document.addEventListener(type,e=>{if(e.isTrusted&&!e.target.closest('[data-lavish-action],[data-lavish-ui]')){dirty=true;edits++}},true);window.addEventListener('beforeunload',e=>{if(dirty&&!leaving){e.preventDefault();e.returnValue=''}});const action=async(operation,body={})=>{const r=await fetch(c.url+'/action',{method:'POST',headers:{'content-type':'application/json','x-lavish-capability':c.capability},body:JSON.stringify({...body,operation})});if(!r.ok)throw Error('Hub action failed');return(await r.json()).result};const nav=document.querySelector('nav[aria-label="Hub navigation"]');for(const a of nav.querySelectorAll('a'))a.href=new URL(a.getAttribute('href'),location.href).href;nav.addEventListener('click',async e=>{const a=e.target.closest('a[data-hub-id]');if(!a||!nav.contains(a))return;e.preventDefault();if(navigating)return;navigating=true;try{let approved=false,approvedEdits=edits;if(dirty){approved=await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.');if(!approved)return}await action('navigate',{id:a.dataset.hubId});if((!approved||approvedEdits!==edits)&&dirty&&!(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.')))return;leaving=true;location.href=a.href}catch{}finally{navigating=false}});async function refresh(){try{const [state,list]=await Promise.all([action('status'),action('documents')]);const items=[...Object.entries({commits:'Commits',changes:'Changes',tasks:'Tasks',pr:'PR draft'}).map(([id,title])=>({id,title})),...list.documents];const focused=nav.contains(document.activeElement)?document.activeElement:null;const existing=new Map([...nav.querySelectorAll('a[data-hub-id]')].map(a=>[a.dataset.hubId,a]));let next=nav.firstElementChild;for(const item of items){const a=existing.get(item.id)||document.createElement('a');existing.delete(item.id);a.style.color='white';a.dataset.hubId=item.id;if(a.textContent!==item.title)a.textContent=item.title;const href=new URL(item.source?.toLowerCase().endsWith('.html')?item.sibling:'hub.html',location.href).href;if(a.href!==href)a.href=href;if(item.id===c.id)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');if(a!==next)nav.insertBefore(a,next);next=a.nextElementSibling}for(const a of existing.values())a.remove();if(focused?.isConnected&&document.activeElement!==focused)focused.focus();if(!navigating&&!dirty&&state.selected!==c.id){const doc=list.documents.find(d=>d.id===state.selected);location.href=new URL(doc&&doc.source.toLowerCase().endsWith('.html')?doc.sibling:'hub.html',location.href).href;return}}catch{}setTimeout(refresh,2000)}setTimeout(refresh,2000)}</script>`;
+        const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id }).replaceAll('<', '\\u003c');
+        const navigation = `${nav}${reviewedScope}<script>${confirmNavigation}</script><script>{const c=${navConfig};c.url=new URL(c.url,location.href).href;let navigating=false,dirty=false,leaving=false,edits=0;for(const type of ['input','change'])document.addEventListener(type,e=>{if(e.isTrusted&&!e.target.closest('[data-lavish-action],[data-lavish-ui]')){dirty=true;edits++}},true);window.addEventListener('beforeunload',e=>{if(dirty&&!leaving){e.preventDefault();e.returnValue=''}});const action=async(operation,body={})=>{const r=await fetch(c.url+'/action',{method:'POST',headers:{'content-type':'application/json','x-lavish-capability':c.capability},body:JSON.stringify({...body,operation})});if(!r.ok)throw Error('Hub action failed');return(await r.json()).result};const nav=document.querySelector('nav[aria-label="Hub navigation"]');for(const a of nav.querySelectorAll('a'))a.href=new URL(a.getAttribute('href'),location.href).href;nav.addEventListener('click',async e=>{const a=e.target.closest('a[data-hub-id]');if(!a||!nav.contains(a))return;e.preventDefault();if(navigating)return;navigating=true;try{let approved=false,approvedEdits=edits;if(dirty){approved=await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.');if(!approved)return}await action('navigate',{id:a.dataset.hubId});if((!approved||approvedEdits!==edits)&&dirty&&!(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.')))return;leaving=true;location.href=a.href}catch{}finally{navigating=false}});async function refresh(){try{const [state,list]=await Promise.all([action('status'),action('documents')]);const items=[...Object.entries({commits:'Commits',changes:'Changes',tasks:'Tasks',pr:'PR draft'}).map(([id,title])=>({id,title})),...list.documents];const focused=nav.contains(document.activeElement)?document.activeElement:null;const existing=new Map([...nav.querySelectorAll('a[data-hub-id]')].map(a=>[a.dataset.hubId,a]));let next=nav.firstElementChild;for(const item of items){const a=existing.get(item.id)||document.createElement('a');existing.delete(item.id);a.style.color='white';a.dataset.hubId=item.id;if(a.textContent!==item.title)a.textContent=item.title;const href=new URL(item.source?.toLowerCase().endsWith('.html')?item.sibling:'hub.html',location.href).href;if(a.href!==href)a.href=href;if(item.id===c.id)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');if(a!==next)nav.insertBefore(a,next);next=a.nextElementSibling}for(const a of existing.values())a.remove();if(focused?.isConnected&&document.activeElement!==focused)focused.focus();if(!navigating&&!dirty&&state.selected!==c.id){const doc=list.documents.find(d=>d.id===state.selected);location.href=new URL(doc&&doc.source.toLowerCase().endsWith('.html')?doc.sibling:'hub.html',location.href).href;return}}catch{}setTimeout(refresh,2000)}setTimeout(refresh,2000)}</script>`;
         authored = composeHubHtml(authored, base, navigation);
         const name = siblingName(doc);
         const target = path.join(identity.directory, name);
@@ -211,7 +217,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const dist = await ensureHubAssets();
     const [script, style, diffScript, diffStyle, markdownScript, documentStyle] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8'), readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'), readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8')]);
     await writeSiblings();
-    const config = JSON.stringify({ url: transport.url, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root }).replaceAll('<', '\\u003c');
+    const config = JSON.stringify({ url: browserUrl, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root }).replaceAll('<', '\\u003c');
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><style>${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><script>${diffScript.replaceAll('</script', '<\\/script')}</script><script>${markdownScript.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);
@@ -219,10 +225,14 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     if (review.ended) return 1;
     reviewUrl = review.url;
     const client = createLavishClient({ signal: abort.signal, vendored: true });
+    const register = () => client.registerHub(page, transport);
+    if (!(await register())) return 0;
+    registeredPage = page;
     await atomicJson(path.join(lock, 'runtime.json'), { pid: process.pid, instance, url: transport.url, capability: transport.capability, page });
     await presentReview(page, review.url, { title: 'Workspace hub', open: options.open, log: console.error });
     console.error(`Hub owner running for ${identity.root}; stop with lavish-kit hub stop.`);
     while (!stopping) {
+      if (!(await register())) break;
       const batch = await client.poll(page, instance, { timeoutMs: 10000 });
       if (batch.session.status === 'feedback') {
         const sourceFor = sibling => siblingSources.get(sibling) ?? null;
@@ -238,6 +248,10 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
   } finally {
     for (const signal of signals) process.removeListener(signal, stop);
     if (commands) commands.close();
+    if (registeredPage && transport) {
+      try { await createLavishClient({ vendored: true }).unregisterHub(registeredPage, transport); }
+      catch (error) { console.error(`Hub proxy cleanup failed: ${error.message}`); }
+    }
     if (transport) await transport.close();
     await Promise.all([...generatedSiblings].map(async file => {
       const current = await readFile(file, 'utf8').catch(() => null);

@@ -11,6 +11,7 @@ import { pipeline } from "node:stream/promises";
 
 import chokidar from "chokidar";
 import express from "express";
+import { createHubProxy } from "./hub-proxy.js";
 
 import {
   classifySevereTextOverflow,
@@ -815,6 +816,11 @@ export async function serve({
       });
     });
   }
+
+  const hubProxy = createHubProxy({ store, events, jsonParser: express.json({ limit: "4kb" }) });
+  app.post("/api/hub-proxy/register", hubProxy.control, hubProxy.register);
+  app.post("/api/hub-proxy/unregister", hubProxy.control, hubProxy.unregister);
+  app.use("/hub-proxy", hubProxy.handle);
 
   // CSRF defense-in-depth on top of the Host allowlist. A foreign page that
   // can reach 127.0.0.1 passes the Host check, but the browser attaches the
@@ -3303,6 +3309,7 @@ export async function serve({
   function shutdown(reloadKey = "", reason = "", cause = "requested") {
     if (shuttingDown) return;
     shuttingDown = true;
+    hubProxy.clear();
     writeLog(`[lavish] shutting down: ${cause}${reason ? ` (reason=${reason})` : ""}`);
     if (idleTimer) {
       clearTimeout(idleTimer);

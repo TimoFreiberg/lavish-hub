@@ -18,6 +18,15 @@ stopped or assigned a different port. See [building and releasing](releasing.md)
 for package production and [workflow gaps](hub-gaps.md) for removed standalone
 capabilities.
 
+The browser uses the Lavish UI address for actions and published document assets.
+Forward only that port when developing remotely. The forwarded host and port
+can differ from the server's address. The owner still has a private loopback
+control listener for CLI commands, but the browser does not connect to it.
+Action capabilities, document-resource keys and the artifact sandbox remain
+in effect through the UI server. Stopping the owner or ending its review removes
+the browser route. Saves and launches are not retried after a lost connection.
+Check their outcome before retrying.
+
 ## Design priorities
 
 Hub design prioritizes the human end-user experience first, system performance
@@ -84,10 +93,10 @@ reader who has the resource URL: publish from a directory that contains no
 unrelated sensitive files. The resource URL has a random per-owner component;
 keep it private. It is separate from the action capability and does not authorize
 local actions. Published HTML can run scripts and make network requests, so only
-publish trusted content. This local resource server requires the owner and a
-browser able to reach its loopback address; remote viewers cannot load these
-resources. Replacing a document changes its source directory. Published HTML
-does not currently receive a hub action SDK.
+publish trusted content. Resources require the running owner and are available
+through the same forwarded UI address to remote browsers. Replacing a document
+changes its source directory. Published HTML does not currently receive a hub
+action SDK.
 
 Run `lavish-kit hub [--workspace DIR]` to check the owner, add `--view VIEW` to
 select a built-in view or published document ID, or run `lavish-kit hub stop

@@ -16,7 +16,11 @@ export function composeHubHtml(authored, sourceUrl, navigation) {
   if (bases.length && bases[0].sourceCodeLocation) {
     const base = bases[0];
     const href = base.attrs.find(attr => attr.name === 'href');
-    try { href.value = new URL(href.value, sourceUrl).href; } catch { href.value = sourceUrl; }
+    try {
+      const relative = sourceUrl.startsWith('/');
+      const resolved = new URL(href.value, new URL(sourceUrl, 'http://hub.invalid'));
+      href.value = relative && resolved.origin === 'http://hub.invalid' ? `${resolved.pathname}${resolved.search}${resolved.hash}` : resolved.href;
+    } catch { href.value = sourceUrl; }
     edits.push([base.sourceCodeLocation.startOffset, base.sourceCodeLocation.endOffset, serializeOuter(base)]);
   } else {
     const base = parseFragment('<base href="">').childNodes[0];

@@ -1,4 +1,5 @@
 const config = globalThis.hubConfig;
+if (config.url.startsWith('/')) config.url = new URL(config.url, location.href).href;
 const app = document.querySelector('#app');
 const drafts = new Map();
 const diffContainer = document.createElement('div'); diffContainer.className = 'hub-diff';
