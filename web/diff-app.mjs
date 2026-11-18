@@ -111,7 +111,9 @@ function options() { return {
     const data = state.data, index = state.files.findIndex(file => file.parsed === parsed);
     try {
       if (!loadDiffFiles || !data?.operationId || index < 0) throw new Error('unavailable');
-      return await loadDiffFiles(data.operationId, index);
+      const files = await loadDiffFiles(data.operationId, index);
+      if (state.data === data) state.files[index].fullFiles = files;
+      return files;
     } catch (error) {
       if (state.data === data) expansionNotice.textContent = 'Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.';
       throw error;
@@ -274,7 +276,7 @@ function openDraft(index, range) {
         const digest = state.digest || await state.digestPromise;
         if (state.draft?.box !== box || state.data !== data) return;
         if (!digest) throw new Error('Could not identify the current diff');
-        const quote = quoteSelection(file.parsed, range);
+        const quote = quoteSelection(file.parsed, range, file.fullFiles);
         const target = { type: 'diff-line', digest, fileIndex: index, oldPath: file.oldPath, newPath: file.newPath, side: range.side || 'additions', start: location.start, end: location.end, revision: String(data.revision || '') };
         const prefix = `${embedded ? `Hub view: Changes (changes)\nRevision range: ${data.range}\n\n` : ''}${where}\n\n${quote}\n\n`;
         const random = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;

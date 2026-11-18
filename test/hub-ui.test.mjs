@@ -107,6 +107,14 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   assert.match(queued[0][0], /Hub view: Changes/);
   assert.ok(queued[0][0].includes('b'.repeat(40)));
   assert.match(queued[0][0], /5: new/);
+  await page.locator('.file-link[data-path="example.txt"]').click();
+  await page.getByText('four', { exact: true }).first().hover();
+  await page.getByRole('button', { name: 'Add comment' }).click();
+  await page.getByPlaceholder('Write a comment').fill('Comment on expanded context');
+  await page.getByRole('button', { name: 'Queue comment' }).click();
+  const expanded = await page.evaluate(() => globalThis.queued[1]);
+  assert.match(expanded[0], /4: four/);
+  assert.equal(expanded[1].target.start, 4);
   assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).count(), 0);
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   assert.equal(await description.inputValue(), 'My draft');

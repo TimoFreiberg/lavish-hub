@@ -17,4 +17,8 @@ test('comment context uses old rename path, normalizes range and rejects mixed s
 test('quotes selected lines on requested side', () => {
   const parsed = { deletionLines: ['old\n', 'next\n'], additionLines: ['new\n'], hunks: [{ deletionStart: 2, deletionLineIndex: 0, deletionCount: 2, additionStart: 2, additionLineIndex: 0, additionCount: 1 }] };
   assert.equal(quoteSelection(parsed, { side: 'deletions', start: 2, end: 3 }), '2: old\n3: next');
+  const fullFiles = { oldFile: { contents: 'context\nold\nnext\n' }, newFile: { contents: 'context\nnew\nlast' } };
+  assert.equal(quoteSelection(parsed, { side: 'deletions', start: 2, end: 1 }, fullFiles), '1: context\n2: old');
+  assert.equal(quoteSelection(parsed, { start: 2, end: 3 }, fullFiles), '2: new\n3: last');
+  assert.equal(quoteSelection(parsed, { side: 'deletions', endSide: 'additions', start: 1, end: 2 }, fullFiles), '');
 });

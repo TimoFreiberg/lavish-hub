@@ -21,10 +21,16 @@ export function commentLocation(file, range, revision) {
   return { side: side === 'deletions' ? 'old' : 'new', path, start, end, where, revision: revision || 'unknown' };
 }
 
-export function quoteSelection(parsed, range) {
+export function quoteSelection(parsed, range, fullFiles) {
   const side = range.side || 'additions';
   if ((range.endSide || side) !== side) return '';
   const start = Math.min(range.start, range.end), end = Math.max(range.start, range.end);
+  const contents = (side === 'additions' ? fullFiles?.newFile : fullFiles?.oldFile)?.contents;
+  if (typeof contents === 'string') {
+    const lines = contents.split('\n');
+    if (contents.endsWith('\n')) lines.pop();
+    return lines.slice(Math.max(0, start - 1), end).map((line, index) => `${Math.max(1, start) + index}: ${line}`).join('\n');
+  }
   const lines = side === 'additions' ? parsed.additionLines : parsed.deletionLines;
   const output = [];
   for (const hunk of parsed.hunks) {

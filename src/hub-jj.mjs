@@ -1,23 +1,20 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import { modelPatch } from './diff/model.mjs';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 
-function readFileAt(cwd, op, revision, file) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('jj', ['--no-pager', '--color=never', '--at-operation', op, 'file', 'show', '-r', revision, '--', `root:${file}`], { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
-    const chunks = []; let size = 0, tooLarge = false;
-    child.stdout.on('data', chunk => { size += chunk.length; if (size > MAX_FILE_BYTES) { tooLarge = true; child.kill(); } else chunks.push(chunk); });
-    child.on('error', reject);
-    child.on('close', code => {
-      if (code || tooLarge) return reject(new Error('File content is unavailable or too large'));
-      const bytes = Buffer.concat(chunks);
-      try {
-        if (bytes.includes(0)) throw new Error();
-        resolve(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-      } catch { reject(new Error('File content is not supported text')); }
-    });
-  });
+const exec = promisify(execFile);
+
+async function readFileAt(cwd, op, revision, file) {
+  let bytes;
+  try {
+    ({ stdout: bytes } = await exec('jj', ['--no-pager', '--color=never', '--at-operation', op, 'file', 'show', '-r', revision, '--', `root:${file}`], { cwd, encoding: 'buffer', maxBuffer: MAX_FILE_BYTES }));
+  } catch { throw new Error('File content is unavailable or too large'); }
+  try {
+    if (bytes.includes(0)) throw new Error();
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch { throw new Error('File content is not supported text'); }
 }
 
 const fields = ['change_id', 'commit_id', 'description', 'immutable', 'divergent'];
@@ -116,7 +113,7 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
           if (generation === started) {
             cached = value; expires = Date.now() + 2000;
             snapshots.delete(value.operationId);
-            snapshots.set(value.operationId, { ...value, files: modelPatch(value.patch) });
+            snapshots.set(value.operationId, { base: value.base, head: value.head, files: modelPatch(value.patch).map(({ oldPath, newPath, parseError, status, oldMode, newMode }) => ({ oldPath, newPath, parseError, status, oldMode, newMode })) });
             while (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value);
           }
         });
