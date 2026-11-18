@@ -29,8 +29,9 @@ Check their outcome before retrying.
 
 Open `/hubs` on the Lavish UI address to see active workspace hubs. The page
 works through the same forwarded port and links to each session on that origin.
-It shows the workspace directory name and the first line of the current jj `@-`
-commit description, or an unavailable message if the workspace cannot be read.
+It shows the workspace directory name and up to 240 characters of the first
+line of the current jj `@-` commit description. If the workspace cannot be read,
+it shows an unavailable message.
 The list refreshes automatically; an owner that stops refreshing disappears after
 45 seconds. These labels and descriptions are visible to anyone who can access
 the Lavish server, so avoid putting secrets in them.
