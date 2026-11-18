@@ -13,6 +13,7 @@ import * as zlib from "node:zlib";
 import chokidar from "chokidar";
 import express from "express";
 import { createHubProxy } from "./hub-proxy.js";
+import { hubDashboard } from "./hub-dashboard.js";
 
 import {
   classifySevereTextOverflow,
@@ -853,6 +854,13 @@ export async function serve({
   }
 
   const hubProxy = createHubProxy({ store, events, jsonParser: express.json({ limit: "4kb" }) });
+  app.get("/hubs", (req, res) =>
+    res
+      .set({ "Cache-Control": "no-store", "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'" })
+      .type("html")
+      .send(hubDashboard),
+  );
+  app.get("/api/hubs", hubProxy.dashboard);
   app.post("/api/hub-proxy/register", hubProxy.control, hubProxy.register);
   app.post("/api/hub-proxy/unregister", hubProxy.control, hubProxy.unregister);
   app.use("/hub-proxy", hubProxy.handle);

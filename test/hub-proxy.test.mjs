@@ -86,6 +86,28 @@ test('hub proxy confines actions and resources to an active authenticated regist
   assert.equal((await control('register', registration)).status, 404);
 });
 
+test('dashboard exposes only live display metadata and relative session links', async t => {
+  const events = new EventEmitter();
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events, jsonParser: express.json() });
+  app.post('/register', proxy.control, proxy.register); app.get('/hubs', proxy.dashboard);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  const registration = { key, port: 1234, capability: secret('a'), resourceKey: secret('b'), identityKey: secret('c'), display: { label: '<workspace>', summary: 'first', extra: secret('d') } };
+  const register = body => fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const list = async () => (await (await fetch(`${base}/hubs`)).json()).hubs;
+  assert.deepEqual(await list(), []);
+  assert.equal((await register(registration)).status, 200);
+  assert.deepEqual(await list(), [{ label: '<workspace>', summary: 'first', url: `/session/${key}` }]);
+  assert.equal((await register({ ...registration, display: { label: 'next', summary: null } })).status, 200);
+  assert.deepEqual(await list(), [{ label: 'next', summary: null, url: `/session/${key}` }]);
+  const original = Date.now;
+  try { Date.now = () => original() + 46000; assert.deepEqual(await list(), []); } finally { Date.now = original; }
+  assert.equal((await register(registration)).status, 200);
+  events.emit('ended', key);
+  assert.deepEqual(await list(), []);
+});
+
 test('resource query is preserved upstream', async t => {
   const identityKey = secret('c'), resourceKey = secret('b');
   const target = http.createServer((req, res) => {

@@ -63,12 +63,12 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
         ...(data.status === 'feedback' ? { prompts: data.prompts || [], dom_snapshot: data.dom_snapshot || '', ...(Object.hasOwn(data, 'snapshot_page') ? { snapshot_page: data.snapshot_page } : {}), ...(data.artifact_failures?.length ? { artifact_failures: data.artifact_failures } : {}) } : {}),
       };
     },
-    async registerHub(file, transport) {
+    async registerHub(file, transport, display) {
       const absolute = await realpath(file);
       const port = Number(new URL(transport.url).port);
       await verify();
       try {
-        await json(`${base}/api/hub-proxy/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: keyFor(absolute), port, capability: transport.capability, resourceKey: transport.resourceKey, identityKey: transport.identityKey, assets: transport.assets }), signal: boundedSignal() });
+        await json(`${base}/api/hub-proxy/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: keyFor(absolute), port, capability: transport.capability, resourceKey: transport.resourceKey, identityKey: transport.identityKey, assets: transport.assets, display }), signal: boundedSignal() });
         return true;
       } catch (error) {
         if (error.code === 'HUB_SESSION_ENDED' && error.status === 404 && error.message === 'HUB_SESSION_ENDED: Session not active') return false;

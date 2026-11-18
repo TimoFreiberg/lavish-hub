@@ -236,7 +236,11 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     if (review.ended) return 1;
     reviewUrl = review.url;
     const client = createLavishClient({ signal: abort.signal, vendored: true });
-    const register = () => client.registerHub(page, transport);
+    const register = async () => {
+      let summary = null;
+      try { summary = await jj.summary(); } catch { /* The workspace may be unavailable. */ }
+      return client.registerHub(page, transport, { label: path.basename(identity.root), summary });
+    };
     if (!(await register())) return 0;
     registeredPage = page;
     await atomicJson(path.join(lock, 'runtime.json'), { pid: process.pid, instance, url: transport.url, capability: transport.capability, page });

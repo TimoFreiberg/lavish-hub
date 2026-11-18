@@ -100,6 +100,12 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
     return { status: 'saved', current: updated[0] };
   }
   return {
+    async summary() {
+      await checkWorkspace();
+      const result = parseRows(await run(cwd, ['log', '-r', '@-', '--no-graph', '-T', template]));
+      if (result.length !== 1) throw new Error('Working-copy parent unavailable');
+      return result[0].description.split('\n')[0].slice(0, 240) || '(no description)';
+    },
     async snapshot({ force = false } = {}) {
       await checkWorkspace();
       while (true) {

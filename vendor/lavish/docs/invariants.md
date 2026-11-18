@@ -41,7 +41,10 @@ so a reused port cannot receive secrets. In-flight requests keep their captured
 target. End, unregister and shutdown invalidate registrations, including pending
 ones. Owner cleanup cannot revoke a replacement with a different identity.
 Registrations are in memory and the owner refreshes them before polling. An
-interrupted consuming poll is not retried to recover a registration.
+interrupted consuming poll is not retried to recover a registration. Registrations
+expire after 45 seconds without refresh. `/hubs` and `/api/hubs` use the existing
+Host guard and expose only workspace labels, parent descriptions, and relative
+session links, never callback credentials or owner addresses.
 
 Proxied resources carry the artifact sandbox CSP, nosniff and no-referrer even
 when opened outside an iframe. Browser addresses resolve from the actual loaded

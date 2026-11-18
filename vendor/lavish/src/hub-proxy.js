@@ -95,7 +95,7 @@ export function createHubProxy({ store, events, jsonParser }) {
     return jsonParser(req, res, next);
   };
   const register = async (req, res) => {
-    const { key, port, capability, resourceKey, identityKey, assets = [] } = req.body || {};
+    const { key, port, capability, resourceKey, identityKey, assets = [], display } = req.body || {};
     if (
       !sessionPattern.test(key || "") ||
       !Number.isInteger(port) ||
@@ -106,7 +106,12 @@ export function createHubProxy({ store, events, jsonParser }) {
       ) ||
       !Array.isArray(assets) ||
       assets.length > 3 ||
-      !assets.every((name) => typeof name === "string" && /^hub-asset-[a-f0-9]{64}\.js$/.test(name))
+      !assets.every((name) => typeof name === "string" && /^hub-asset-[a-f0-9]{64}\.js$/.test(name)) ||
+      (display !== undefined &&
+        (!display ||
+          typeof display.label !== "string" ||
+          display.label.length > 255 ||
+          !(display.summary === null || (typeof display.summary === "string" && display.summary.length <= 240))))
     ) {
       return res.status(400).json({ error: "Invalid registration" });
     }
@@ -133,6 +138,9 @@ export function createHubProxy({ store, events, jsonParser }) {
     ) {
       targets.set(key, { port, capability, resourceKey, identityKey, assets });
     }
+    const current = targets.get(key);
+    current.display = display ? { label: display.label, summary: display.summary } : null;
+    current.expires = Date.now() + 45000;
     return res.json({ ok: true });
   };
   const unregister = (req, res) => {
@@ -177,7 +185,10 @@ export function createHubProxy({ store, events, jsonParser }) {
     if (!match) return res.status(404).json({ error: "Not found" });
     const [, key, route] = match;
     const target = targets.get(key);
-    if (!target) return res.status(404).json({ error: "Hub unavailable" });
+    if (!target || target.expires <= Date.now()) {
+      if (target && targets.get(key) === target) targets.delete(key);
+      return res.status(404).json({ error: "Hub unavailable" });
+    }
     if (req.headers.origin && req.headers.origin !== "null") return res.status(403).json({ error: "Invalid origin" });
     const session = await store.findByKey(key);
     if (!session || session.status === "ended" || targets.get(key) !== target) {
@@ -290,6 +301,24 @@ export function createHubProxy({ store, events, jsonParser }) {
   };
   return {
     control,
+    dashboard: async (req, res) => {
+      const hubs = [];
+      for (const [key, target] of targets) {
+        if (target.expires <= Date.now()) {
+          targets.delete(key);
+          continue;
+        }
+        if (!target.display) continue;
+        const session = await store.findByKey(key);
+        if (targets.get(key) !== target || target.expires <= Date.now()) continue;
+        if (!session || session.status === "ended") {
+          targets.delete(key);
+          continue;
+        }
+        hubs.push({ label: target.display.label, summary: target.display.summary, url: `/session/${key}` });
+      }
+      res.set("Cache-Control", "no-store").json({ hubs });
+    },
     register,
     unregister,
     generatedAssetRegistration: (key, name) => {

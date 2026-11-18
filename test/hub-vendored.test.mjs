@@ -59,6 +59,12 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
     request.on('error', reject); request.end('{"operation":"status"}');
   });
   assert.equal(badHost, 403);
+  const badDashboardHost = await new Promise((resolve, reject) => {
+    const request = http.request(`${localBase}/api/hubs`, { headers: { host: 'example.invalid' } }, response => { response.resume(); resolve(response.statusCode); });
+    request.on('error', reject); request.end();
+  });
+  assert.equal(badDashboardHost, 403);
+  assert.equal((await fetch(`${localBase}/api/hubs`, { headers: { 'x-forwarded-host': 'example.invalid' } })).status, 403);
   assert.equal((await fetch(proxyAction, { method: 'POST', headers: { ...actionHeaders, origin: 'http://example.invalid' }, body: '{"operation":"status"}' })).status, 403);
   assert.equal((await fetch(`${localBase}/api/hub-proxy/register`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}' })).status, 403);
   await assert.rejects(stat(env.PATH_TRAP), { code: 'ENOENT' });
@@ -81,6 +87,14 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   t.after(() => new Promise(resolve => forward.close(resolve)));
   const forwardedUrl = new URL(url);
   forwardedUrl.host = `127.0.0.1:${forward.address().port}`;
+  const dashboard = await browser.newPage();
+  await dashboard.route(`http://127.0.0.1:${port}/**`, route => route.abort());
+  await dashboard.goto(new URL('/hubs', forwardedUrl).href);
+  const hubLink = dashboard.getByRole('link', { name: 'repo' });
+  await hubLink.waitFor();
+  assert.equal(await hubLink.getAttribute('href'), `/session/${sessionKey}`);
+  assert.equal(new URL(await hubLink.getAttribute('href'), dashboard.url()).port, String(forward.address().port));
+  await dashboard.close();
   const page = await browser.newPage();
   await page.route(`http://127.0.0.1:${port}/**`, route => route.abort());
   await page.route(`${record.url}/**`, route => route.abort());
