@@ -68,7 +68,21 @@ function renderNav() {
   }
 }
 let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
-let ownerNavigation = Promise.resolve(), snapshotLoading = false;
+let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false, navigationRecovery;
+function pauseRefresh() { refreshPaused = true; clearTimeout(refreshTimer); }
+function resumeRefresh() {
+  clearTimeout(navigationRecovery); leavingConfirmed = false;
+  if (!refreshPaused) return;
+  refreshPaused = false;
+  if (busy) refreshRequested = true;
+  else refreshTimer = setTimeout(refresh, 0);
+}
+function leavePage(url) {
+  pauseRefresh(); leavingConfirmed = true;
+  navigationRecovery = setTimeout(resumeRefresh, 2000);
+  location.href = url;
+}
+window.addEventListener('pageshow', event => { if (event.persisted) resumeRefresh(); });
 function synchronizeNavigation(id) {
   pendingOwnerNavigation++;
   const request = ownerNavigation.then(() => action('navigate', { id }));
@@ -87,6 +101,7 @@ async function select(id) {
   const leavesPage = doc?.sibling && doc.source?.toLowerCase().endsWith('.html');
   if (navigationPending) return;
   navigationPending = true;
+  if (leavesPage) pauseRefresh();
   const revision = ++navigationRevision;
   try {
     let approved = false, approvedRevision = editRevision;
@@ -111,18 +126,19 @@ async function select(id) {
     if (leavesPage) {
       if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
       if (startsInExplore(selected)) await globalThis.lavish?.setAnnotationMode?.(true);
-      leavingConfirmed = true; location.href = new URL(doc.sibling, location.href).href; return;
+      leavePage(new URL(doc.sibling, location.href).href); return;
     }
     selected = id; renderNav(); await renderView();
   } catch (error) { status(error.message); }
-  finally { if (revision === navigationRevision) navigationPending = false; }
+  finally { if (revision === navigationRevision) { navigationPending = false; if (leavesPage && !leavingConfirmed) resumeRefresh(); } }
 }
 const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
 async function refresh(force = false) {
-  if (busy) { if (force) refreshRequested = true; return; } busy = true;
+  if (refreshPaused || busy) { if (force) refreshRequested = true; return; } busy = true;
   const navigationAtStart = navigationRevision, navigationPendingAtStart = pendingOwnerNavigation > 0;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
+    if (refreshPaused) return;
     let oldSelected = selected, oldDocuments = JSON.stringify(documents);
     const oldSnapshot = snapshotContent(snapshot);
     documents = list.documents;
@@ -131,7 +147,7 @@ async function refresh(force = false) {
     if (state.selected && !navigationError && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
-    if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true); location.href = new URL(selectedDoc.sibling, location.href).href; return; }
+    if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { pauseRefresh(); if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true); leavePage(new URL(selectedDoc.sibling, location.href).href); return; }
     snapshotLoading = true;
     const request = ++snapshotRequest;
     const snapshotResult = action('snapshot', { force }).then(value => ({ value }), error => ({ error }));
@@ -140,6 +156,7 @@ async function refresh(force = false) {
     const result = await snapshotResult;
     if (navigationAtStart !== navigationRevision) oldSelected = selected;
     snapshotLoading = false;
+    if (refreshPaused) return;
     if (result.error) { snapshot = undefined; status(result.error.message); }
     else { snapshot = result.value; snapshotApplied = request; status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
     let documentChanged = false;
@@ -155,14 +172,14 @@ async function refresh(force = false) {
         }
       } catch (error) { if (cached.message !== error.message) { cached.message = error.message; documentChanged = true; } }
     }
-    if (documentNavigation !== navigationRevision) return;
+    if (refreshPaused || documentNavigation !== navigationRevision) return;
     const doc = documents.find(item => item.id === selected);
     const frame = frames.get(selected);
     let htmlData;
     if (doc?.source?.toLowerCase().endsWith('.html')) {
       try {
         const data = await action('readDocument', { id: selected });
-        if (documentNavigation !== navigationRevision) return;
+        if (refreshPaused || documentNavigation !== navigationRevision) return;
         htmlData = data;
         if (frame && (frame.version !== data.version || (frame.hash !== undefined && frame.hash !== data.hash))) { frame.version = data.version; frame.hash = data.hash; frame.node.src = frame.url; }
         else if (frame) { frame.version = data.version; frame.hash = data.hash; }
@@ -184,9 +201,10 @@ async function refresh(force = false) {
         if (replacement) { replacement.focus(); if (selection) replacement.setSelectionRange(...selection); }
       }
     }
-  } catch (error) { status(error.message); }
+  } catch (error) { status(error.message); if (refreshPaused && !navigationPending && !leavingConfirmed) resumeRefresh(); }
   finally {
-    busy = false; clearTimeout(refreshTimer);
+    busy = false; snapshotLoading = false; clearTimeout(refreshTimer);
+    if (refreshPaused) return;
     if (refreshRequested) { refreshRequested = false; refresh(true); }
     else refreshTimer = setTimeout(refresh, 2000);
   }
@@ -282,13 +300,14 @@ async function renderView(focusChangeId) {
     }
     return;
   }
+  const bundle = (doc || id === 'tasks') ? requireBundle('markdown', 'hubMarkdownRenderer', view, generation) : null;
   let state = drafts.get(`doc:${id}`);
   if (!state) {
     try { const data = await action('readDocument', { id }); if (generation !== renderGeneration) return; state = draft(`doc:${id}`, { text: data.text, original: data.text, hash: data.hash, version: data.version, preview: true }); }
     catch (error) { if (generation === renderGeneration) view.append(notice(error.message)); return; }
   }
   if (generation !== renderGeneration) return;
-  if ((doc || id === 'tasks') && !(await requireBundle('markdown', 'hubMarkdownRenderer', view, generation))) return;
+  if (bundle && !(await bundle)) return;
   const info = notice(state.message || '');
   const area = editor(id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? '' : 'Unsaved changes'; });
   if (id === 'tasks') {

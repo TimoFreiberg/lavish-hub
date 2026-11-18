@@ -38,6 +38,56 @@ test('navigation renders before snapshot and serializes delayed owner updates', 
   assert.equal(selected, 'commits');
 });
 
+test('cross-page navigation pauses pending refresh and resumes after failure', { timeout: 30000 }, async t => {
+  let releaseStatus, releaseNavigation, statusCalls = 0, snapshots = 0, navigations = 0;
+  const statusGate = new Promise(resolve => { releaseStatus = resolve; });
+  const navigationGate = new Promise(resolve => { releaseNavigation = resolve; });
+  const transport = await createHubTransport({
+    status: async () => { if (++statusCalls === 2) await statusGate; return { available: true, selected: 'commits' }; },
+    documents: () => ({ documents: [{ id: 'published', title: 'Published', source: 'index.html', sibling: 'published.html' }] }),
+    snapshot: () => { snapshots++; return { base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }; },
+    navigate: async () => { navigations++; await navigationGate; throw new Error('navigation failed'); },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { releaseStatus(); releaseNavigation(); await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  await page.getByText('No commits in this range.').waitFor();
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await assertEventually(() => assert.equal(statusCalls, 2));
+  await page.getByRole('button', { name: 'Published' }).click();
+  await assertEventually(() => assert.equal(navigations, 1));
+  releaseStatus();
+  await page.waitForTimeout(2200);
+  assert.equal(snapshots, 1); assert.equal(statusCalls, 2);
+  releaseNavigation();
+  await assertEventually(() => assert.ok(statusCalls >= 3));
+  await assertEventually(() => assert.ok(snapshots >= 2));
+  assert.equal(navigations, 1);
+});
+
+test('Markdown bundle and document read start independently', { timeout: 30000 }, async t => {
+  let releaseRead, reads = 0, bundles = 0;
+  const gate = new Promise(resolve => { releaseRead = resolve; });
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: () => ({}), readDocument: async () => { reads++; await gate; return { text: 'Tasks', hash: 'one', version: 'one' }; },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { releaseRead(); await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.exposeFunction('recordBundle', () => { bundles++; });
+  await page.setContent(`<div id="app"></div><script>const append = document.head.append.bind(document.head); document.head.append = node => { if (node.src?.startsWith('http://assets.test/')) { recordBundle(); globalThis.hubMarkdownRenderer = () => () => {}; queueMicrotask(() => node.onload()); } else append(node); }; globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><audio preload="none" data-hub-bundle="markdown" src="http://assets.test/markdown.js"></audio><script type="module">${script}</script>`);
+  await page.getByText('No commits in this range.').waitFor();
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await assertEventually(() => { assert.equal(reads, 1); assert.equal(bundles, 1); });
+  releaseRead();
+  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor();
+});
+
 test('exported renderer loads on demand from an inlined resource', { timeout: 30000 }, async t => {
   const transport = await createHubTransport({
     status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),

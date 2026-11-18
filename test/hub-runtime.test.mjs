@@ -193,9 +193,11 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await tasksLink.click();
   await siblingPage.getByRole('button', { name: 'Keep editing' }).waitFor();
   const beforeDialogRefresh = refreshes;
-  for (let i = 0; i < 200 && refreshes === beforeDialogRefresh; i++) await delay(30);
-  assert.ok(refreshes > beforeDialogRefresh, 'expected a refresh while the dialog is open');
+  await delay(2300);
+  assert.equal(refreshes, beforeDialogRefresh, 'polling should pause while the dialog is open');
   await siblingPage.getByRole('button', { name: 'Keep editing' }).click();
+  for (let i = 0; i < 200 && refreshes === beforeDialogRefresh; i++) await delay(30);
+  assert.ok(refreshes > beforeDialogRefresh, 'polling should resume after cancellation');
   assert.equal(await siblingPage.evaluate(() => document.activeElement === window.focusedNavigationLink && window.focusedNavigationLink.isConnected), true);
   assert.equal(await siblingPage.getByLabel('Frame draft').inputValue(), 'Authored draft');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
