@@ -30,6 +30,26 @@ deletes and recreates that directory. Restart it to pick up code changes. Stop
 it with Ctrl-C or `just demo-stop`. Use `--dir`, `--port` and `--no-open` to
 change the defaults.
 
+To investigate action timeouts, rebuild the vendored server with
+`node scripts/prepare-check.mjs`, then start a fresh demo with
+`LAVISH_HUB_DIAGNOSTICS=1 just demo` and capture the terminal's stderr. The
+proxy writes its diagnostics to
+`${XDG_CACHE_HOME:-$HOME/.cache}/lavish-kit-demo/state/lavish/server.log`
+(or `state/lavish/server.log` under a custom demo directory). Collect lines
+containing `"diagnostic":"hub"` from both places after reproducing the issue;
+other output may contain private data. The flag must be present when both
+processes start, so an existing demo needs a restart. Unset it on the next
+start to disable logging.
+
+The JSON lines contain UTC time, elapsed milliseconds, method, status where
+available, and a process-local request number. Numbers are not shared across
+proxy and owner; compare timestamps to relate requests. `arrive` marks receipt,
+`forward` means the proxy has authenticated the owner and is about to send the
+request, and `upstream-response`, `finish`, and `close` mark later stages. The
+proxy handles preflight itself, so an OPTIONS request need not reach the owner.
+A `close` without `finish` indicates an interrupted response. The diagnostics do
+not include URLs, headers, request bodies, or credentials.
+
 For remote development, forward the demo URL's port (4399 by default). The UI,
 actions and published document assets all use that browser-facing address, even
 if the tunnel assigns a different local port. No callback tunnel is needed.

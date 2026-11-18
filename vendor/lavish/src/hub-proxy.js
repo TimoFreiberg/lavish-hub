@@ -50,7 +50,7 @@ function upstreamRequest(agent, port, pathname, method, headers, body) {
   });
 }
 
-async function authenticatedRequest(target, pathname, method, headers, body, signal, isCurrent) {
+async function authenticatedRequest(target, pathname, method, headers, body, signal, isCurrent, onForward) {
   const agent = new SingleSocketAgent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1 });
   const close = () => agent.destroy();
   signal.addEventListener("abort", close, { once: true });
@@ -66,6 +66,7 @@ async function authenticatedRequest(target, pathname, method, headers, body, sig
     const expected = crypto.createHmac("sha256", target.identityKey).update(challenge).digest("hex");
     if (first.statusCode !== 200 || !equal(JSON.parse(proof).proof, expected)) throw new Error("Invalid hub identity");
     if (!isCurrent()) throw Object.assign(new Error("Hub unavailable"), { code: "HUB_TARGET_CHANGED" });
+    onForward();
     const response = await upstreamRequest(agent, target.port, pathname, method, headers, body);
     return {
       response,
@@ -84,6 +85,7 @@ async function authenticatedRequest(target, pathname, method, headers, body, sig
 export function createHubProxy({ store, events, jsonParser }) {
   const targets = new Map();
   const pending = new Set();
+  let diagnosticId = 0;
   events.on("ended", (key) => {
     targets.delete(key);
     for (const registration of pending) if (registration.key === key) registration.ended = true;
@@ -136,6 +138,16 @@ export function createHubProxy({ store, events, jsonParser }) {
     return res.json({ ok: true });
   };
   const handle = async (req, res) => {
+    let log = () => {};
+    if (process.env.LAVISH_HUB_DIAGNOSTICS === "1" && (req.method === "POST" || req.method === "OPTIONS")) {
+      const id = ++diagnosticId, start = Date.now(), method = req.method;
+      log = (event, status) => {
+        try { console.error(JSON.stringify({ diagnostic: "hub", side: "proxy", id, method, event, time: new Date().toISOString(), elapsedMs: Date.now() - start, ...(status === undefined ? {} : { status }) })); } catch {}
+      };
+      log("arrive");
+      res.once("finish", () => log("finish", res.statusCode));
+      res.once("close", () => log("close", res.statusCode));
+    }
     const originalUrl = req.originalUrl || "";
     const queryIndex = originalUrl.indexOf("?");
     const pathname = queryIndex === -1 ? originalUrl : originalUrl.slice(0, queryIndex);
@@ -227,7 +239,9 @@ export function createHubProxy({ store, events, jsonParser }) {
         action ? Buffer.concat(chunks) : undefined,
         controller.signal,
         () => targets.get(key) === target,
+        () => log("forward"),
       );
+      log("upstream-response", result.response.statusCode);
       close = result.close;
       const upstream = result.response;
       res.status(upstream.statusCode || 502);
@@ -243,6 +257,7 @@ export function createHubProxy({ store, events, jsonParser }) {
         upstream.pipe(res);
       });
     } catch (error) {
+      log("upstream-failure");
       if (!res.headersSent && !res.destroyed)
         res.status(error?.code === "HUB_TARGET_CHANGED" ? 404 : 502).json({ error: "Hub unavailable" });
       else if (!res.destroyed) res.destroy();

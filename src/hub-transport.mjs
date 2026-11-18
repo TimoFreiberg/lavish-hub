@@ -11,7 +11,17 @@ export async function createHubTransport(operations, { resource, guardSource = a
   const capability = randomBytes(32).toString('hex');
   const resourceKey = randomBytes(32).toString('hex');
   const identityKey = randomBytes(32).toString('hex');
+  let diagnosticId = 0;
   const server = http.createServer(async (req, res) => {
+    if (process.env.LAVISH_HUB_DIAGNOSTICS === '1' && (req.method === 'POST' || req.method === 'OPTIONS')) {
+      const id = ++diagnosticId, start = Date.now(), method = req.method;
+      const log = (event, status) => {
+        try { console.error(JSON.stringify({ diagnostic: 'hub', side: 'owner', id, method, event, time: new Date().toISOString(), elapsedMs: Date.now() - start, ...(status === undefined ? {} : { status }) })); } catch {}
+      };
+      log('arrive');
+      res.once('finish', () => log('finish', res.statusCode));
+      res.once('close', () => log('close', res.statusCode));
+    }
     const respond = (status, value) => {
       res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...(req.headers.origin === 'null' ? { 'access-control-allow-origin': 'null', vary: 'Origin' } : {}) });
       res.end(JSON.stringify(value));
