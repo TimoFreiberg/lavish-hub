@@ -237,6 +237,11 @@ test('long rendered descriptions and statistics have resize handles, immutable c
     assert.equal(await node.evaluate(element => getComputedStyle(element).resize), 'vertical');
     assert.equal(await node.evaluate(element => element.scrollHeight > element.clientHeight), true);
   }
+  const description = page.locator('.commit-description').first();
+  await description.focus();
+  assert.equal(await description.evaluate(element => document.activeElement === element), true);
+  await page.keyboard.press('End');
+  await assertEventually(async () => assert.ok(await description.evaluate(element => element.scrollTop > 0)));
   assert.equal(await page.getByRole('button', { name: 'Edit Description dddddddddddd' }).count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Edit Description ffffffffffff' }).count(), 0);
 });

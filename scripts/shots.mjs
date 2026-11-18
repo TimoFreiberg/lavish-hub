@@ -19,6 +19,7 @@ async function ready(page, variant, artifact, source) {
   if (variant.kind === 'hub') {
     await frame.getByText('Connected', { exact: true }).waitFor();
     if (['dirty', 'conflict', 'disconnected'].includes(variant.name)) {
+      await frame.getByRole('button', { name: /Edit Description/ }).first().click();
       await frame.getByRole('textbox', { name: /Description/ }).fill('An unsaved description draft');
       if (variant.name === 'conflict') {
         await frame.getByRole('button', { name: 'Save description' }).click();
@@ -31,7 +32,7 @@ async function ready(page, variant, artifact, source) {
       }
     }
     if (variant.name === 'tasks') await frame.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor();
-    if (variant.name === 'markdown') await frame.getByRole('button', { name: 'Edit', exact: true }).waitFor();
+    if (variant.name === 'markdown') await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor();
     if (variant.name === 'html') await frame.locator('iframe[title="Review HTML"]').waitFor();
     if (variant.name === 'changes') await frame.locator('.hub-diff .sidebar').waitFor();
   } else await frame.waitForSelector('h1');

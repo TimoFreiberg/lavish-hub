@@ -5,6 +5,7 @@ import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:f
 import os from 'node:os';
 import path from 'node:path';
 import { markdownTitle, renderMarkdown, writeMarkdown } from '../src/markdown.mjs';
+import { syntaxTheme } from '../src/orangebox.mjs';
 
 const require = createRequire(import.meta.url);
 const deps = { resolve: name => require.resolve(name) };
@@ -55,18 +56,20 @@ test('highlights fenced language aliases and falls back for unknown languages', 
 });
 
 test('highlights lazy embedded grammars, including recursive dependencies', async () => {
-  const astro = await renderMarkdown('```astro\n<style lang="scss">\n$color: red;\n</style>\n```', deps);
-  assert.match(astro.body, /<span style="color:#E36209;--shiki-dark:#FFAB70">\$color<\/span>/);
-
-  // Vue loads Markdown lazily, which in turn loads Python lazily.
-  const source = '```vue\n<docs lang="md">\n~~~python\ndef example():\n    return 42\n~~~\n</docs>\n```';
-  const page = await renderMarkdown(source, deps);
   const { default: MarkdownIt } = await import('markdown-it');
   const { default: shiki } = await import('@shikijs/markdown-it');
-  const md = new MarkdownIt().use(await shiki({ themes: { light: 'github-light', dark: 'github-dark' }, fallbackLanguage: 'text' }));
-  const expected = md.render(source).match(/<code[^>]*>([\s\S]*?)<\/code>/)[1];
-  assert.match(expected, /<span style="[^"]+">def<\/span>/);
-  assert.equal(page.body.match(/<code[^>]*>([\s\S]*?)<\/code>/)[1], expected);
+  const md = new MarkdownIt().use(await shiki({ theme: syntaxTheme, fallbackLanguage: 'text' }));
+  const cases = [
+    ['```astro\n<style lang="scss">\n$color: red;\n</style>\n```', /<span style="[^"]+">\$color<\/span>/],
+    // Vue loads Markdown lazily, which in turn loads Python lazily.
+    ['```vue\n<docs lang="md">\n~~~python\ndef example():\n    return 42\n~~~\n</docs>\n```', /<span style="[^"]+">def<\/span>/],
+  ];
+  for (const [source, token] of cases) {
+    const page = await renderMarkdown(source, deps);
+    const expected = md.render(source).match(/<code[^>]*>([\s\S]*?)<\/code>/)[1];
+    assert.match(expected, token);
+    assert.equal(page.body.match(/<code[^>]*>([\s\S]*?)<\/code>/)[1], expected);
+  }
 });
 
 test('invalid yaml is escaped and heading supplies title', async () => {

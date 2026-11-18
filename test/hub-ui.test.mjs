@@ -72,7 +72,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   assert.equal(await page.getByText('Working tree may differ from the reviewed revision').count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Copy Zed command :1' }).count(), 1);
   for (const selector of ['.file-header .path', '.file-header .viewed']) {
-    assert.equal(await page.locator(selector).first().evaluate(el => getComputedStyle(el).color), 'rgb(230, 237, 243)');
+    assert.equal(await page.locator(selector).first().evaluate(el => getComputedStyle(el).color), 'rgb(235, 225, 205)');
   }
   await page.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
   await page.getByRole('button', { name: 'Add comment' }).click();

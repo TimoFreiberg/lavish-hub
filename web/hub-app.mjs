@@ -153,7 +153,7 @@ async function renderView(focusChangeId) {
       if (state.text === state.original && !state.saving && !state.message && !state.awaitingSnapshot) { state.text = commit.description; state.original = commit.description; state.commitId = commit.commitId; }
       const card = el('section', null, { class: 'card' }); card.append(el('h2', `${commit.changeId.slice(0, 12)} · ${commit.commitId.slice(0, 12)}`));
       const label = `Description ${commit.changeId.slice(0, 12)}`;
-      const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}` });
+      const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}`, tabindex: '0', role: 'region', 'aria-label': `Read ${label}` });
       const area = editor(label, state.text, value => { state.text = value; });
       area.className = 'commit-editor'; area.rows = 1; area.wrap = 'off';
       display.hidden = state.editing; area.hidden = !state.editing;
