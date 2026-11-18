@@ -175,20 +175,51 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(await siblingPage.evaluate(() => window.assetLoaded), true);
   assert.equal(await siblingPage.locator('p').evaluate(el => getComputedStyle(el).color), 'rgb(1, 2, 3)');
   assert.equal(await siblingPage.getByAltText('asset').evaluate(el => el.naturalWidth), 2);
+  for (const fromHub of [true, false]) {
+    await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
+    const slowPage = await browser.newPage();
+    await slowPage.goto(`${browserBase}/${fromHub ? 'hub.html' : sibling}`);
+    let releaseDestination, requests = 0;
+    const gate = new Promise(resolve => { releaseDestination = resolve; });
+    const destination = fromHub ? sibling : 'hub.html';
+    await slowPage.route(`**/${destination}`, async route => { requests++; await gate; await route.continue().catch(() => {}); });
+    await slowPage.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
+    for (let i = 0; i < 200 && !requests; i++) await delay(30);
+    assert.equal(requests, 1);
+    await delay(2500);
+    assert.equal(requests, 1, 'slow navigation must not restart');
+    releaseDestination();
+    await slowPage.waitForURL(`**/${destination}`);
+    await slowPage.close();
+  }
+  for (const fromHub of [true, false]) {
+    await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
+    const cancelled = await browser.newPage();
+    await cancelled.goto(`${browserBase}/${fromHub ? 'hub.html' : sibling}`);
+    await cancelled.evaluate(() => { window.addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; }); });
+    const dialog = cancelled.waitForEvent('dialog');
+    await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
+    await (await dialog).dismiss();
+    await cancelled.getByText('Navigation cancelled. Select a destination to try again.').waitFor({ timeout: 5000 });
+    await delay(2300);
+    assert.ok(cancelled.url().endsWith(fromHub ? 'hub.html' : sibling));
+    await cancelled.close();
+  }
+  await request('navigate', { id: 'inside' });
   await siblingPage.getByRole('link', { name: 'Changes', exact: true }).click();
   await siblingPage.getByRole('button', { name: 'Changes', exact: true }).waitFor();
   assert.equal((await request('status')).selected, 'changes');
   await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
   await siblingPage.getByLabel('Frame draft').fill('Authored draft');
   let refreshes = 0;
-  siblingPage.on('response', response => {
-    if (response.request().postDataJSON()?.operation === 'documents' && response.ok()) refreshes++;
+  siblingPage.on('request', request => {
+    if (request.postDataJSON()?.operation === 'documents') refreshes++;
   });
   const tasksLink = siblingPage.getByRole('link', { name: 'Tasks', exact: true });
   await tasksLink.focus();
   await siblingPage.evaluate(() => { window.focusedNavigationLink = document.activeElement; });
   for (let i = 0; i < 200 && refreshes < 2; i++) await delay(30);
-  assert.ok(refreshes >= 2, 'expected two completed navigation refreshes');
+  assert.ok(refreshes >= 2, 'expected two navigation refreshes');
   assert.equal(await siblingPage.evaluate(() => document.activeElement === window.focusedNavigationLink && window.focusedNavigationLink.isConnected), true);
   await tasksLink.click();
   await siblingPage.getByRole('button', { name: 'Keep editing' }).waitFor();

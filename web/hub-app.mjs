@@ -68,20 +68,25 @@ function renderNav() {
   }
 }
 let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
-let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false, navigationRecovery;
+let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false;
 function pauseRefresh() { refreshPaused = true; clearTimeout(refreshTimer); }
 function resumeRefresh() {
-  clearTimeout(navigationRecovery); leavingConfirmed = false;
+  leavingConfirmed = false;
   if (!refreshPaused) return;
+  if (startsInExplore(selected)) globalThis.lavish?.setAnnotationMode?.(false);
   refreshPaused = false;
   if (busy) refreshRequested = true;
   else refreshTimer = setTimeout(refresh, 0);
 }
 function leavePage(url) {
   pauseRefresh(); leavingConfirmed = true;
-  navigationRecovery = setTimeout(resumeRefresh, 2000);
   location.href = url;
 }
+window.navigation?.addEventListener('navigate', event => {
+  if (leavingConfirmed) event.signal.addEventListener('abort', () => {
+    navigationError = 'Navigation cancelled. Select a destination to try again.'; status(connectionStatus); resumeRefresh();
+  }, { once: true });
+});
 window.addEventListener('pageshow', event => { if (event.persisted) resumeRefresh(); });
 function synchronizeNavigation(id) {
   pendingOwnerNavigation++;
@@ -125,11 +130,14 @@ async function select(id) {
     if (revision !== navigationRevision) return;
     if (leavesPage) {
       if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
+      const modeEditRevision = editRevision;
       if (startsInExplore(selected)) await globalThis.lavish?.setAnnotationMode?.(true);
+      if (revision !== navigationRevision) return;
+      if (modeEditRevision !== editRevision && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
       leavePage(new URL(doc.sibling, location.href).href); return;
     }
     selected = id; renderNav(); await renderView();
-  } catch (error) { status(error.message); }
+  } catch (error) { if (revision === navigationRevision) { navigationError = error.message; status(connectionStatus); } }
   finally { if (revision === navigationRevision) { navigationPending = false; if (leavesPage && !leavingConfirmed) resumeRefresh(); } }
 }
 const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
@@ -147,7 +155,13 @@ async function refresh(force = false) {
     if (state.selected && !navigationError && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
-    if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { pauseRefresh(); if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true); leavePage(new URL(selectedDoc.sibling, location.href).href); return; }
+    if (!navigationError && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
+      pauseRefresh();
+      if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true);
+      if (navigationAtStart !== navigationRevision || navigationPending || pendingOwnerNavigation || hasUnsavedDrafts()) { selected = navigationAtStart === navigationRevision ? oldSelected : selected; resumeRefresh(); return; }
+      selected = oldSelected;
+      leavePage(new URL(selectedDoc.sibling, location.href).href); return;
+    }
     snapshotLoading = true;
     const request = ++snapshotRequest;
     const snapshotResult = action('snapshot', { force }).then(value => ({ value }), error => ({ error }));
@@ -300,14 +314,18 @@ async function renderView(focusChangeId) {
     }
     return;
   }
-  const bundle = (doc || id === 'tasks') ? requireBundle('markdown', 'hubMarkdownRenderer', view, generation) : null;
+  const bundle = (doc || id === 'tasks') ? loadBundle('markdown', 'hubMarkdownRenderer').then(() => null, error => error) : null;
   let state = drafts.get(`doc:${id}`);
   if (!state) {
     try { const data = await action('readDocument', { id }); if (generation !== renderGeneration) return; state = draft(`doc:${id}`, { text: data.text, original: data.text, hash: data.hash, version: data.version, preview: true }); }
     catch (error) { if (generation === renderGeneration) view.append(notice(error.message)); return; }
   }
   if (generation !== renderGeneration) return;
-  if (bundle && !(await bundle)) return;
+  if (bundle) {
+    const error = await bundle;
+    if (generation !== renderGeneration) return;
+    if (error) { view.append(notice(error.message), button('Retry', () => renderView())); return; }
+  }
   const info = notice(state.message || '');
   const area = editor(id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? '' : 'Unsaved changes'; });
   if (id === 'tasks') {

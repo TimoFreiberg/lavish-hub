@@ -64,7 +64,56 @@ test('cross-page navigation pauses pending refresh and resumes after failure', {
   releaseNavigation();
   await assertEventually(() => assert.ok(statusCalls >= 3));
   await assertEventually(() => assert.ok(snapshots >= 2));
+  assert.equal(await page.locator('#connection').textContent(), 'navigation failed');
   assert.equal(navigations, 1);
+});
+
+test('new selection wins while remote navigation waits for annotation mode', { timeout: 30000 }, async t => {
+  let selected = 'commits', statusCalls = 0;
+  const transport = await createHubTransport({
+    status: () => { statusCalls++; return { available: true, selected }; },
+    documents: () => ({ documents: [{ id: 'published', title: 'Published', source: 'index.html', sibling: 'published.html' }] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.lavish={setAnnotationMode(value){if(value&&!globalThis.releaseMode)return new Promise(resolve=>{globalThis.releaseMode=resolve})}};globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByText('No commits in this range.').waitFor();
+  selected = 'published';
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.waitForFunction(() => typeof globalThis.releaseMode === 'function');
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor();
+  const before = statusCalls;
+  await page.evaluate(() => globalThis.releaseMode());
+  await assertEventually(() => assert.ok(statusCalls > before));
+  assert.equal(await page.locator('#view h1').textContent(), 'Tasks');
+});
+
+test('document failure does not also display a renderer failure', { timeout: 30000 }, async t => {
+  let releaseRead;
+  const gate = new Promise(resolve => { releaseRead = resolve; });
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: () => ({}), readDocument: async () => { await gate; throw new Error('Document unavailable'); },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { releaseRead(); await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.waitForTimeout(100);
+  assert.equal(await page.getByText('Missing markdown renderer').count(), 0);
+  releaseRead();
+  await page.getByText('Document unavailable').waitFor();
+  assert.equal(await page.getByText('Missing markdown renderer').count(), 0);
 });
 
 test('Markdown bundle and document read start independently', { timeout: 30000 }, async t => {
