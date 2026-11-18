@@ -215,10 +215,11 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     async function asset(content, extension) {
       const name = `hub-asset-${digest(content)}.${extension}`;
       const target = path.join(identity.directory, name);
-      try { await writeFile(target, content, { mode: 0o600, flag: 'wx' }); }
-      catch (error) {
-        if (error.code !== 'EEXIST' || await readFile(target, 'utf8') !== content) throw error;
-      }
+      const temp = `${target}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temp, content, { mode: 0o600, flag: 'wx' });
+        await rename(temp, target);
+      } finally { await rm(temp, { force: true }); }
       return name;
     }
     const [cssAsset, diffAsset, markdownAsset, appAsset] = await Promise.all([

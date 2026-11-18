@@ -87,7 +87,19 @@ try {
   await frame.waitForFunction(() => window.workerResponses.some(response => response.type === 'success' && response.requestType === 'diff'), null, { timeout: 30000 });
   const hubHtml = await readFile(record.page, 'utf8');
   assert.ok(hubHtml.includes('globalThis.hubConfig='));
-  const exported = await buildSelfContainedHtml(hubHtml, { htmlPath: record.page });
+  const assetNames = [...hubHtml.matchAll(/(?:src|href)="(hub-asset-[a-f0-9]{64}\.(?:js|css))"/g)].map(match => match[1]);
+  assert.equal(assetNames.length, 4);
+  for (const name of assetNames) {
+    const assetUrl = new URL(name, frame.url()).href;
+    const response = await page.request.get(assetUrl);
+    assert.equal(response.status(), 200);
+    const etag = response.headers().etag;
+    assert.ok(etag);
+    assert.equal((await page.request.get(assetUrl, { headers: { 'If-None-Match': etag } })).status(), 304);
+  }
+  const exported = await buildSelfContainedHtml(hubHtml, { baseDir: path.dirname(record.page), confineDir: path.dirname(record.page) });
+  assert.deepEqual(exported.warnings, []);
+  for (const name of assetNames) assert.ok(!exported.html.includes(name));
   const exportPath = path.join(dir, 'hub-export.html'); await writeFile(exportPath, exported.html);
   const offline = await browser.newContext({ offline: true });
   const offlinePage = await offline.newPage(); await offlinePage.goto(pathToFileURL(exportPath).href);

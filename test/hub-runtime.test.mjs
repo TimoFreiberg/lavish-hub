@@ -58,6 +58,13 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await execute(process.execPath, ['--input-type=module', '-e', `import { ensureHubAssets } from ${JSON.stringify(depsModule)}; await ensureHubAssets();`], { env: { ...env, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   generatedDirectory = identity.directory;
+  await mkdir(identity.directory, { recursive: true });
+  const appContent = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const appName = `hub-asset-${createHash('sha256').update(appContent).digest('hex')}.js`;
+  const oldAsset = path.join(identity.directory, `hub-asset-${'0'.repeat(64)}.js`);
+  await writeFile(path.join(identity.directory, appName), appContent.slice(0, 10));
+  await writeFile(`${path.join(identity.directory, appName)}.interrupted.tmp`, 'partial');
+  await writeFile(oldAsset, 'old version');
   const browserBase = `http://127.0.0.1:${server.address().port}`;
   const ownerScript = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; process.exitCode = await runHubOwner({ workspace: process.argv[1] }, { prepare: async (_page, options) => { if (!options.vendored) throw Error('expected vendored'); return { url: 'http://localhost:123/review' }; } });`;
   const ownerArgs = ['--input-type=module', '-e', ownerScript, repo];
@@ -77,6 +84,9 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const hubHtml = await readFile(path.join(identity.directory, 'hub.html'), 'utf8');
   const bundleNames = [...hubHtml.matchAll(/(?:src|href)="(hub-asset-[a-f0-9]{64}\.(?:js|css))"/g)].map(match => match[1]);
   assert.equal(bundleNames.length, 4);
+  assert.ok(bundleNames.includes(appName));
+  assert.equal(await readFile(path.join(identity.directory, appName), 'utf8'), appContent);
+  assert.equal(await readFile(oldAsset, 'utf8'), 'old version');
   let assetBytes = 0;
   for (const name of bundleNames) {
     const response = await fetch(`${browserBase}/${name}`);
