@@ -16,7 +16,7 @@ test('hub views do not add a feedback form', { timeout: 30000 }, async t => {
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   const page = await browser.newPage();
-  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}; globalThis.mountLavishDiff=()=>({update(){}})</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}; globalThis.mountLavishDiff=()=>({update(){},hide(){}})</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
   for (const name of ['Commits', 'Changes', 'Tasks', 'Review']) {
     await page.getByRole('button', { name, exact: true }).click();
     await page.getByRole('heading', { name, exact: true }).first().waitFor();
