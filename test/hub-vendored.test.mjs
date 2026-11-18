@@ -218,11 +218,13 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   const markdown = path.join(dir, 'notes.md');
   await writeFile(markdown, '# Notes\nOriginal\n');
   await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', markdown, '--id', 'notes', '--title', 'Notes', '--workspace', repo], { env });
+  await frame.getByRole('button', { name: 'Notes', exact: true }).click();
+  await frame.getByRole('button', { name: 'Edit Document Markdown' }).click();
   const editor = frame.getByRole('textbox', { name: 'Document Markdown' });
   await editor.waitFor();
   await editor.fill('# Notes\nSaved through the forward\n');
   await frame.getByRole('button', { name: 'Save', exact: true }).click();
-  await frame.getByText('Saved', { exact: true }).waitFor();
+  await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor();
   assert.equal(await readFile(markdown, 'utf8'), '# Notes\nSaved through the forward\n');
   await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
