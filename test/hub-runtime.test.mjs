@@ -192,6 +192,35 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await slowPage.waitForURL(`**/${destination}`);
     await slowPage.close();
   }
+  const otherHtml = path.join(repo, 'other.html');
+  await writeFile(otherHtml, '<!doctype html><p>Other</p>');
+  await run(process.execPath, [cli, 'hub', 'publish', otherHtml, '--id', 'other-html', '--workspace', repo], { env });
+  const otherSibling = (await request('documents')).documents.find(doc => doc.id === 'other-html').sibling;
+  for (const fromHub of [true, false]) {
+    await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
+    const page = await browser.newPage();
+    await page.addInitScript(() => { Object.defineProperty(window, 'navigation', { value: undefined }); });
+    await page.goto(`${browserBase}/${fromHub ? 'hub.html' : sibling}`);
+    let release, attempts = 0, polls = 0;
+    const gate = new Promise(resolve => { release = resolve; });
+    page.on('request', req => { if (req.postDataJSON()?.operation === 'documents') polls++; });
+    await page.route(url => fromHub ? [sibling, otherSibling].some(name => url.pathname.endsWith(`/${name}`)) : url.pathname.endsWith('/hub.html'), async route => { attempts++; await gate; await route.abort().catch(() => {}); });
+    await page.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
+    for (let i = 0; i < 200 && attempts === 0; i++) await delay(30);
+    assert.equal(attempts, 1);
+    await request('navigate', { id: 'changes' });
+    for (let i = 0; i < 200 && polls < 2; i++) await delay(30);
+    assert.ok(polls >= 2, 'polling resumes while the destination is slow');
+    await delay(2300);
+    assert.equal(attempts, 1, 'owner changes must not cancel an uncertain navigation');
+    if (fromHub) {
+      await request('navigate', { id: 'other-html' });
+      await delay(2300);
+      assert.equal(attempts, 1, 'another HTML selection must not start a competing load');
+    }
+    release();
+    await page.close();
+  }
   for (const fromHub of [true, false]) for (const disableNavigationApi of [true, false]) {
     await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
     const cancelled = await browser.newPage();
@@ -209,6 +238,12 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await delay(2300);
     assert.ok(cancelled.url().endsWith(fromHub ? 'hub.html' : sibling));
     if (!disableNavigationApi) await cancelled.getByText('Navigation cancelled. Select a destination to try again.').waitFor();
+    if (fromHub && disableNavigationApi) {
+      await request('navigate', { id: 'changes' });
+      for (let i = 0; i < 200 && await cancelled.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current') !== 'page'; i++) await delay(30);
+      assert.equal(await cancelled.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current'), 'page');
+      await cancelled.getByRole('button', { name: 'Tasks', exact: true }).click();
+    }
     await cancelled.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
     if (fromHub) {
       await cancelled.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
