@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
+import { request as httpRequest } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -91,6 +92,20 @@ try {
   assert.equal(assetNames.length, 4);
   for (const name of assetNames) {
     const assetUrl = new URL(name, frame.url()).href;
+    if (name.endsWith('.js')) {
+      const wire = () => new Promise((resolve, reject) => {
+        const started = performance.now();
+        const req = httpRequest(assetUrl, { headers: { 'accept-encoding': 'gzip' } }, response => {
+          let bytes = 0; response.on('data', chunk => { bytes += chunk.length; });
+          response.on('end', () => resolve({ status: response.statusCode, encoding: response.headers['content-encoding'], bytes, ms: performance.now() - started }));
+          response.on('error', reject);
+        });
+        req.on('error', reject); req.end();
+      });
+      const cold = await wire(), warm = await wire();
+      assert.equal(cold.status, 200); assert.equal(cold.encoding, 'gzip'); assert.equal(warm.encoding, 'gzip');
+      console.log(`Hub JS identity ${(await readFile(path.join(path.dirname(record.page), name))).length} bytes; gzip ${cold.bytes} bytes; first ${cold.ms.toFixed(1)} ms, warm ${warm.ms.toFixed(1)} ms`);
+    }
     const response = await page.request.get(assetUrl);
     assert.equal(response.status(), 200);
     const etag = response.headers().etag;

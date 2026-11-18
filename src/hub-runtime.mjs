@@ -226,6 +226,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       asset(`${themeCss}\n${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }`, 'css'),
       asset(diffScript, 'js'), asset(markdownScript, 'js'), asset(script, 'js'),
     ]);
+    transport.assets = [diffAsset, markdownAsset, appAsset];
     const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub</title><link rel="stylesheet" href="${cssAsset}"></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><script src="${diffAsset}"></script><script src="${markdownAsset}"></script><script src="${appAsset}"></script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);

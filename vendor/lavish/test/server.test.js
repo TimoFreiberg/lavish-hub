@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { on, once } from "node:events";
 import { link, mkdtemp, mkdir, open, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -2928,6 +2929,85 @@ test("artifact HTML negotiates compression and rejects expired compressed loads"
       release();
       assert.equal((await pending).status, 409);
     }
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("only registered unchanged hub JavaScript is compressed", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-hub-compression-"));
+  const artifact = path.join(dir, "artifact.html");
+  const content = Buffer.from("generated JavaScript;".repeat(1000));
+  const name = `hub-asset-${createHash("sha256").update(content).digest("hex")}.js`;
+  const oldName = `hub-asset-${"0".repeat(64)}.js`;
+  await writeFile(artifact, "<!doctype html><title>Hub</title>");
+  await writeFile(path.join(dir, name), content);
+  await writeFile(path.join(dir, oldName), content);
+  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json") });
+  const wire = (url, headers = {}, method = "GET") =>
+    new Promise((resolve, reject) => {
+      const req = httpRequest(url, { method, headers }, (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+        res.on("error", reject);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const { key } = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    }).then((res) => res.json());
+    const registration = {
+      key,
+      port: 12345,
+      capability: "a".repeat(64),
+      resourceKey: "b".repeat(64),
+      identityKey: "c".repeat(64),
+      assets: [name],
+    };
+    const register = (headers = {}) =>
+      fetch(`${base}/api/hub-proxy/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(registration),
+      });
+    assert.equal((await register({ origin: "https://example.com" })).status, 403);
+    const url = `${base}/artifact/${key}/${name}`;
+    assert.equal((await wire(url, { "accept-encoding": "gzip" })).headers["content-encoding"], undefined);
+    assert.equal((await register()).status, 200);
+    const gzip = await wire(url, { "accept-encoding": "gzip" });
+    assert.equal(gzip.status, 200);
+    assert.equal(gzip.headers["content-encoding"], "gzip");
+    assert.match(gzip.headers.vary, /Accept-Encoding/i);
+    assert.deepEqual(zlib.gunzipSync(gzip.body), content);
+    assert.equal((await wire(url, { "accept-encoding": "gzip", "if-none-match": gzip.headers.etag })).status, 304);
+    const failed = await wire(url, { "accept-encoding": "gzip", "if-match": '"different"' });
+    assert.equal(failed.status, 412);
+    assert.equal(failed.headers["content-encoding"], undefined);
+    assert.equal(
+      (await wire(url, { "accept-encoding": "gzip" }, "HEAD")).headers["content-length"],
+      gzip.headers["content-length"],
+    );
+    assert.equal((await wire(url, { "accept-encoding": "*;q=0" })).status, 406);
+    assert.equal(
+      (await wire(url, { "accept-encoding": "gzip;q=0, identity;q=1" })).headers["content-encoding"],
+      undefined,
+    );
+    assert.equal((await wire(url, { "accept-encoding": "gzip", range: "bytes=0-9" })).status, 206);
+    assert.equal(
+      (await wire(`${base}/artifact/${key}/${oldName}`, { "accept-encoding": "gzip" })).headers["content-encoding"],
+      undefined,
+    );
+    await writeFile(path.join(dir, name), "authored replacement");
+    const replaced = await wire(url, { "accept-encoding": "gzip" });
+    assert.equal(replaced.headers["content-encoding"], undefined);
+    assert.equal(replaced.body.toString(), "authored replacement");
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });

@@ -95,13 +95,18 @@ export function createHubProxy({ store, events, jsonParser }) {
     return jsonParser(req, res, next);
   };
   const register = async (req, res) => {
-    const { key, port, capability, resourceKey, identityKey } = req.body || {};
+    const { key, port, capability, resourceKey, identityKey, assets = [] } = req.body || {};
     if (
       !sessionPattern.test(key || "") ||
       !Number.isInteger(port) ||
       port < 1 ||
       port > 65535 ||
-      ![capability, resourceKey, identityKey].every((value) => typeof value === "string" && secretPattern.test(value))
+      ![capability, resourceKey, identityKey].every(
+        (value) => typeof value === "string" && secretPattern.test(value),
+      ) ||
+      !Array.isArray(assets) ||
+      assets.length > 3 ||
+      !assets.every((name) => typeof name === "string" && /^hub-asset-[a-f0-9]{64}\.js$/.test(name))
     ) {
       return res.status(400).json({ error: "Invalid registration" });
     }
@@ -123,9 +128,10 @@ export function createHubProxy({ store, events, jsonParser }) {
       target.port !== port ||
       target.capability !== capability ||
       target.resourceKey !== resourceKey ||
-      target.identityKey !== identityKey
+      target.identityKey !== identityKey ||
+      JSON.stringify(target.assets) !== JSON.stringify(assets)
     ) {
-      targets.set(key, { port, capability, resourceKey, identityKey });
+      targets.set(key, { port, capability, resourceKey, identityKey, assets });
     }
     return res.json({ ok: true });
   };
@@ -140,9 +146,24 @@ export function createHubProxy({ store, events, jsonParser }) {
   const handle = async (req, res) => {
     let log = () => {};
     if (process.env.LAVISH_HUB_DIAGNOSTICS === "1" && (req.method === "POST" || req.method === "OPTIONS")) {
-      const id = ++diagnosticId, start = Date.now(), method = req.method;
+      const id = ++diagnosticId,
+        start = Date.now(),
+        method = req.method;
       log = (event, status) => {
-        try { console.error(JSON.stringify({ diagnostic: "hub", side: "proxy", id, method, event, time: new Date().toISOString(), elapsedMs: Date.now() - start, ...(status === undefined ? {} : { status }) })); } catch {}
+        try {
+          console.error(
+            JSON.stringify({
+              diagnostic: "hub",
+              side: "proxy",
+              id,
+              method,
+              event,
+              time: new Date().toISOString(),
+              elapsedMs: Date.now() - start,
+              ...(status === undefined ? {} : { status }),
+            }),
+          );
+        } catch {}
       };
       log("arrive");
       res.once("finish", () => log("finish", res.statusCode));
@@ -271,6 +292,10 @@ export function createHubProxy({ store, events, jsonParser }) {
     control,
     register,
     unregister,
+    generatedAssetRegistration: (key, name) => {
+      const target = targets.get(key);
+      return target?.assets.includes(name) ? target : null;
+    },
     handle,
     clear: () => {
       targets.clear();
