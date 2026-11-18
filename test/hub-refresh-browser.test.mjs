@@ -6,6 +6,37 @@ import { createHubTransport } from '../src/hub-transport.mjs';
 import { build } from 'esbuild';
 import { themeCss } from '../src/orangebox.mjs';
 
+test('navigation renders before snapshot and serializes delayed owner updates', { timeout: 30000 }, async t => {
+  let releaseSnapshot, releaseNavigation;
+  const snapshotGate = new Promise(resolve => { releaseSnapshot = resolve; });
+  const navigationGate = new Promise(resolve => { releaseNavigation = resolve; });
+  let selected = 'commits';
+  const navigations = [];
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
+    snapshot: async () => { await snapshotGate; return { base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }; },
+    navigate: async ({ id }) => { navigations.push(id); if (navigations.length === 1) await navigationGate; selected = id; return { selected }; },
+    readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { releaseSnapshot(); releaseNavigation(); await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByText('Loading repository snapshot…').waitFor({ timeout: 3000 });
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor({ timeout: 3000 });
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('heading', { name: 'Commits' }).waitFor({ timeout: 3000 });
+  assert.deepEqual(navigations, ['tasks']);
+  releaseNavigation();
+  await assertEventually(() => assert.deepEqual(navigations, ['tasks', 'commits']));
+  releaseSnapshot();
+  await page.getByText('No commits in this range.').waitFor({ timeout: 3000 });
+  assert.equal(selected, 'commits');
+});
+
 test('refresh updates clean documents and retains dirty drafts and their target', { timeout: 30000 }, async t => {
   let selected = 'tasks';
   let document = { text: 'First\n', hash: 'first', version: 'one' };

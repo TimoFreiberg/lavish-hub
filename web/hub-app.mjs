@@ -34,7 +34,14 @@ function renderNav() {
     const b = button(label, () => select(id)); if (id === selected) b.setAttribute('aria-current', 'page'); nav.append(b);
   }
 }
-let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0;
+let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
+let ownerNavigation = Promise.resolve(), snapshotLoading = false;
+function synchronizeNavigation(id) {
+  pendingOwnerNavigation++;
+  const request = ownerNavigation.then(() => action('navigate', { id }));
+  ownerNavigation = request.catch(() => {}).finally(() => { pendingOwnerNavigation--; });
+  return request;
+}
 for (const type of ['input', 'change']) document.addEventListener(type, event => { if (event.isTrusted) editRevision++; }, true);
 function hasUnsavedDrafts() {
   return Boolean(diffView?.hasUnsavedDraft()) || [...drafts.values()].some(state => state.saving || state.text !== state.original);
@@ -54,7 +61,15 @@ async function select(id) {
       approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.');
       if (!approved) return;
     }
-    await action('navigate', { id });
+    if (!leavesPage) {
+      selected = id; renderNav();
+      const synchronization = synchronizeNavigation(id).catch(error => { status(error.message); });
+      navigationPending = false;
+      await renderView();
+      await synchronization;
+      return;
+    }
+    await synchronizeNavigation(id);
     if (revision !== navigationRevision) return;
     if (leavesPage) {
       if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
@@ -63,24 +78,33 @@ async function select(id) {
     }
     selected = id; renderNav(); await renderView();
   } catch (error) { status(error.message); }
-  finally { navigationPending = false; }
+  finally { if (revision === navigationRevision) navigationPending = false; }
 }
 const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
 async function refresh(force = false) {
   if (busy) { if (force) refreshRequested = true; return; } busy = true;
-  const navigationAtStart = navigationRevision;
+  const navigationAtStart = navigationRevision, navigationPendingAtStart = pendingOwnerNavigation > 0;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
-    const oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSnapshot = snapshotContent(snapshot);
+    let oldSelected = selected, oldDocuments = JSON.stringify(documents);
+    const oldSnapshot = snapshotContent(snapshot);
     documents = list.documents;
     const remoteDoc = documents.find(item => item.id === state.selected);
     const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
-    if (state.selected && !navigationPending && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
+    if (state.selected && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
     if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true); location.href = new URL(selectedDoc.sibling, location.href).href; return; }
-    try { const request = ++snapshotRequest; snapshot = await action('snapshot', { force }); snapshotApplied = request; status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
-    catch (error) { snapshot = undefined; status(error.message); }
+    snapshotLoading = true;
+    const request = ++snapshotRequest;
+    const snapshotResult = action('snapshot', { force }).then(value => ({ value }), error => ({ error }));
+    const initialRender = !rendered;
+    if (initialRender) { renderNav(); oldSelected = selected; oldDocuments = JSON.stringify(documents); await renderView(); }
+    const result = await snapshotResult;
+    if (navigationAtStart !== navigationRevision) oldSelected = selected;
+    snapshotLoading = false;
+    if (result.error) { snapshot = undefined; status(result.error.message); }
+    else { snapshot = result.value; snapshotApplied = request; status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
     let documentChanged = false;
     const cached = drafts.get(`doc:${selected}`);
     if (cached && cached.text === cached.original && !cached.saving) {
@@ -105,7 +129,7 @@ async function refresh(force = false) {
       } catch (error) { status(error.message); }
     }
     if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents)) renderNav();
-    if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (['commits', 'changes'].includes(selected) && oldSnapshot !== snapshotContent(snapshot))) {
+    if ((initialRender && ['commits', 'changes'].includes(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (['commits', 'changes'].includes(selected) && oldSnapshot !== snapshotContent(snapshot))) {
       const active = document.activeElement;
       const label = active?.closest('#view') && active.getAttribute('aria-label');
       const selection = label && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
@@ -138,7 +162,7 @@ async function renderView(focusChangeId) {
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
   view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
   if (id === 'commits' || id === 'changes') {
-    if (!snapshot) { view.append(notice('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
+    if (!snapshot) { view.append(notice(snapshotLoading ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
     if (id === 'changes') {
       view.append(diffContainer);
