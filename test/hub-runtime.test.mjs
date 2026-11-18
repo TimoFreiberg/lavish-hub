@@ -192,17 +192,33 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await slowPage.waitForURL(`**/${destination}`);
     await slowPage.close();
   }
-  for (const fromHub of [true, false]) {
+  for (const fromHub of [true, false]) for (const disableNavigationApi of [true, false]) {
     await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
     const cancelled = await browser.newPage();
+    if (disableNavigationApi) await cancelled.addInitScript(() => { Object.defineProperty(window, 'navigation', { value: undefined }); });
     await cancelled.goto(`${browserBase}/${fromHub ? 'hub.html' : sibling}`);
-    await cancelled.evaluate(() => { window.addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; }); });
+    let refreshesAfterCancel = 0;
+    cancelled.on('request', req => { if (req.postDataJSON()?.operation === 'documents') refreshesAfterCancel++; });
+    await cancelled.evaluate(() => { window.blockLeave = e => { e.preventDefault(); e.returnValue = ''; }; window.addEventListener('beforeunload', window.blockLeave); });
     const dialog = cancelled.waitForEvent('dialog');
     await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
     await (await dialog).dismiss();
-    await cancelled.getByText('Navigation cancelled. Select a destination to try again.').waitFor({ timeout: 5000 });
+    for (let i = 0; i < 200 && !refreshesAfterCancel; i++) await delay(30);
+    assert.ok(refreshesAfterCancel, 'polling resumes without Navigation API');
     await delay(2300);
     assert.ok(cancelled.url().endsWith(fromHub ? 'hub.html' : sibling));
+    await cancelled.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
+    if (fromHub) {
+      await cancelled.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
+      await cancelled.getByRole('textbox', { name: 'Tasks Markdown' }).fill('Still here');
+    } else await cancelled.getByLabel('Frame draft').fill('Still here');
+    const reloadDialog = cancelled.waitForEvent('dialog', { timeout: 5000 });
+    void cancelled.reload().catch(() => {});
+    assert.equal((await reloadDialog).type(), 'beforeunload');
+    await (await reloadDialog).dismiss();
+    await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
+    await cancelled.getByRole('button', { name: 'Leave page' }).click();
+    await cancelled.waitForURL(`**/${fromHub ? sibling : 'hub.html'}`);
     await cancelled.close();
   }
   await request('navigate', { id: 'inside' });

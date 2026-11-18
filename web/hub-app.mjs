@@ -68,10 +68,10 @@ function renderNav() {
   }
 }
 let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
-let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false;
+let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false, attemptedDestination = '', leaveTimer;
 function pauseRefresh() { refreshPaused = true; clearTimeout(refreshTimer); }
 function resumeRefresh() {
-  leavingConfirmed = false;
+  clearTimeout(leaveTimer); leavingConfirmed = false;
   if (!refreshPaused) return;
   if (startsInExplore(selected)) globalThis.lavish?.setAnnotationMode?.(false);
   refreshPaused = false;
@@ -79,12 +79,13 @@ function resumeRefresh() {
   else refreshTimer = setTimeout(refresh, 0);
 }
 function leavePage(url) {
-  pauseRefresh(); leavingConfirmed = true;
+  pauseRefresh(); leavingConfirmed = true; attemptedDestination = url;
+  leaveTimer = setTimeout(resumeRefresh, 1000);
   location.href = url;
 }
 window.navigation?.addEventListener('navigate', event => {
   if (leavingConfirmed) event.signal.addEventListener('abort', () => {
-    navigationError = 'Navigation cancelled. Select a destination to try again.'; status(connectionStatus); resumeRefresh();
+    status('Navigation cancelled. Select a destination to try again.'); resumeRefresh();
   }, { once: true });
 });
 window.addEventListener('pageshow', event => { if (event.persisted) resumeRefresh(); });
@@ -105,6 +106,7 @@ async function select(id) {
   const doc = documents.find(item => item.id === id);
   const leavesPage = doc?.sibling && doc.source?.toLowerCase().endsWith('.html');
   if (navigationPending) return;
+  attemptedDestination = ''; navigationError = ''; status(connectionStatus);
   navigationPending = true;
   if (leavesPage) pauseRefresh();
   const revision = ++navigationRevision;
@@ -152,7 +154,8 @@ async function refresh(force = false) {
     documents = list.documents;
     const remoteDoc = documents.find(item => item.id === state.selected);
     const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
-    if (state.selected && !navigationError && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
+    const remoteDestination = remoteLeavesPage ? new URL(remoteDoc.sibling, location.href).href : '';
+    if (state.selected && (!remoteDestination || remoteDestination !== attemptedDestination) && !navigationError && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
     if (!navigationError && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
