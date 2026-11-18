@@ -3005,6 +3005,16 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
     assert.deepEqual(range.body, content.subarray(0, 10));
     assert.equal(range.headers.etag, identity.headers.etag);
     assert.equal(range.headers.etag, gzip.headers.etag);
+    for (const validator of [
+      identity.headers.etag,
+      identity.headers.etag.slice(2),
+      `"prefix${identity.headers.etag}"`,
+    ]) {
+      const response = await wire(url, { range: "bytes=0-9", "if-range": validator });
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body, content);
+    }
+    assert.equal((await wire(url, { range: "bytes=0-9", "if-range": identity.headers["last-modified"] })).status, 206);
     assert.equal((await wire(url, { range: "bytes=0-9", "if-none-match": identity.headers.etag })).status, 304);
     for (const headers of [{}, { range: "bytes=0-9" }]) {
       assert.equal((await wire(url, { ...headers, "if-match": identity.headers.etag })).status, 412);
@@ -3019,6 +3029,96 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
     const replaced = await wire(url, { "accept-encoding": "gzip" });
     assert.equal(replaced.headers["content-encoding"], undefined);
     assert.equal(replaced.body.toString(), "authored replacement");
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("concurrent registered asset compression shares failures and retries", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-hub-coalesce-"));
+  const artifact = path.join(dir, "artifact.html");
+  const content = Buffer.from("static JavaScript;".repeat(1000));
+  const name = `hub-asset-${createHash("sha256").update(content).digest("hex")}.js`;
+  await writeFile(artifact, "<!doctype html><title>Hub</title>");
+  await writeFile(path.join(dir, name), content);
+  let calls = 0;
+  /** @type {() => void} */
+  let release = () => {};
+  /** @type {() => void} */
+  let started = () => {};
+  const server = await serve({
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    compressArtifact: async (_encoding, bytes) => {
+      calls++;
+      started();
+      await /** @type {Promise<void>} */ (
+        new Promise((resolve) => {
+          release = resolve;
+        })
+      );
+      if (calls === 1) throw new Error("compression failed");
+      return zlib.gzipSync(bytes);
+    },
+  });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const { key } = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    }).then((res) => res.json());
+    assert.equal(
+      (
+        await fetch(`${base}/api/hub-proxy/register`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            key,
+            port: 12345,
+            capability: "a".repeat(64),
+            resourceKey: "b".repeat(64),
+            identityKey: "c".repeat(64),
+            assets: [name],
+          }),
+        })
+      ).status,
+      200,
+    );
+    const url = `${base}/artifact/${key}/${name}`;
+    const request = () => fetch(url, { headers: { "accept-encoding": "gzip" } });
+    let entered = /** @type {Promise<void>} */ (
+      new Promise((resolve) => {
+        started = resolve;
+      })
+    );
+    const first = request();
+    await entered;
+    const second = request();
+    // Ensure the second request has entered the server while compression is paused.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(calls, 1);
+    release();
+    const failed = await Promise.all([first, second]);
+    for (const response of failed) {
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-encoding"), null);
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), content);
+    }
+    entered = /** @type {Promise<void>} */ (
+      new Promise((resolve) => {
+        started = resolve;
+      })
+    );
+    const retry = request();
+    await entered;
+    release();
+    const response = await retry;
+    assert.equal(response.headers.get("content-encoding"), "gzip");
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), content);
+    assert.equal((await request()).headers.get("content-encoding"), "gzip");
+    assert.equal(calls, 2);
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });

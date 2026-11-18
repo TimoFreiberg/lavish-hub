@@ -2425,6 +2425,32 @@ export async function serve({
   }
 
   const compressedHubAssets = new Map();
+  const compressingHubAssets = new Map();
+  let compressedHubAssetBytes = 0;
+  const maxCompressedHubAssetBytes = 8 * 1024 * 1024;
+
+  async function cachedHubCompression(cacheKey, encoding, bytes) {
+    if (compressedHubAssets.has(cacheKey)) return compressedHubAssets.get(cacheKey);
+    if (compressingHubAssets.has(cacheKey)) return compressingHubAssets.get(cacheKey);
+    if (compressingHubAssets.size >= 6) throw new Error("Hub compression capacity exceeded");
+    const pending = Promise.resolve().then(() => compressArtifact(encoding, bytes));
+    compressingHubAssets.set(cacheKey, pending);
+    try {
+      const result = await pending;
+      if (result.length <= maxCompressedHubAssetBytes) {
+        while (compressedHubAssets.size >= 6 || compressedHubAssetBytes + result.length > maxCompressedHubAssetBytes) {
+          const oldest = compressedHubAssets.keys().next().value;
+          compressedHubAssetBytes -= compressedHubAssets.get(oldest).length;
+          compressedHubAssets.delete(oldest);
+        }
+        compressedHubAssets.set(cacheKey, result);
+        compressedHubAssetBytes += result.length;
+      }
+      return result;
+    } finally {
+      compressingHubAssets.delete(cacheKey);
+    }
+  }
 
   async function serveArtifactPath(req, res, requestedPath = undefined) {
     const key = req.params[0];
@@ -2583,9 +2609,7 @@ export async function serve({
             if (encoding !== "identity") {
               const cacheKey = `${hash}:${encoding}`;
               try {
-                representation = compressedHubAssets.get(cacheKey) || (await compressArtifact(encoding, bytes));
-                compressedHubAssets.set(cacheKey, representation);
-                if (compressedHubAssets.size > 6) compressedHubAssets.delete(compressedHubAssets.keys().next().value);
+                representation = await cachedHubCompression(cacheKey, encoding, bytes);
               } catch (error) {
                 if (!choice.identityAllowed) throw error;
                 encoding = "identity";
@@ -2646,7 +2670,7 @@ export async function serve({
       const rangeFresh =
         !ifRange ||
         (ifRange.includes('"')
-          ? Boolean(res.getHeader("etag") && ifRange.includes(etag))
+          ? Boolean(res.getHeader("etag") && !etag.startsWith("W/") && ifRange === etag)
           : Date.parse(modified) <= Date.parse(ifRange));
       if (req.get("range")?.startsWith("bytes=") && rangeFresh) {
         const ranges = req.range(size, { combine: true });
