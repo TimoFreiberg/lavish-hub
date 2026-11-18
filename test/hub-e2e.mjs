@@ -42,6 +42,12 @@ try {
   const url = screen.match(/ready: (https?:\/\/\S+)/)[1];
   browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   const page = await browser.newPage();
+  const assets = [];
+  page.on('requestfinished', async request => {
+    if (!/\/hub-asset-[a-f0-9]{64}\.(?:js|css)(?:\?|$)/.test(request.url())) return;
+    const response = await request.response(), sizes = await request.sizes();
+    assets.push({ url: request.url(), status: response.status(), headers: response.headers(), sizes });
+  });
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
     window.workerResponses = [];
@@ -85,6 +91,35 @@ try {
   await hub.locator('.hub-diff [data-content] [data-line]').filter({ hasText: 'rendered change' }).waitFor({ timeout: 30000 });
   const hubFrame = page.frameLocator('#artifact').owner();
   const frame = await (await hubFrame.elementHandle()).contentFrame();
+  await until(() => assets.filter(item => item.url.endsWith('.js')).length >= 3);
+  const cold = assets.filter(item => item.url.endsWith('.js')).slice(-3).map(item => ({ ...item }));
+  const cdp = await page.context().newCDPSession(frame);
+  await cdp.send('Network.enable');
+  const network = new Map();
+  cdp.on('Network.requestWillBeSent', event => {
+    if (/\/hub-asset-[a-f0-9]{64}\.js$/.test(event.request.url)) network.set(event.requestId, { url: event.request.url });
+  });
+  cdp.on('Network.responseReceived', event => {
+    const item = network.get(event.requestId);
+    if (item) Object.assign(item, { status: event.response.status, diskCache: event.response.fromDiskCache });
+  });
+  cdp.on('Network.requestServedFromCache', event => { const item = network.get(event.requestId); if (item) item.cache = true; });
+  cdp.on('Network.loadingFinished', event => { const item = network.get(event.requestId); if (item) item.transferred = event.encodedDataLength; });
+  await hub.getByRole('button', { name: 'Review', exact: true }).click();
+  await page.frameLocator('#artifact').getByRole('heading', { name: 'Published hub review' }).waitFor({ timeout: 20000 });
+  const warmStart = assets.length;
+  await page.frameLocator('#artifact').getByRole('link', { name: 'Changes', exact: true }).click();
+  await page.frameLocator('#artifact').locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
+  await until(() => assets.slice(warmStart).filter(item => item.url.endsWith('.js')).length >= 3);
+  const warm = assets.slice(warmStart).filter(item => item.url.endsWith('.js'));
+  const evidence = list => list.map(({ url, status, sizes, headers }) => ({ name: new URL(url).pathname.split('/').pop(), status, sizes, cacheControl: headers['cache-control'] }));
+  console.log('Chromium hub asset cold:', JSON.stringify(evidence(cold)));
+  console.log('Chromium hub asset warm:', JSON.stringify(evidence(warm)));
+  await until(() => [...network.values()].filter(item => item.transferred !== undefined).length >= 3);
+  const transfers = [...network.values()];
+  assert.equal(transfers.length, 3);
+  assert.deepEqual(new Set(transfers.map(item => new URL(item.url).pathname.split('/').pop())), new Set(cold.map(item => new URL(item.url).pathname.split('/').pop())));
+  console.log('Chromium frame network:', JSON.stringify(transfers.map(({ url, ...item }) => ({ name: new URL(url).pathname.split('/').pop(), ...item }))));
   await frame.waitForFunction(() => window.workerResponses.some(response => response.type === 'success' && response.requestType === 'diff'), null, { timeout: 30000 });
   const hubHtml = await readFile(record.page, 'utf8');
   assert.ok(hubHtml.includes('globalThis.hubConfig='));
