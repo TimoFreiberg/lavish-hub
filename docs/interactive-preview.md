@@ -12,7 +12,7 @@ Open the server's index in a browser. The output also works under a nested URL p
 
 The pages use the application UI with an explicit preview adapter. Saves, external edits and comments are simulations: they do not save files or send feedback. State is held in memory per page and is discarded on reload or navigation. Reset restores the fixture; the theme selector changes appearance. Fixtures are trusted project content, not an arbitrary HTML hosting service.
 
-`just shots` builds the same preview under `shots/preview/`, alongside a gallery and report. Wide, dark primary images represent selected static and real-Lavish pages; selected scrollable pages can have additional captures. The complete static and real-Lavish matrices run checks at both widths and themes without a primary PNG for every case. See [testing](../TESTING.md) for readiness, checks and manual review.
+The preview index and screenshot gallery use a dark palette regardless of system preference. `just shots` builds the same preview under `shots/preview/`, alongside a gallery and report. Wide, dark primary images represent selected static and real-Lavish pages; selected scrollable pages can have additional captures. The complete static and real-Lavish matrices run checks at both widths and themes without a primary PNG for every case. See [testing](../TESTING.md) for readiness, checks and manual review.
 
 ## Public preview and operations
 

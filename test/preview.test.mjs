@@ -40,6 +40,8 @@ test('provenance follows isolated jj and Git checkouts', async () => {
         assert.equal(manifest.revision, revision);
         const index = await readFile(path.join(out, 'index.html'), 'utf8');
         assert.match(index, /Simulated interactions do not save files or run actions/);
+        assert.match(index, /color-scheme:dark/);
+        assert.match(index, /background:#161b22;color:#e6edf3/);
         assert.doesNotMatch(index, /not published/i);
         return manifest;
       };
