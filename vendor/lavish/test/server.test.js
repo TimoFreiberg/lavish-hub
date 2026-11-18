@@ -3014,7 +3014,11 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
       assert.equal(response.status, 200);
       assert.deepEqual(response.body, content);
     }
-    assert.equal((await wire(url, { range: "bytes=0-9", "if-range": identity.headers["last-modified"] })).status, 206);
+    for (const date of [identity.headers["last-modified"], new Date(Date.now() + 86400000).toUTCString()]) {
+      const response = await wire(url, { range: "bytes=0-9", "if-range": date });
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body, content);
+    }
     assert.equal((await wire(url, { range: "bytes=0-9", "if-none-match": identity.headers.etag })).status, 304);
     for (const headers of [{}, { range: "bytes=0-9" }]) {
       assert.equal((await wire(url, { ...headers, "if-match": identity.headers.etag })).status, 412);
@@ -3047,9 +3051,13 @@ test("concurrent registered asset compression shares failures and retries", asyn
   let release = () => {};
   /** @type {() => void} */
   let started = () => {};
+  /** @type {() => void} */
+  let joined = () => {};
+  const pendingRequests = [];
   const server = await serve({
     port: 0,
     stateFile: path.join(dir, "state.json"),
+    onHubCompressionJoin: () => joined(),
     compressArtifact: async (_encoding, bytes) => {
       calls++;
       started();
@@ -3087,7 +3095,11 @@ test("concurrent registered asset compression shares failures and retries", asyn
       200,
     );
     const url = `${base}/artifact/${key}/${name}`;
-    const request = () => fetch(url, { headers: { "accept-encoding": "gzip" } });
+    const request = () => {
+      const promise = fetch(url, { headers: { "accept-encoding": "gzip" }, signal: AbortSignal.timeout(3000) });
+      pendingRequests.push(promise);
+      return promise;
+    };
     let entered = /** @type {Promise<void>} */ (
       new Promise((resolve) => {
         started = resolve;
@@ -3095,9 +3107,16 @@ test("concurrent registered asset compression shares failures and retries", asyn
     );
     const first = request();
     await entered;
+    const joinedPromise = /** @type {Promise<void>} */ (
+      new Promise((resolve) => {
+        joined = resolve;
+      })
+    );
     const second = request();
-    // Ensure the second request has entered the server while compression is paused.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await Promise.race([
+      joinedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("join timed out")), 2000)),
+    ]);
     assert.equal(calls, 1);
     release();
     const failed = await Promise.all([first, second]);
@@ -3120,6 +3139,110 @@ test("concurrent registered asset compression shares failures and retries", asyn
     assert.equal((await request()).headers.get("content-encoding"), "gzip");
     assert.equal(calls, 2);
   } finally {
+    release();
+    await Promise.allSettled(pendingRequests);
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("registered asset compression queues a seventh key without serving forbidden identity", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-hub-capacity-"));
+  const artifact = path.join(dir, "artifact.html");
+  await writeFile(artifact, "<!doctype html><title>Hub</title>");
+  const contents = Array.from({ length: 7 }, (_, i) => Buffer.from(`asset ${i};`.repeat(1000)));
+  const names = contents.map((bytes) => `hub-asset-${createHash("sha256").update(bytes).digest("hex")}.js`);
+  await Promise.all(names.map((name, i) => writeFile(path.join(dir, name), contents[i])));
+  let release = () => {};
+  let allStarted = () => {};
+  let queueEntered = () => {};
+  const queued = /** @type {Promise<void>} */ (
+    new Promise((resolve) => {
+      queueEntered = resolve;
+    })
+  );
+  let calls = 0;
+  const gate = /** @type {Promise<void>} */ (
+    new Promise((resolve) => {
+      release = resolve;
+    })
+  );
+  const started = /** @type {Promise<void>} */ (
+    new Promise((resolve) => {
+      allStarted = resolve;
+    })
+  );
+  const server = await serve({
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    onHubCompressionQueued: () => queueEntered(),
+    compressArtifact: async (_encoding, bytes) => {
+      if (++calls === 6) allStarted();
+      await gate;
+      return zlib.gzipSync(bytes);
+    },
+  });
+  const abort = new AbortController();
+  const pending = [];
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const urls = [];
+    for (let i = 0; i < names.length; i += 3) {
+      const file = path.join(dir, `artifact-${i}.html`);
+      await writeFile(file, "<!doctype html><title>Hub</title>");
+      const { key } = await fetch(`${base}/api/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ file }),
+      }).then((res) => res.json());
+      const assets = names.slice(i, i + 3);
+      assert.equal(
+        (
+          await fetch(`${base}/api/hub-proxy/register`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              key,
+              port: 12345,
+              capability: "a".repeat(64),
+              resourceKey: "b".repeat(64),
+              identityKey: "c".repeat(64),
+              assets,
+            }),
+          })
+        ).status,
+        200,
+      );
+      urls.push(...assets.map((name) => `${base}/artifact/${key}/${name}`));
+    }
+    const request = (url) =>
+      fetch(url, {
+        headers: { "accept-encoding": "gzip, identity;q=0" },
+        signal: abort.signal,
+      });
+    pending.push(...urls.slice(0, 6).map(request));
+    await Promise.race([
+      started,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("compression timed out")), 2000)),
+    ]);
+    pending.push(request(urls[6]));
+    await Promise.race([
+      queued,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("queue timed out")), 2000)),
+    ]);
+    assert.equal(calls, 6);
+    release();
+    const responses = await Promise.all(pending);
+    for (const [i, response] of responses.entries()) {
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-encoding"), "gzip");
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), contents[i]);
+    }
+    assert.equal(calls, 7);
+  } finally {
+    release();
+    abort.abort();
+    await Promise.allSettled(pending);
     await server.close();
     await rm(dir, { recursive: true, force: true });
   }

@@ -1228,6 +1228,11 @@ test("non-HTML artifact assets preserve sendFile ranges and conditional requests
     const modified = initial.headers.get("last-modified");
     assert.ok(etag);
     assert.ok(modified);
+    for (const validator of [etag, modified, new Date(Date.now() + 86400000).toUTCString()]) {
+      const response = await fetch(url, { headers: { range: "bytes=2-5", "if-range": validator } });
+      assert.equal(response.status, 200);
+      assert.equal(await response.text(), "0123456789abcdefghijklmnopqrstuvwxyz");
+    }
     const cases = [
       {},
       { headers: { range: "bytes=2-5" } },
@@ -1240,9 +1245,7 @@ test("non-HTML artifact assets preserve sendFile ranges and conditional requests
       { headers: { "if-modified-since": modified } },
       { headers: { "if-match": '"different"' } },
       { headers: { "if-unmodified-since": "Thu, 01 Jan 1970 00:00:00 GMT" } },
-      { headers: { range: "bytes=2-5", "if-range": etag } },
       { headers: { range: "bytes=2-5", "if-range": '"different"' } },
-      { headers: { range: "bytes=2-5", "if-range": modified } },
       { method: "HEAD", headers: { range: "bytes=2-5" } },
     ];
     for (const options of cases) {

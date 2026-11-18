@@ -412,6 +412,8 @@ export async function serve({
   artifactPageStat,
   artifactAssetOpen,
   compressArtifact = compressArtifactBytes,
+  onHubCompressionJoin,
+  onHubCompressionQueued,
 } = {}) {
   // Keep the transport dependency off fast metadata paths such as `--version`.
   const { WebSocket, WebSocketServer } = await import("ws");
@@ -2426,14 +2428,36 @@ export async function serve({
 
   const compressedHubAssets = new Map();
   const compressingHubAssets = new Map();
+  const hubCompressionQueue = [];
+  let activeHubCompressions = 0;
   let compressedHubAssetBytes = 0;
   const maxCompressedHubAssetBytes = 8 * 1024 * 1024;
 
   async function cachedHubCompression(cacheKey, encoding, bytes) {
     if (compressedHubAssets.has(cacheKey)) return compressedHubAssets.get(cacheKey);
-    if (compressingHubAssets.has(cacheKey)) return compressingHubAssets.get(cacheKey);
-    if (compressingHubAssets.size >= 6) throw new Error("Hub compression capacity exceeded");
-    const pending = Promise.resolve().then(() => compressArtifact(encoding, bytes));
+    if (compressingHubAssets.has(cacheKey)) {
+      onHubCompressionJoin?.();
+      return compressingHubAssets.get(cacheKey);
+    }
+    if (compressingHubAssets.size >= 12)
+      throw Object.assign(new Error("Hub compression capacity exceeded"), { status: 503 });
+    const pending = (async () => {
+      if (activeHubCompressions >= 6) {
+        await new Promise((resolve) => {
+          hubCompressionQueue.push(resolve);
+          onHubCompressionQueued?.();
+        });
+      } else {
+        activeHubCompressions++;
+      }
+      try {
+        return await compressArtifact(encoding, bytes);
+      } finally {
+        const next = hubCompressionQueue.shift();
+        if (next) next();
+        else activeHubCompressions--;
+      }
+    })();
     compressingHubAssets.set(cacheKey, pending);
     try {
       const result = await pending;
@@ -2669,9 +2693,7 @@ export async function serve({
       const ifRange = req.get("if-range");
       const rangeFresh =
         !ifRange ||
-        (ifRange.includes('"')
-          ? Boolean(res.getHeader("etag") && !etag.startsWith("W/") && ifRange === etag)
-          : Date.parse(modified) <= Date.parse(ifRange));
+        (ifRange.includes('"') ? Boolean(res.getHeader("etag") && !etag.startsWith("W/") && ifRange === etag) : false);
       if (req.get("range")?.startsWith("bytes=") && rangeFresh) {
         const ranges = req.range(size, { combine: true });
         if (ranges === -1) {
