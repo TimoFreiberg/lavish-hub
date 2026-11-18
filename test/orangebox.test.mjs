@@ -16,7 +16,10 @@ test('published HTML defaults to Orangebox without overriding authored styles or
     await page.setContent(composeHubHtml(input, 'http://example.test/file.html', '<nav>Navigation</nav>'));
     return page.evaluate(() => ({ theme: document.documentElement.dataset.theme, background: getComputedStyle(document.body).backgroundColor, color: getComputedStyle(document.body).color }));
   }
-  assert.deepEqual(await check('<html><head></head><body>Plain</body></html>'), { theme: 'orangebox', background: 'rgb(38, 33, 32)', color: 'rgb(235, 225, 205)' });
+  for (const colorScheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme });
+    assert.deepEqual(await check('<html><head></head><body>Plain</body></html>'), { theme: 'orangebox', background: 'rgb(38, 33, 32)', color: 'rgb(235, 225, 205)' });
+  }
   assert.deepEqual(await check('<html><head><style>body { background: white; color: black }</style></head><body>Authored</body></html>'), { theme: 'orangebox', background: 'rgb(255, 255, 255)', color: 'rgb(0, 0, 0)' });
   assert.deepEqual(await check('<html data-theme="custom"><head><style>body { background: pink; color: black }</style></head><body>Custom</body></html>'), { theme: 'custom', background: 'rgb(255, 192, 203)', color: 'rgb(0, 0, 0)' });
   assert.equal((await check('<p>Fragment</p>')).theme, 'orangebox');
