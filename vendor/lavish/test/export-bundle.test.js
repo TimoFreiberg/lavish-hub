@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmod, link, mkdir, mkdtemp, open, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -56,6 +57,29 @@ function decodeFirstSvgDataUri(html) {
   assert.ok(match);
   return Buffer.from(match[1], "base64").toString("utf8");
 }
+
+test("activates only successfully inlined digest-matching hub assets", async () => {
+  const script = "globalThis.renderer = true;";
+  const digest = createHash("sha256").update(script).digest("hex");
+  const good = `hub-asset-${digest}.js`;
+  const bad = `hub-asset-${"0".repeat(64)}.js`;
+  const marker = 'type="application/x-hub-lazy" data-hub-bundle="diff"';
+  const html =
+    `<script ${marker} src="${good}"></script>` +
+    `<script ${marker}>globalThis.inline = true;</script>` +
+    `<script ${marker} src="https://example.com/${good}"></script>` +
+    `<script ${marker} src="${bad}"></script>` +
+    `<script ${marker} src="hub-asset-malformed.js"></script>` +
+    `<script ${marker} src="hub-asset-${"1".repeat(64)}.js"></script>`;
+  const { html: out } = await buildSelfContainedHtml(html, {
+    baseDir: "/art",
+    readLocalFile: localReader({ [`/art/${good}`]: script, [`/art/${bad}`]: script }),
+  });
+  assert.match(out, /<script>globalThis\.renderer = true;<\/script>/);
+  assert.equal((out.match(/type="application\/x-hub-lazy"/g) || []).length, 5);
+  assert.match(out, /globalThis\.inline = true/);
+  assert.match(out, /https:\/\/example\.com\//);
+});
 
 test("inlines a local stylesheet link as a <style> block", async () => {
   const html =

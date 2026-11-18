@@ -13,8 +13,16 @@ function loadBundle(name, globalName) {
     if (!reference?.src) { reject(new Error(`Missing ${name} renderer`)); return; }
     const script = document.createElement('script');
     script.src = reference.src;
-    script.onload = () => typeof globalThis[globalName] === 'function' ? resolve() : reject(new Error(`Invalid ${name} renderer`));
-    script.onerror = () => { script.remove(); reject(new Error(`Could not load ${name} renderer`)); };
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      script.onload = null; script.onerror = null;
+      if (error) { script.remove(); reject(error); } else resolve();
+    };
+    const timer = setTimeout(() => finish(new Error(`Could not load ${name} renderer`)), 10000);
+    script.onload = () => finish(typeof globalThis[globalName] === 'function' ? null : new Error(`Invalid ${name} renderer`));
+    script.onerror = () => finish(new Error(`Could not load ${name} renderer`));
     document.head.append(script);
   }).catch(error => { bundleLoads.delete(name); throw error; });
   bundleLoads.set(name, loading);

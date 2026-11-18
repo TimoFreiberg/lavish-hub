@@ -68,6 +68,35 @@ test('bundles load only on demand, retry failures and reuse successful loads', {
   assert.equal(diffRequests, 1);
 });
 
+test('timed-out and invalid renderer loads are removed and can be retried', { timeout: 30000 }, async t => {
+  let selected = 'tasks', statusCalls = 0;
+  const transport = await createHubTransport({
+    status: () => { statusCalls++; return { available: true, selected }; }, documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>const originalTimeout = window.setTimeout; window.setTimeout = (fn, ms, ...args) => originalTimeout(fn, ms === 10000 ? 100 : ms, ...args); const append = document.head.append.bind(document.head); let attempts = 0; document.head.append = node => { if (node.src?.startsWith('http://assets.test/')) { node.type = 'application/x-test'; append(node); if (++attempts === 1) globalThis.staleLoad = node.onload; else if (attempts === 2) queueMicrotask(() => node.onload()); else { globalThis.hubMarkdownRenderer = () => () => {}; queueMicrotask(() => node.onload()); } } else append(node); }; globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="application/x-hub-lazy" data-hub-bundle="markdown" src="http://assets.test/markdown.js"></script><script type="module">${script}</script>`);
+  await page.getByText('Could not load markdown renderer').waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('head script[src]').count(), 0);
+  const before = statusCalls;
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await assertEventually(() => assert.ok(statusCalls > before));
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await page.getByText('Invalid markdown renderer').waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('head script[src]').count(), 0);
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 5000 });
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.evaluate(() => globalThis.staleLoad());
+  assert.equal(await page.locator('#view h1').textContent(), 'Commits');
+  assert.equal(await page.locator('#view textarea').count(), 0);
+});
+
 test('a stale document render cannot append another editor', { timeout: 30000 }, async t => {
   let selected = 'commits', reads = 0, releaseRead;
   const gate = new Promise(resolve => { releaseRead = resolve; });
