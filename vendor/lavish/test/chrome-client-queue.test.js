@@ -1903,6 +1903,83 @@ test("a late timed-out load cannot replace a newer load or discard drafts", asyn
   assert.equal(chrome.artifactBeginRequests.length, 2);
 });
 
+test("a bound frame with a stalled successful reload body shows recovery without losing drafts", async () => {
+  const binding = protocolWhiteboardBinding("page-a.html", "a");
+  const responses = [];
+  const storage = new Map();
+  const chrome = await createChromeHarness({
+    storage,
+    artifactSrc: binding.destination,
+    sessionData: { ...defaultSessionData, pageProtocol: 1 },
+    modernBinding: binding,
+    beginLoadResponses: responses,
+  });
+  await flushPromises();
+  await flushPromises();
+  const active = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
+  assert.ok(active);
+  chrome.sendModernMessage({ ...active, type: "lavish:reviewState", state: { card: { selector: "#hero", text: "Keep draft" }, fields: [] } });
+  await flushPromises();
+  assert.match(storage.get("lavish-axi:review-state:abc"), /Keep draft/);
+  chrome.element("chatInput").value = "Keep composer";
+  chrome.element("chatInput").dispatch("input");
+  responses.push({ ok: true, json: () => new Promise(() => {}) }, ...Array.from({ length: 14 }, () => ({ ok: false, status: 503 })));
+  chrome.eventSource().listeners.get("reload")();
+  await flushPromises();
+  chrome.runTimers(5000);
+  await flushPromises();
+  chrome.runTimers(100);
+  await flushPromises();
+  chrome.runTimers(300);
+  await flushPromises();
+  for (const delay of [1000, 3000, 8000, 20000]) {
+    chrome.runTimers(delay);
+    await exhaustOneBeginLoadAttempt(chrome);
+  }
+  assert.equal(chrome.element("layoutGateTitle").textContent, "Lavish could not load this artifact.");
+  assert.equal(chrome.element("layoutGateAction").textContent, "Check and reload");
+  assert.match(storage.get("lavish-axi:review-state:abc"), /Keep draft/);
+  assert.match(storage.get("lavish-axi:queued:abc:drafts"), /Keep composer/);
+});
+
+test("a departed bound document cannot hide exhausted load recovery", async () => {
+  const binding = protocolWhiteboardBinding("page-a.html", "a");
+  const responses = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: binding.destination,
+    sessionData: { ...defaultSessionData, pageProtocol: 1 },
+    modernBinding: binding,
+    beginLoadResponses: responses,
+  });
+  await flushPromises();
+  await flushPromises();
+  const active = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
+  chrome.sendModernMessage({ ...active, type: "lavish:documentDeparting" });
+  await flushPromises();
+  responses.push(...Array.from({ length: 15 }, () => ({ ok: false, status: 503 })));
+  chrome.eventSource().listeners.get("reload")();
+  await exhaustOneBeginLoadAttempt(chrome);
+  for (const delay of [1000, 3000, 8000, 20000]) {
+    chrome.runTimers(delay);
+    await exhaustOneBeginLoadAttempt(chrome);
+  }
+  assert.equal(chrome.element("layoutGateTitle").textContent, "Lavish could not load this artifact.");
+});
+
+test("a refused automatic handoff recovery offers explicit takeover", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    beginLoadResponses: [{ ok: false, status: 409, json: async () => ({ status: "no-handoff" }) }],
+    handoffResponses: [{ ok: false, status: 409, json: async () => ({ status: "superseded" }) }],
+  });
+  await flushPromises();
+  assert.deepEqual(JSON.parse(chrome.beginRequests[0].init.body), { recovery_only: true });
+  assert.equal(chrome.element("layoutGateTitle").textContent, "This review needs to reconnect.");
+  assert.equal(chrome.element("layoutGateAction").textContent, "Take over here");
+  chrome.element("layoutGateAction").click();
+  assert.equal(chrome.reloadCount(), 1);
+});
+
 test("exhaustion with an unused embedded token shows recovery", async () => {
   const chrome = await createChromeHarness({
     artifactSrc: "/artifact/abc/index.html",

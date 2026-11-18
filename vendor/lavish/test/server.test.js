@@ -3533,6 +3533,46 @@ test("same-origin chrome handoff recovery issues a usable reviewer token", async
   }
 });
 
+test("a delayed automatic handoff recovery cannot replace a newer reviewer", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
+  const artifact = path.join(dir, "artifact.html");
+  await writeFile(artifact, "<!doctype html><html><body></body></html>");
+  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json"), version: "9.9.9-test" });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const { key } = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    }).then((response) => response.json());
+    const recover = () =>
+      fetch(`${base}/api/${key}/chrome-loads/begin`, {
+        method: "POST",
+        headers: { origin: base, "content-type": "application/json" },
+        body: JSON.stringify({ recovery_only: true }),
+      });
+    const newer = await (await recover()).json();
+    const begin = (id, sequence) =>
+      fetch(`${base}/api/${key}/artifact-loads/begin`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          request_id: id,
+          request_sequence: sequence,
+          chrome_load_token: newer.chrome_load_token,
+        }),
+      });
+    assert.equal((await begin("newer", 1)).status, 200);
+    const delayed = await recover();
+    assert.equal(delayed.status, 409);
+    assert.equal((await delayed.json()).status, "superseded");
+    assert.equal((await begin("still-current", 2)).status, 200);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a refreshed chrome receives a new handoff and establishes the newest load", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-serve-"));
   const stateFile = path.join(dir, "state.json");

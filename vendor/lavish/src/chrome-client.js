@@ -1930,7 +1930,14 @@ async function refreshChromeLoadHandoff(requestSequence) {
   const { response, data } = await fetchLoadJson("/api/" + key + "/chrome-loads/begin", {
     method: "POST",
     headers: { "content-type": "application/json" },
+    body: JSON.stringify({ recovery_only: true }),
   });
+  if (requestSequence !== artifactLoadRequestSequence || ended) return false;
+  if (response.status === 409 && data?.status === "superseded") {
+    setHandoffSuperseded(true);
+    setLayoutGateFailure("This review needs to reconnect.", UNSENT_OWNERSHIP_COPY, "Take over here");
+    return false;
+  }
   const token = String(data?.chrome_load_token || "");
   if (!response.ok || !token) throw new Error("failed to refresh chrome handoff");
   if (requestSequence !== artifactLoadRequestSequence || ended) return false;
@@ -2708,6 +2715,7 @@ function bindingTuple(binding = currentArtifactBinding) {
 }
 
 function retireArtifactBinding() {
+  artifactSpokeToken = "";
   clearDiffPlacements();
   diffAnchorGeneration++;
   diffAnchorSignature = "[]";
@@ -4727,8 +4735,8 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
     preservePreviousLoad();
     if (requestSequence !== artifactLoadRequestSequence || ended) return false;
     if (scheduleArtifactLoadRecovery(historicalPage)) return false;
-    // Out of retries. Only say so when there is nothing on screen to say it over: a chrome that
-    // already shows an artifact keeps showing it rather than losing a usable review.
+    // A frame that still has an active binding can remain usable after a failed request.
+    // A retired binding cannot, even if its old document is still visible.
     if (!artifactSpokeToken) {
       setLayoutGateFailure(
         "Lavish could not load this artifact.",

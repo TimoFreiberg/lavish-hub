@@ -426,16 +426,17 @@ export class SessionStore {
     return { ...session, fresh_feedback: !restoring && acceptedPrompts.length > 0 };
   }
 
-  async issueReviewerHandoff(key) {
+  async issueReviewerHandoff(key, { recoveryOnly = false } = {}) {
     return this.runExclusive(async () => {
       const state = await this.readState();
       const session = state.sessions[key];
       if (!session) {
         return null;
       }
+      const activeLoad = this.#activeArtifactLoad(session);
+      if (recoveryOnly && this.chromeLoadContexts.has(key)) return { stale: "superseded" };
       const chromeLoadToken = crypto.randomBytes(24).toString("base64url");
       this.chromeLoadContexts.set(key, chromeLoadToken);
-      const activeLoad = this.#activeArtifactLoad(session);
       return {
         session,
         chrome_load_token: chromeLoadToken,

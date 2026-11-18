@@ -2155,9 +2155,15 @@ export async function serve({
         res.status(403).json({ error: "cross-origin chrome handoff rejected" });
         return;
       }
-      const handoff = await store.issueReviewerHandoff(req.params.key);
+      const handoff = await store.issueReviewerHandoff(req.params.key, {
+        recoveryOnly: req.body?.recovery_only === true,
+      });
       if (!handoff) {
         res.status(404).json({ error: "session not found" });
+        return;
+      }
+      if (handoff.stale) {
+        res.status(409).json({ status: handoff.stale });
         return;
       }
       res.json({
