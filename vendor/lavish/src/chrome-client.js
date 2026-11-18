@@ -1902,12 +1902,35 @@ function renderRetiredDraft(entry, stored = true) {
   scrollElementIntoView(el);
 }
 
+// The deadline includes the response body: receiving headers alone does not finish a load.
+async function fetchLoadJson(url, options, onHeaders = (_response) => {}) {
+  const controller = new AbortController();
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        if (!controller.signal.aborted) onHeaders(response);
+        const data = await response.json().catch(() => ({}));
+        return { response, data };
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("load request timed out"));
+        }, 5000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function refreshChromeLoadHandoff(requestSequence) {
-  const response = await fetch("/api/" + key + "/chrome-loads/begin", {
+  const { response, data } = await fetchLoadJson("/api/" + key + "/chrome-loads/begin", {
     method: "POST",
     headers: { "content-type": "application/json" },
   });
-  const data = await response.json().catch(() => ({}));
   const token = String(data?.chrome_load_token || "");
   if (!response.ok || !token) throw new Error("failed to refresh chrome handoff");
   if (requestSequence !== artifactLoadRequestSequence || ended) return false;
@@ -4706,7 +4729,7 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
     if (scheduleArtifactLoadRecovery(historicalPage)) return false;
     // Out of retries. Only say so when there is nothing on screen to say it over: a chrome that
     // already shows an artifact keeps showing it rather than losing a usable review.
-    if (!artifactLoadToken) {
+    if (!artifactSpokeToken) {
       setLayoutGateFailure(
         "Lavish could not load this artifact.",
         "The Lavish server did not answer this review's load request. It usually restarted while this page was opening. Check and reload to reconnect.",
@@ -4725,7 +4748,7 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   while (true) {
     if (requestSequence !== artifactLoadRequestSequence || ended) return false;
     try {
-      const response = await fetch("/api/" + key + "/artifact-loads/begin", {
+      const { response, data: candidate } = await fetchLoadJson("/api/" + key + "/artifact-loads/begin", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -4741,9 +4764,10 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
               }
             : {}),
         }),
+      }, (response) => {
+        if (response.ok && requestSequence === artifactLoadRequestSequence && !ended) retireArtifactBinding();
       });
-      if (response.ok) retireArtifactBinding();
-      const candidate = await response.json().catch(() => ({}));
+      if (requestSequence !== artifactLoadRequestSequence || ended) return false;
       if (!response.ok) {
         const status = String(candidate?.status || "");
         if (status === "no-handoff") {

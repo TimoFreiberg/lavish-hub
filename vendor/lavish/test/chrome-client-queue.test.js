@@ -1849,6 +1849,75 @@ function flushPromises() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+for (const phase of ["headers", "body"]) {
+  test(`stalled artifact begin ${phase} times out and retries with the same identity`, async () => {
+    const stalled = new Promise(() => {});
+    const chrome = await createChromeHarness({
+      artifactSrc: "/artifact/abc/index.html",
+      beginLoadResponses: [phase === "headers" ? stalled : { ok: true, json: () => stalled }],
+    });
+    chrome.runTimers(5000);
+    await flushPromises();
+    chrome.runTimers(100);
+    await flushPromises();
+    assert.equal(chrome.artifactBeginRequests.length, 2);
+    assert.deepEqual(JSON.parse(chrome.artifactBeginRequests[0].init.body), JSON.parse(chrome.artifactBeginRequests[1].init.body));
+    assert.match(chrome.frame.src, /artifact_load_token=/);
+  });
+
+  test(`stalled handoff ${phase} enters recovery`, async () => {
+    const stalled = new Promise(() => {});
+    const chrome = await createChromeHarness({
+      artifactSrc: "/artifact/abc/index.html",
+      beginLoadResponses: [{ ok: false, json: async () => ({ status: "no-handoff" }) }],
+      handoffResponses: [phase === "headers" ? stalled : { ok: true, json: () => stalled }],
+    });
+    chrome.runTimers(5000);
+    await flushPromises();
+    chrome.runTimers(1000);
+    await flushPromises();
+    assert.equal(chrome.artifactBeginRequests.length, 2);
+    assert.match(chrome.frame.src, /artifact_load_token=/);
+  });
+}
+
+test("a late timed-out load cannot replace a newer load or discard drafts", async () => {
+  /** @type {((value: any) => void) | undefined} */
+  let resolveOld;
+  const old = new Promise((resolve) => { resolveOld = resolve; });
+  const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", beginLoadResponses: [old] });
+  chrome.element("chatInput").value = "Keep this draft";
+  chrome.runTimers(5000);
+  await flushPromises();
+  chrome.eventSource().listeners.get("reload")();
+  await flushPromises();
+  const newerSrc = chrome.frame.src;
+  assert.match(newerSrc, /artifact_load_token=/);
+  assert.ok(resolveOld);
+  resolveOld({ ok: true, json: async () => ({ artifact_revision: 99, artifact_load_token: "late" }) });
+  await flushPromises();
+  chrome.runTimers(100);
+  await flushPromises();
+  assert.equal(chrome.frame.src, newerSrc);
+  assert.equal(chrome.element("chatInput").value, "Keep this draft");
+  assert.equal(chrome.artifactBeginRequests.length, 2);
+});
+
+test("exhaustion with an unused embedded token shows recovery", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    sessionData: { ...defaultSessionData, initialArtifactLoadToken: "old-load" },
+    beginLoadResponses: Array.from({ length: 15 }, () => ({ ok: false, status: 503 })),
+  });
+  await exhaustOneBeginLoadAttempt(chrome);
+  for (const delay of [1000, 3000, 8000, 20000]) {
+    chrome.runTimers(delay);
+    await exhaustOneBeginLoadAttempt(chrome);
+  }
+  assert.equal(chrome.element("layoutGateTitle").textContent, "Lavish could not load this artifact.");
+  assert.equal(chrome.element("layoutGateAction").textContent, "Check and reload");
+});
+
 test("chrome client re-handshakes once after a missing reviewer handoff", async () => {
   const chrome = await createChromeHarness({
     artifactSrc: "/artifact/abc/index.html",
