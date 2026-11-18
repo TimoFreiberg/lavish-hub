@@ -1,10 +1,14 @@
 {
   "name": "lavish-kit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
-  "bin": { "lavish-kit": "bin/lavish-kit" },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "lavish-kit": "bin/lavish-kit"
+  },
   "dependencies": {
     "@tailwindcss/browser": "4.2.4",
     "axi-sdk-js": "^0.1.8",
