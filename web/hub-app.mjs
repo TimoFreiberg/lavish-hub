@@ -4,6 +4,30 @@ const app = document.querySelector('#app');
 const drafts = new Map();
 const diffContainer = document.createElement('div'); diffContainer.className = 'hub-diff';
 let diffView;
+const bundleLoads = new Map();
+function loadBundle(name, globalName) {
+  if (typeof globalThis[globalName] === 'function') return Promise.resolve();
+  if (bundleLoads.has(name)) return bundleLoads.get(name);
+  const reference = document.querySelector(`script[data-hub-bundle="${name}"]`);
+  const loading = new Promise((resolve, reject) => {
+    if (!reference?.src) { reject(new Error(`Missing ${name} renderer`)); return; }
+    const script = document.createElement('script');
+    script.src = reference.src;
+    script.onload = () => typeof globalThis[globalName] === 'function' ? resolve() : reject(new Error(`Invalid ${name} renderer`));
+    script.onerror = () => { script.remove(); reject(new Error(`Could not load ${name} renderer`)); };
+    document.head.append(script);
+  }).catch(error => { bundleLoads.delete(name); throw error; });
+  bundleLoads.set(name, loading);
+  return loading;
+}
+async function requireBundle(name, globalName, view, generation) {
+  try { await loadBundle(name, globalName); }
+  catch (error) {
+    if (generation === renderGeneration) view.append(notice(error.message), button('Retry', () => renderView()));
+    return false;
+  }
+  return generation === renderGeneration;
+}
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
 let refreshTimer, rendered = false, refreshRequested = false, snapshotRequest = 0, snapshotApplied = 0;
@@ -178,6 +202,7 @@ async function renderView(focusChangeId) {
     if (!snapshot) { view.append(notice(snapshotLoading ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
     if (id === 'changes') {
+      if (!(await requireBundle('diff', 'mountLavishDiff', view, generation))) return;
       view.append(diffContainer);
       if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, loadDiffFiles: (operationId, fileIndex) => action('diffFiles', { operationId, fileIndex }) });
       diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, kind: 'jj', to: snapshot.head });
@@ -255,6 +280,7 @@ async function renderView(focusChangeId) {
     catch (error) { if (generation === renderGeneration) view.append(notice(error.message)); return; }
   }
   if (generation !== renderGeneration) return;
+  if ((doc || id === 'tasks') && !(await requireBundle('markdown', 'hubMarkdownRenderer', view, generation))) return;
   const info = notice(state.message || '');
   const area = editor(id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? '' : 'Unsaved changes'; });
   if (id === 'tasks') {

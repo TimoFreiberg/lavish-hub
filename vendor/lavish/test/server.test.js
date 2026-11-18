@@ -3084,6 +3084,36 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
   }
 });
 
+test("representative hub bundles remain verified across sequential requests", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-hub-large-"));
+  const artifact = path.join(dir, "artifact.html");
+  const contents = [Buffer.alloc(7 * 1024 * 1024, 65), Buffer.alloc(10 * 1024 * 1024, 66)];
+  const names = contents.map((bytes) => `hub-asset-${createHash("sha256").update(bytes).digest("hex")}.js`);
+  await writeFile(artifact, "<!doctype html><title>Hub</title>");
+  await Promise.all(names.map((name, i) => writeFile(path.join(dir, name), contents[i])));
+  let reads = 0;
+  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json"), artifactAssetOpen: async (file, flags) => {
+    const handle = await open(file, flags);
+    const read = handle.readFile.bind(handle);
+    handle.readFile = (...args) => { reads++; return read(...args); };
+    return handle;
+  } });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const { key } = await fetch(`${base}/api/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ file: artifact }) }).then((res) => res.json());
+    assert.equal((await fetch(`${base}/api/hub-proxy/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, port: 12345, capability: "a".repeat(64), resourceKey: "b".repeat(64), identityKey: "c".repeat(64), assets: names }) })).status, 200);
+    for (const name of [...names, ...names]) {
+      const response = await fetch(`${base}/artifact/${key}/${name}`, { headers: { "accept-encoding": "identity" } });
+      assert.equal(response.status, 200);
+      await response.arrayBuffer();
+    }
+    assert.equal(reads, 2);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("concurrent registered asset compression shares failures and retries", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-hub-coalesce-"));
   const artifact = path.join(dir, "artifact.html");

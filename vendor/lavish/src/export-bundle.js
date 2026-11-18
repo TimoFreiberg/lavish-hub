@@ -740,6 +740,10 @@ function isCspMeta(attrs) {
 }
 
 async function inlineScript(tag, attrs, body, closeTag, baseDir, ctx) {
+  // Hub bundles are inert on the live page but must be available in offline exports.
+  if (getAttr(attrs, "type") === "application/x-hub-lazy" && ["diff", "markdown"].includes(getAttr(attrs, "data-hub-bundle"))) {
+    attrs = removeAttrs(attrs, ["type", "data-hub-bundle"]);
+  }
   const src = getAttr(attrs, "src");
   if (!src) {
     let inlineBody = body;

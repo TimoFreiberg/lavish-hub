@@ -37,6 +37,37 @@ test('navigation renders before snapshot and serializes delayed owner updates', 
   assert.equal(selected, 'commits');
 });
 
+test('bundles load only on demand, retry failures and reuse successful loads', { timeout: 30000 }, async t => {
+  let selected = 'commits', markdownRequests = 0, diffRequests = 0;
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [], patch: '' }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.exposeFunction('recordBundle', name => { if (name === 'diff') diffRequests++; else markdownRequests++; });
+  await page.setContent(`<div id="app"></div><script>const append = document.head.append.bind(document.head); let md = 0; document.head.append = node => { if (node.src?.startsWith('http://assets.test/')) { const name = node.src.includes('diff.js') ? 'diff' : 'markdown'; recordBundle(name); if (name === 'diff') globalThis.finishDiff = () => { globalThis.mountLavishDiff = () => ({ hide() {}, update() {} }); node.onload(); }; else if (++md === 1) queueMicrotask(() => node.onerror()); else { globalThis.hubMarkdownRenderer = () => () => {}; queueMicrotask(() => node.onload()); } } else append(node); }; globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="application/x-hub-lazy" data-hub-bundle="diff" src="http://assets.test/diff.js"></script><script type="application/x-hub-lazy" data-hub-bundle="markdown" src="http://assets.test/markdown.js"></script><script type="module">${script}</script>`);
+  await page.getByText('No commits in this range.').waitFor({ timeout: 5000 });
+  assert.equal(diffRequests, 0); assert.equal(markdownRequests, 0);
+  await page.getByRole('button', { name: 'Changes', exact: true }).click({ noWaitAfter: true });
+  await assertEventually(() => assert.equal(diffRequests, 1));
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByText('Could not load markdown renderer').waitFor({ timeout: 5000 });
+  await page.evaluate(() => globalThis.finishDiff());
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 5000 });
+  assert.equal(markdownRequests, 2);
+  assert.equal(await page.locator('#view h1').textContent(), 'Tasks');
+  assert.equal(await page.locator('.hub-diff').count(), 0);
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  await page.locator('.hub-diff').waitFor({ state: 'attached', timeout: 5000 });
+  assert.equal(diffRequests, 1);
+});
+
 test('a stale document render cannot append another editor', { timeout: 30000 }, async t => {
   let selected = 'commits', reads = 0, releaseRead;
   const gate = new Promise(resolve => { releaseRead = resolve; });

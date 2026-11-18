@@ -110,21 +110,26 @@ try {
   const warmStart = assets.length;
   await page.frameLocator('#artifact').getByRole('link', { name: 'Changes', exact: true }).click();
   await page.frameLocator('#artifact').locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
-  await until(() => assets.slice(warmStart).filter(item => item.url.endsWith('.js')).length >= 3);
+  await until(() => assets.slice(warmStart).filter(item => item.url.endsWith('.js')).length >= 2);
   const warm = assets.slice(warmStart).filter(item => item.url.endsWith('.js'));
   const evidence = list => list.map(({ url, status, sizes, headers }) => ({ name: new URL(url).pathname.split('/').pop(), status, sizes, cacheControl: headers['cache-control'] }));
   console.log('Chromium hub asset cold:', JSON.stringify(evidence(cold)));
   console.log('Chromium hub asset warm:', JSON.stringify(evidence(warm)));
-  await until(() => [...network.values()].filter(item => item.transferred !== undefined).length >= 3);
+  await until(() => [...network.values()].filter(item => item.transferred !== undefined).length >= 2);
   const transfers = [...network.values()];
-  assert.equal(transfers.length, 3);
-  assert.deepEqual(new Set(transfers.map(item => new URL(item.url).pathname.split('/').pop())), new Set(cold.map(item => new URL(item.url).pathname.split('/').pop())));
+  assert.equal(transfers.length, 2);
+  assert.ok(transfers.every(item => cold.some(previous => previous.url === item.url)));
+  assert.equal(warm.length, 2);
   console.log('Chromium frame network:', JSON.stringify(transfers.map(({ url, ...item }) => ({ name: new URL(url).pathname.split('/').pop(), ...item }))));
   await frame.waitForFunction(() => window.workerResponses.some(response => response.type === 'success' && response.requestType === 'diff'), null, { timeout: 30000 });
   const hubHtml = await readFile(record.page, 'utf8');
   assert.ok(hubHtml.includes('globalThis.hubConfig='));
   const assetNames = [...hubHtml.matchAll(/(?:src|href)="(hub-asset-[a-f0-9]{64}\.(?:js|css))"/g)].map(match => match[1]);
   assert.equal(assetNames.length, 4);
+  const diffName = hubHtml.match(/data-hub-bundle="diff" src="([^"]+)"/)[1];
+  const markdownName = hubHtml.match(/data-hub-bundle="markdown" src="([^"]+)"/)[1];
+  assert.ok(warm.some(item => item.url.endsWith(diffName)));
+  assert.ok(warm.every(item => !item.url.endsWith(markdownName)));
   for (const name of assetNames) {
     const assetUrl = new URL(name, frame.url()).href;
     if (name.endsWith('.js')) {

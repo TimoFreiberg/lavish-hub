@@ -2447,7 +2447,7 @@ export async function serve({
 
   const verifiedHubAssets = new Map();
   let verifiedHubAssetBytes = 0;
-  const maxVerifiedHubAssetBytes = 16 * 1024 * 1024;
+  const maxVerifiedHubAssetBytes = 64 * 1024 * 1024;
 
   function hubAssetIdentity(stats) {
     if (

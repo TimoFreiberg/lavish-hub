@@ -86,6 +86,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const hubHtml = await readFile(path.join(identity.directory, 'hub.html'), 'utf8');
   const bundleNames = [...hubHtml.matchAll(/(?:src|href)="(hub-asset-[a-f0-9]{64}\.(?:js|css))"/g)].map(match => match[1]);
   assert.equal(bundleNames.length, 4);
+  assert.equal((hubHtml.match(/type="application\/x-hub-lazy"/g) || []).length, 2);
   assert.ok(bundleNames.includes(appName));
   assert.equal(await readFile(path.join(identity.directory, appName), 'utf8'), appContent);
   assert.equal(await readFile(oldAsset, 'utf8'), 'old version');
