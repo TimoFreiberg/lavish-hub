@@ -203,10 +203,12 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     const dialog = cancelled.waitForEvent('dialog');
     await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
     await (await dialog).dismiss();
-    for (let i = 0; i < 200 && !refreshesAfterCancel; i++) await delay(30);
-    assert.ok(refreshesAfterCancel, 'polling resumes without Navigation API');
+    const baseline = refreshesAfterCancel;
+    for (let i = 0; i < 200 && refreshesAfterCancel === baseline; i++) await delay(30);
+    assert.ok(refreshesAfterCancel > baseline, 'polling resumes after cancellation');
     await delay(2300);
     assert.ok(cancelled.url().endsWith(fromHub ? 'hub.html' : sibling));
+    if (!disableNavigationApi) await cancelled.getByText('Navigation cancelled. Select a destination to try again.').waitFor();
     await cancelled.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
     if (fromHub) {
       await cancelled.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
@@ -220,6 +222,35 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await cancelled.getByRole('button', { name: 'Leave page' }).click();
     await cancelled.waitForURL(`**/${fromHub ? sibling : 'hub.html'}`);
     await cancelled.close();
+  }
+  for (const fromHub of [true, false]) {
+    await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
+    const page = await browser.newPage();
+    await page.goto(`${browserBase}/${fromHub ? 'hub.html' : sibling}`);
+    await page.evaluate(() => { window.blockLeave = e => { e.preventDefault(); e.returnValue = ''; }; window.addEventListener('beforeunload', window.blockLeave); });
+    let dialog = page.waitForEvent('dialog');
+    await page.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
+    await (await dialog).dismiss();
+    await page.getByText('Navigation cancelled. Select a destination to try again.').waitFor();
+    await page.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
+    if (fromHub) {
+      await request('navigate', { id: 'changes' });
+      for (let i = 0; i < 200 && await page.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current') !== 'page'; i++) await delay(30);
+      assert.equal(await page.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current'), 'page');
+      await request('navigate', { id: 'inside' });
+      await page.waitForURL(`**/${sibling}`);
+    } else {
+      let attempts = 0;
+      await page.route('**/hub.html', async route => { attempts++; await route.abort(); });
+      await request('navigate', { id: 'changes' });
+      for (let i = 0; i < 200 && attempts < 1; i++) await delay(30);
+      assert.equal(attempts, 1, 'different selection with the same URL must be attempted');
+      await delay(2300);
+      await request('navigate', { id: 'tasks' });
+      for (let i = 0; i < 200 && attempts < 2; i++) await delay(30);
+      assert.equal(attempts, 2, 'original selection must be attempted again');
+    }
+    await page.close();
   }
   await request('navigate', { id: 'inside' });
   await siblingPage.getByRole('link', { name: 'Changes', exact: true }).click();
