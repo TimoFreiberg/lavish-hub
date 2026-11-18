@@ -60,7 +60,8 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   let taskText = '- [ ] Task\n\n> - [ ] Quoted\n';
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
-    snapshot: () => ({ base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-old\n+new\n', commits: [commit] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -5 +5 @@\n-old\n+new\ndiff --git a/unavailable.txt b/unavailable.txt\n--- a/unavailable.txt\n+++ b/unavailable.txt\n@@ -5 +5 @@\n-old\n+new\n', commits: [commit] }),
+    diffFiles: body => { assert.equal(body.operationId, 'd'.repeat(128)); if (body.fileIndex === 1) throw new Error('unavailable'); assert.equal(body.fileIndex, 0); return { oldFile: { name: 'example.txt', contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name: 'example.txt', contents: 'one\ntwo\nthree\nfour\nnew\n' } }; },
     describe: () => ({ status: 'conflict', reason: 'stale', current: [{ description: 'External\n' }] }),
     readDocument: () => ({ text: taskText, hash: taskText, version: 'version' }),
     saveDocument: ({ text }) => { taskText = text; return { reply: 'Saved' }; },
@@ -83,15 +84,21 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await page.locator('.file-link[data-path="example.txt"]').waitFor();
   const zed = page.locator('.file-header a').first();
   assert.equal(await zed.textContent(), 'Open in Zed');
-  assert.match(await zed.getAttribute('href'), /example\.txt:1/);
+  assert.match(await zed.getAttribute('href'), /example\.txt:5/);
   assert.equal(await page.getByText('Working tree may differ from the reviewed revision').count(), 0);
-  assert.equal(await page.getByRole('button', { name: 'Copy Zed command :1' }).count(), 1);
+  assert.equal(await page.getByRole('button', { name: 'Copy Zed command :5' }).count(), 2);
   for (const selector of ['.file-header .path', '.file-header .viewed']) {
     assert.equal(await page.locator(selector).first().evaluate(el => getComputedStyle(el).color), 'rgb(235, 225, 205)');
   }
   await page.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
   await page.getByRole('button', { name: 'Add comment' }).click();
   await page.getByPlaceholder('Write a comment').fill('Keep this draft');
+  await page.locator('[data-expand-button]').first().click();
+  await page.getByText('four', { exact: true }).first().waitFor();
+  await page.locator('.file-link[data-path="unavailable.txt"]').click();
+  await page.locator('[data-expand-button]:visible').last().click();
+  await page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.').waitFor();
+  assert.equal(await page.getByPlaceholder('Write a comment').inputValue(), 'Keep this draft');
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
   assert.equal(await page.getByPlaceholder('Write a comment').inputValue(), 'Keep this draft');
@@ -99,7 +106,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   const queued = await page.evaluate(() => globalThis.queued);
   assert.match(queued[0][0], /Hub view: Changes/);
   assert.ok(queued[0][0].includes('b'.repeat(40)));
-  assert.match(queued[0][0], /1: new/);
+  assert.match(queued[0][0], /5: new/);
   assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).count(), 0);
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   assert.equal(await description.inputValue(), 'My draft');

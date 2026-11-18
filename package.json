@@ -10,6 +10,7 @@
     "lavish-kit": "bin/lavish-kit"
   },
   "dependencies": {
+    "@pierre/diffs": "^1.6.4",
     "@tailwindcss/browser": "4.2.4",
     "axi-sdk-js": "^0.1.8",
     "chokidar": "^4.0.3",
@@ -21,23 +22,22 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@pierre/diffs": "1.6.4",
+    "@excalidraw/excalidraw": "0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "2.2.2",
     "@shikijs/markdown-it": "4.6.0",
     "@toon-format/toon": "2.3.1",
+    "axe-core": "4.11.1",
+    "esbuild": "0.28.2",
+    "js-sha256": "^1.1.0",
     "markdown-it": "15.0.3",
     "markdown-it-anchor": "10.1.0",
     "markdown-it-front-matter": "0.2.4",
     "markdown-it-task-lists": "2.1.1",
-    "shiki": "4.6.0",
-    "yaml": "2.9.1",
-    "@excalidraw/excalidraw": "0.18.1",
-    "@excalidraw/mermaid-to-excalidraw": "2.2.2",
-    "axe-core": "4.11.1",
-    "esbuild": "0.28.2",
     "mermaid": "11.12.1",
     "playwright-core": "1.61.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "js-sha256": "^1.1.0"
+    "shiki": "4.6.0",
+    "yaml": "2.9.1"
   }
 }

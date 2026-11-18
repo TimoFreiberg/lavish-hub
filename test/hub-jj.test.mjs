@@ -54,6 +54,25 @@ test('snapshot requests share cached work and refresh after an external rewrite'
   assert.match(automatic.patch, /another external rewrite/);
 });
 
+test('diff expansion reads only bounded files from the requested pinned snapshot', async t => {
+  const cwd = await repo(t), jj = createHubJj(cwd);
+  run(cwd, 'jj', 'new', 'main');
+  await writeFile(path.join(cwd, 'file'), 'initial change\n');
+  run(cwd, 'jj', 'config', 'set', '--repo', 'revset-aliases."trunk()"', 'main');
+  const first = await jj.snapshot();
+  await writeFile(path.join(cwd, 'file'), 'later rewrite\n');
+  const later = await jj.snapshot({ force: true });
+  assert.notEqual(first.head, later.head);
+  const files = await jj.diffFiles({ operationId: first.operationId, fileIndex: 0 });
+  assert.equal(files.oldFile.contents, 'base\n');
+  assert.equal(files.newFile.contents, 'initial change\n');
+  await assert.rejects(jj.diffFiles({ operationId: first.operationId, fileIndex: -1 }), /unavailable/);
+  await assert.rejects(jj.diffFiles({ operationId: 'bad', fileIndex: 0 }), /unavailable/);
+  await writeFile(path.join(cwd, 'file'), 'x'.repeat(1024 * 1024 + 1));
+  const large = await jj.snapshot({ force: true });
+  await assert.rejects(jj.diffFiles({ operationId: large.operationId, fileIndex: 0 }), /too large/);
+});
+
 test('hub_describe_stale_and_literal checks versions and preserves literal descriptions', async t => {
   const cwd = await repo(t), jj = createHubJj(cwd);
   const original = (await jj.snapshot()).commits[0];

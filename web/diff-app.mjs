@@ -6,17 +6,18 @@ import { modelPatch } from '../src/diff/model.mjs';
 import { commentLocation, quoteSelection, zedCommand, zedUrl } from './locations.mjs';
 import { diffDigest, matchesDiffAnchor } from './diff-anchors.mjs';
 
-export function mountDiff(app, { embedded = false } = {}) {
+export function mountDiff(app, { embedded = false, loadDiffFiles } = {}) {
 const el = (tag, text, cls) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; };
 const button = (text, action) => { const node = el('button', text); node.type = 'button'; node.addEventListener('click', action); return node; };
 const state = { data: null, files: [], hash: null, latest: null, pending: null, split: false, viewed: new Set(), collapsed: new Set(), current: 0, hunk: -1, draft: null, storageFailed: false };
 if (!embedded) window.addEventListener('beforeunload', event => { if (state.draft?.textarea.value) { event.preventDefault(); event.returnValue = ''; } });
 if (!window.lavishPreview) try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-kit-viewed') || '[]')); } catch { state.storageFailed = true; }
-const header = el('header', null, 'page-header'), toolbar = el('div', null, 'toolbar'), sidebar = el('nav', null, 'sidebar'), viewport = el('div', null, 'viewport'), notice = el('div', null, 'notice');
+const header = el('header', null, 'page-header'), toolbar = el('div', null, 'toolbar'), sidebar = el('nav', null, 'sidebar'), viewport = el('div', null, 'viewport'), notice = el('div', null, 'notice'), expansionNotice = el('div', null, 'notice');
+expansionNotice.setAttribute('role', 'status');
 // Lavish sees the shadow host, not the clicked diff line. Let CodeView handle
 // this surface even when Lavish's annotation mode is active.
 viewport.setAttribute('data-lavish-action', '');
-const layout = el('div', null, 'layout'); layout.append(sidebar, viewport); app.append(header, toolbar, notice, layout);
+const layout = el('div', null, 'layout'); layout.append(sidebar, viewport); app.append(header, toolbar, notice, expansionNotice, layout);
 const gutterObservers = new WeakMap();
 let view, worker, workerUrl, fallingBack = false;
 let diffAnchors = [], slots = [], generation = null, placementFrame = 0;
@@ -106,6 +107,16 @@ function fallback() {
 try { worker = makeWorker(); worker.initialize().catch(fallback); } catch { fallback(); }
 function options() { return {
   theme: 'orangebox', themeType: 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
+  loadDiffFiles: async parsed => {
+    const data = state.data, index = state.files.findIndex(file => file.parsed === parsed);
+    try {
+      if (!loadDiffFiles || !data?.operationId || index < 0) throw new Error('unavailable');
+      return await loadDiffFiles(data.operationId, index);
+    } catch (error) {
+      if (state.data === data) expansionNotice.textContent = 'Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.';
+      throw error;
+    }
+  },
   unsafeCSS: `:host { --diffs-addition-color-override: ${palette['diff-add']}; --diffs-deletion-color-override: ${palette['diff-del']}; --diffs-bg-addition-override: color-mix(in srgb, ${palette['diff-add']} 16%, ${palette.bg}); --diffs-bg-deletion-override: color-mix(in srgb, ${palette['diff-del']} 16%, ${palette.bg}); --diffs-bg-addition-emphasis-override: color-mix(in srgb, ${palette['diff-add']} 30%, ${palette.bg}); --diffs-bg-deletion-emphasis-override: color-mix(in srgb, ${palette['diff-del']} 30%, ${palette.bg}); }`,
   itemMetrics: { diffHeaderHeight: HEADER_HEIGHT }, stickyHeaders: true, pointerEventsOnScroll: true,
   renderCustomHeader: (_metadata, context) => fileHeader(Number(context.item.id)),
@@ -310,6 +321,7 @@ function updateNotice() {
   notice.append('Diff changed. '); const refresh = button('Refresh', () => embedded ? applyEmbedded(state.pending) : loadData(state.pending)); refresh.disabled = Boolean(state.draft?.textarea.value); notice.append(refresh); if (refresh.disabled) notice.append(' Finish or cancel your comment first.');
 }
 function render(data) {
+  expansionNotice.textContent = '';
   closeDraft();
   reportPlacements([]); state.digest = null; slots = [];
   const top = view.getScrollTop(), current = currentAt(top), previous = state.files[current]?.newPath, itemTop = view.getTopForItem(String(current)), offset = itemTop == null ? 0 : itemTop - top; state.data = data; state.version = (state.version || 0) + 1; state.files = modelPatch(data.patch); state.current = Math.max(0, state.files.findIndex(f => f.newPath === previous));
@@ -329,7 +341,7 @@ if (!embedded) {
   globalThis.lavishViewLatest = hash => { state.latest = hash; if (!state.hash && !loadingHash) loadData(hash); else if (state.hash) { state.pending = hash !== state.hash ? hash : null; updateNotice(); } };
   function poll() { script(`./latest.js?t=${Date.now()}`); } poll(); if (!window.lavishPreview) setInterval(poll, 2000);
 }
-return { hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, hide() { reportPlacements([]); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range && state.data.root === data.root && state.data.revision === data.revision) { state.pending = null; updateNotice(); schedulePlacements(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
+return { hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, hide() { reportPlacements([]); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range && state.data.root === data.root && state.data.revision === data.revision) { state.data.operationId = data.operationId; state.pending = null; updateNotice(); schedulePlacements(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
 }
 if (document.querySelector('#app') && !globalThis.hubConfig) mountDiff(document.querySelector('#app'));
 globalThis.mountLavishDiff = mountDiff;

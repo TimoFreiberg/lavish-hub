@@ -1,4 +1,24 @@
 import { spawn } from 'node:child_process';
+import { modelPatch } from './diff/model.mjs';
+
+const MAX_FILE_BYTES = 1024 * 1024;
+
+function readFileAt(cwd, op, revision, file) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('jj', ['--no-pager', '--color=never', '--at-operation', op, 'file', 'show', '-r', revision, '--', `root:${file}`], { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
+    const chunks = []; let size = 0, tooLarge = false;
+    child.stdout.on('data', chunk => { size += chunk.length; if (size > MAX_FILE_BYTES) { tooLarge = true; child.kill(); } else chunks.push(chunk); });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code || tooLarge) return reject(new Error('File content is unavailable or too large'));
+      const bytes = Buffer.concat(chunks);
+      try {
+        if (bytes.includes(0)) throw new Error();
+        resolve(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+      } catch { reject(new Error('File content is not supported text')); }
+    });
+  });
+}
 
 const fields = ['change_id', 'commit_id', 'description', 'immutable', 'divergent'];
 const template = `"[" ++ ${fields.map(field => `json(${field})`).join(' ++ "," ++ ')} ++ "]\\n"`;
@@ -54,6 +74,7 @@ export async function readHubSnapshot(cwd, { afterMetadata } = {}) {
 
 export function createHubJj(cwd, { validate = async () => true, beforeDescribe } = {}) {
   let pending = Promise.resolve(), cached, expires = 0, flight, generation = 0;
+  const snapshots = new Map();
   async function checkWorkspace() {
     if (!await validate()) throw new Error('Workspace no longer matches its recorded repository');
   }
@@ -86,12 +107,28 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
         if (!force && cached && Date.now() < expires) return cached;
         const started = generation;
         const refresh = readHubSnapshot(cwd).then(value => {
-          if (generation === started) { cached = value; expires = Date.now() + 2000; }
+          if (generation === started) {
+            cached = value; expires = Date.now() + 2000;
+            snapshots.delete(value.operationId);
+            snapshots.set(value.operationId, { ...value, files: modelPatch(value.patch) });
+            while (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value);
+          }
         });
         flight = refresh;
         try { await refresh; } finally { if (flight === refresh) flight = undefined; }
         force = false;
       }
+    },
+    async diffFiles({ operationId, fileIndex }) {
+      await checkWorkspace();
+      const snapshot = snapshots.get(operationId);
+      const file = Number.isSafeInteger(fileIndex) && snapshot?.files[fileIndex];
+      if (!file || file.parseError || !['modified', 'renamed', 'copied'].includes(file.status) || [file.oldMode, file.newMode].some(mode => mode && !['100644', '100755'].includes(mode))) throw new Error('Expansion is unavailable for this file or snapshot');
+      const [oldContent, newContent] = await Promise.all([
+        readFileAt(cwd, operationId, snapshot.base, file.oldPath),
+        readFileAt(cwd, operationId, snapshot.head, file.newPath),
+      ]);
+      return { oldFile: { name: file.oldPath, contents: oldContent }, newFile: { name: file.newPath, contents: newContent } };
     },
     describe(request) {
       const result = pending.then(async () => {

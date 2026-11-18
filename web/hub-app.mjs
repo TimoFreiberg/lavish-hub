@@ -179,8 +179,8 @@ async function renderView(focusChangeId) {
     view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
     if (id === 'changes') {
       view.append(diffContainer);
-      if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true });
-      diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, kind: 'jj', to: snapshot.head });
+      if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, loadDiffFiles: (operationId, fileIndex) => action('diffFiles', { operationId, fileIndex }) });
+      diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, kind: 'jj', to: snapshot.head });
       return;
     }
     if (!snapshot.commits.length) view.append(el('p', 'No commits in this range.'));

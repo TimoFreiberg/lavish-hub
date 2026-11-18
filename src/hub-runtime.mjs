@@ -205,6 +205,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       },
       status: async () => ({ workspace: identity.root, instance, selected, ...(reviewUrl ? { url: reviewUrl } : {}), available: await workspaceMatches(identity) }),
       snapshot: ({ force }) => jj.snapshot({ force: force === true }),
+      diffFiles: body => jj.diffFiles(body),
       describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },
     }, { resource: id => documents.list().documents.find(doc => doc.id === id)?.source, guardSource });
