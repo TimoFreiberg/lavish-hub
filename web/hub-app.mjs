@@ -60,7 +60,7 @@ async function action(operation, body = {}) {
   return data.result;
 }
 let navigationError = '', connectionStatus = 'Connecting…';
-function status(text) { connectionStatus = text; document.querySelector('#connection').textContent = navigationError || connectionStatus; }
+function status(text) { connectionStatus = text; document.querySelector('#connection').textContent = navigationError || (navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : connectionStatus); }
 function renderNav() {
   const nav = document.querySelector('#navigation'); nav.replaceChildren();
   for (const [id, label] of [...Object.entries(labels), ...documents.map(doc => [doc.id, doc.title])]) {
@@ -80,7 +80,7 @@ function resumeRefresh() {
 }
 function leavePage(url, id) {
   pauseRefresh(); leavingConfirmed = true; attemptedSelection = id;
-  if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; resumeRefresh(); }, 1000);
+  if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; status(connectionStatus); resumeRefresh(); }, 1000);
   location.href = url;
 }
 window.navigation?.addEventListener('navigate', event => {
@@ -88,7 +88,7 @@ window.navigation?.addEventListener('navigate', event => {
     navigationUncertain = false; navigationCancelled = true; navigationError = 'Navigation cancelled. Select a destination to try again.'; status(connectionStatus); resumeRefresh();
   }, { once: true });
 });
-window.addEventListener('pageshow', event => { if (event.persisted) { navigationUncertain = false; resumeRefresh(); } });
+window.addEventListener('pageshow', event => { if (event.persisted) { navigationUncertain = false; status(connectionStatus); resumeRefresh(); } });
 function synchronizeNavigation(id) {
   pendingOwnerNavigation++;
   const request = ownerNavigation.then(() => action('navigate', { id }));
@@ -106,7 +106,7 @@ async function select(id) {
   const doc = documents.find(item => item.id === id);
   const leavesPage = doc?.sibling && doc.source?.toLowerCase().endsWith('.html');
   if (navigationPending) return;
-  attemptedSelection = ''; navigationCancelled = false; navigationUncertain = false; navigationError = ''; status(connectionStatus);
+  navigationError = ''; status(connectionStatus);
   navigationPending = true;
   if (leavesPage) pauseRefresh();
   const revision = ++navigationRevision;
@@ -119,7 +119,7 @@ async function select(id) {
     if (!leavesPage) {
       selected = id; renderNav();
       const synchronization = synchronizeNavigation(id).then(() => {
-        if (revision === navigationRevision) { navigationError = ''; status(connectionStatus); }
+        if (revision === navigationRevision) { attemptedSelection = ''; navigationCancelled = false; navigationUncertain = false; navigationError = ''; status(connectionStatus); }
       }, error => {
         if (revision === navigationRevision) { navigationError = error.message; status(connectionStatus); }
       });
@@ -136,6 +136,7 @@ async function select(id) {
       if (startsInExplore(selected)) await globalThis.lavish?.setAnnotationMode?.(true);
       if (revision !== navigationRevision) return;
       if (modeEditRevision !== editRevision && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
+      navigationUncertain = false; navigationCancelled = false; status(connectionStatus);
       leavePage(new URL(doc.sibling, location.href).href, id); return;
     }
     selected = id; renderNav(); await renderView();

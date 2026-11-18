@@ -238,17 +238,25 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await delay(2300);
     assert.ok(cancelled.url().endsWith(fromHub ? 'hub.html' : sibling));
     if (!disableNavigationApi) await cancelled.getByText('Navigation cancelled. Select a destination to try again.').waitFor();
-    if (fromHub && disableNavigationApi) {
-      await request('navigate', { id: 'changes' });
-      for (let i = 0; i < 200 && await cancelled.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current') !== 'page'; i++) await delay(30);
-      assert.equal(await cancelled.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current'), 'page');
-      await cancelled.getByRole('button', { name: 'Tasks', exact: true }).click();
-    }
     await cancelled.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
     if (fromHub) {
       await cancelled.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
       await cancelled.getByRole('textbox', { name: 'Tasks Markdown' }).fill('Still here');
     } else await cancelled.getByLabel('Frame draft').fill('Still here');
+    if (disableNavigationApi) {
+      const notice = cancelled.getByText('Navigation may still be in progress; select a destination to continue');
+      await notice.waitFor();
+      let competing = 0;
+      cancelled.on('request', req => { if (req.isNavigationRequest() && req.frame() === cancelled.mainFrame()) competing++; });
+      await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Changes', exact: true }).click({ noWaitAfter: true });
+      await cancelled.getByRole('button', { name: 'Keep editing' }).click();
+      await notice.waitFor();
+      await request('navigate', { id: fromHub ? 'other-html' : 'changes' });
+      await delay(2300);
+      assert.equal(competing, 0, 'cancelled selection must not permit a competing navigation');
+      assert.equal(await (fromHub ? cancelled.getByRole('textbox', { name: 'Tasks Markdown' }) : cancelled.getByLabel('Frame draft')).inputValue(), 'Still here');
+      await notice.waitFor();
+    }
     const reloadDialog = cancelled.waitForEvent('dialog', { timeout: 5000 });
     void cancelled.reload().catch(() => {});
     assert.equal((await reloadDialog).type(), 'beforeunload');

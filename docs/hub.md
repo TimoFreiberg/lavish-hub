@@ -107,7 +107,9 @@ for a published HTML page when a hub draft or an unqueued diff comment is
 unsaved. Published pages similarly ask after user input or changes outside the
 navigation, and pause automatic switches. In the in-page confirmation, choose
 Keep editing or press Escape to keep the current page and its edits. Choose Leave
-page to discard them. These guards do not persist drafts: leaving the page, a
+page to discard them. If the browser cannot tell whether a slow navigation is still
+in progress, the page shows a notice and pauses automatic page switches. Select a
+destination to continue. These guards do not persist drafts: leaving the page, a
 browser crash, or forced closure can discard them. Published pages with custom
 editors that do not emit trusted input or change events may not be detected. A
 published page remains marked edited even if its own save control has saved the
