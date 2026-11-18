@@ -10,6 +10,23 @@ test("injects the Lavish SDK before the closing body tag", () => {
   assert.match(result, /<script src="\/sdk\.js\?key=abc123"><\/script><\/body>/);
 });
 
+test("reuses unchanged HTML without reusing per-load SDK parameters or a changed body position", () => {
+  const html = "<body><script>const s = '</body>';</script></body>";
+  const first = injectLavishSdk(html, "first", 1, "token-one");
+  const second = injectLavishSdk(html, "second", 2, "token-two");
+  assert.match(first, /key=first&artifact_revision=1&artifact_load_token=token-one/);
+  assert.match(second, /key=second&artifact_revision=2&artifact_load_token=token-two/);
+  assert.doesNotMatch(second, /token-one|key=first/);
+  assert.ok(second.endsWith("</script></body>"));
+
+  const changed = "<body>changed</body><p>after</p>";
+  assert.equal(
+    injectLavishSdk(changed, "third"),
+    '<body>changed<script src="/sdk.js?key=third"></script></body><p>after</p>',
+  );
+  assert.equal(injectLavishSdk("<p>no body</p>", "fourth"), '<p>no body</p>\n<script src="/sdk.js?key=fourth"></script>');
+});
+
 test("does not inject Tailwind or DaisyUI design assets so the saved file stays portable", () => {
   const html = '<!doctype html><html><head><title>Hi</title></head><body><h1 class="btn">Hi</h1></body></html>';
   const result = injectLavishSdk(html, "abc123");

@@ -11,10 +11,21 @@ function findBodyElement(node) {
   return null;
 }
 
+const bodyCloseCache = new Map();
+
 function bodyCloseIndex(html) {
+  if (bodyCloseCache.has(html)) {
+    const index = bodyCloseCache.get(html);
+    bodyCloseCache.delete(html);
+    bodyCloseCache.set(html, index);
+    return index;
+  }
   const body = findBodyElement(parse(html, { sourceCodeLocationInfo: true }));
   const endTag = body && body.sourceCodeLocation && body.sourceCodeLocation.endTag;
-  return endTag ? endTag.startOffset : -1;
+  const index = endTag ? endTag.startOffset : -1;
+  if (bodyCloseCache.size === 2) bodyCloseCache.delete(bodyCloseCache.keys().next().value);
+  bodyCloseCache.set(html, index);
+  return index;
 }
 
 export function injectLavishSdk(html, key, artifactRevision, artifactLoadToken = "", context = {}) {
