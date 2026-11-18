@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { canonicalPath } from './hub-workspace.mjs';
 import { runtimeEnv } from './runtime.mjs';
 
 export const supportedLavishVersion = '0.1.97';
@@ -30,7 +31,7 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
     if (!health.ok || health.app !== 'lavish-axi' || health.version !== version || health.lavish_kit_page_reviews !== 1) {
       throw failure('UNSUPPORTED_LAVISH', `Direct HTTP requires patched lavish-axi ${version}; server reports ${health.version || 'unknown'}`);
     }
-    const canonicalDirectory = await realpath(directory);
+    const canonicalDirectory = await canonicalPath(directory);
     const stateId = keyFor(path.join(canonicalDirectory, 'state.json'));
     if (health.state_id !== stateId) throw failure('LAVISH_STATE_MISMATCH', 'Server uses a different Lavish state directory');
     return health;

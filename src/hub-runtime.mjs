@@ -6,6 +6,7 @@ import { createHubJj } from './hub-jj.mjs';
 import { createHubDocuments } from './hub-documents.mjs';
 import { createHubCommands } from './hub-commands.mjs';
 import { resolveWorkspace, resolveRecordedWorkspace, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
+import { computeHubUrl } from './hub-url.mjs';
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
 import { quote } from './quote.mjs';
@@ -25,16 +26,16 @@ function alive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return error.code !== 'ESRCH'; }
 }
-async function workspace(dir) {
+async function workspace(dir, env = process.env) {
   let current;
-  try { current = await resolveWorkspace(dir); }
+  try { current = await resolveWorkspace(dir, env); }
   catch (error) {
     if (!dir) throw error;
-    try { return await resolveRecordedWorkspace(dir); } catch { throw error; }
+    try { return await resolveRecordedWorkspace(dir, env); } catch { throw error; }
   }
   // A checkout path may have been replaced since this hub was created. Keep
   // its recorded identity so actions cannot silently move to the new repo.
-  try { return await resolveRecordedWorkspace(current.root); }
+  try { return await resolveRecordedWorkspace(current.root, env); }
   catch (error) { if (error.code !== 'ENOENT') throw error; return current; }
 }
 async function acquire(identity, instance) {
@@ -202,7 +203,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         if (!(await workspaceMatches(identity))) throw new Error('Workspace is unavailable or has changed; saving is disabled');
         return documents.save(body);
       },
-      status: async () => ({ workspace: identity.root, instance, selected, available: await workspaceMatches(identity) }),
+      status: async () => ({ workspace: identity.root, instance, selected, ...(reviewUrl ? { url: reviewUrl } : {}), available: await workspaceMatches(identity) }),
       snapshot: ({ force }) => jj.snapshot({ force: force === true }),
       describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },
@@ -271,7 +272,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
 }
 
 export async function callHub(operation, options = {}) {
-  const identity = await workspace(options.workspace);
+  const identity = await workspace(options.workspace, options.env);
   let runtime;
   try { runtime = await readJson(path.join(identity.directory, 'owner', 'runtime.json')); }
   catch { throw new Error(`No live hub owner. ${startup}`); }
@@ -283,4 +284,15 @@ export async function callHub(operation, options = {}) {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Hub request failed');
   return data.result;
+}
+
+export async function hubUrl(options = {}, deps = {}) {
+  const identity = await workspace(options.workspace, options.env);
+  try {
+    const status = await callHub('status', options);
+    if (status?.url) return status.url;
+  } catch (error) {
+    if (!error.message.startsWith('No live hub owner.')) throw error;
+  }
+  return computeHubUrl(identity, { env: options.env, ...deps });
 }

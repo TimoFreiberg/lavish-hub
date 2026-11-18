@@ -77,10 +77,12 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await assert.rejects(run(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env }), /hub owner is already running/i);
   const { stdout } = await run(process.execPath, [cli, 'hub', '--workspace', repo], { env });
   assert.match(stdout, /Hub owner running/);
+  assert.equal((await run(process.execPath, [cli, 'hub', 'url', '--workspace', repo], { env })).stdout, 'http://localhost:123/review\n');
   const subdir = path.join(repo, 'subdir'); await mkdir(subdir);
   assert.match((await run(process.execPath, [cli, 'hub'], { env, cwd: subdir })).stdout, /Hub owner running/);
   const other = path.join(dir, 'other'); await mkdir(other); execFileSync('jj', ['git', 'init', other]);
   await assert.rejects(run(process.execPath, [cli, 'hub', '--workspace', other], { env }), /No live hub owner/);
+  assert.match((await run(process.execPath, [cli, 'hub', 'url', '--workspace', other], { env })).stdout, new RegExp(`^http://[^/]+:${server.address().port}/session/[a-f0-9]{16}\\n$`));
   const hubHtml = await readFile(path.join(identity.directory, 'hub.html'), 'utf8');
   const bundleNames = [...hubHtml.matchAll(/(?:src|href)="(hub-asset-[a-f0-9]{64}\.(?:js|css))"/g)].map(match => match[1]);
   assert.equal(bundleNames.length, 4);

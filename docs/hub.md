@@ -113,11 +113,12 @@ through the same forwarded UI address to remote browsers. Replacing a document
 changes its source directory. Published HTML does not currently receive a hub
 action SDK.
 
-Run `lavish-kit hub [--workspace DIR]` to check the owner, add `--view VIEW` to
-select a built-in view or published document ID, or run `lavish-kit hub stop
-[--workspace DIR]` to request shutdown. Add `--open` to the short hub or
-`hub publish` command to open the existing review (or list it under Artifacts
-when available). Publishing selects the document. Selection
+Run `lavish-kit hub url [--workspace DIR]` to print the workspace review URL
+before or while the owner runs. Run `lavish-kit hub [--workspace DIR]` to check
+the owner, add `--view VIEW` to select a built-in view or published document ID,
+or run `lavish-kit hub stop [--workspace DIR]` to request shutdown. Add `--open`
+to the short hub or `hub publish` command to open the existing review (or list
+it under Artifacts when available). Publishing selects the document. Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. An open hub checks for selection, repository, and source changes about
 every two seconds after each completed check; slow or unavailable actions can delay

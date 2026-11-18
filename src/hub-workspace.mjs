@@ -11,7 +11,7 @@ const exec = promisify(execFile);
 const digest = value => createHash('sha256').update(value).digest('hex');
 
 // Resolve aliases even when the final components have not been created yet.
-async function canonicalPath(value) {
+export async function canonicalPath(value) {
   const absolute = path.resolve(value);
   try { return await realpath(absolute); }
   catch (error) {

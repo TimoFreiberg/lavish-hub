@@ -1,11 +1,11 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { callHub, runHubOwner } from './hub-runtime.mjs';
+import { callHub, hubUrl, runHubOwner } from './hub-runtime.mjs';
 import { readMetadata } from './hub-documents.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
 import { createLavishClient } from './lavish-http.mjs';
 
-const usage = `usage: lavish-kit hub [listen|stop|status] [--workspace DIR] [--open] [--reopen]
+const usage = `usage: lavish-kit hub [listen|stop|status|url] [--workspace DIR] [--open] [--reopen]
        lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
        lavish-kit hub tasks --file FILE [--workspace DIR]
        lavish-kit reply PAGE --agent-reply TEXT`;
@@ -25,7 +25,7 @@ export function parseArgs(args) {
   }
   if (target !== 'hub') throw new UsageError(target ? `unknown command ${target}` : '');
   const command = args[0] && !args[0].startsWith('-') ? args.shift() : 'status';
-  if (!['listen', 'stop', 'status', 'publish', 'tasks'].includes(command)) throw new UsageError(`unknown hub command ${command}`);
+  if (!['listen', 'stop', 'status', 'url', 'publish', 'tasks'].includes(command)) throw new UsageError(`unknown hub command ${command}`);
   const result = { hub: command };
   if (command === 'publish') {
     result.file = args.shift();
@@ -72,6 +72,7 @@ export async function main(args = process.argv.slice(2)) {
     if (options.help) { console.log(help); return 0; }
     if (options.reply) return await reply(options.page, options.text);
     if (options.hub === 'listen') return await runHubOwner(options);
+    if (options.hub === 'url') { console.log(await hubUrl(options)); return 0; }
     if (['publish', 'tasks'].includes(options.hub)) {
       const body = options.hub === 'publish'
         ? { id: options.id, title: options.title, file: path.resolve(options.file), ...(options.metadataFile ? { metadata: await readMetadata(options.metadataFile) } : {}) }

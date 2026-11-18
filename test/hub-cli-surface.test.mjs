@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import { ensureHubAssets } from '../src/deps.mjs';
 import { parseArgs } from '../src/cli.mjs';
+import { hubUrl } from '../src/hub-runtime.mjs';
+import { computeHubUrl } from '../src/hub-url.mjs';
+import { resolveWorkspace } from '../src/hub-workspace.mjs';
 import { runtimeEnv, lavishCli } from '../src/runtime.mjs';
 
 const cli = path.resolve('bin/lavish-kit');
@@ -44,4 +48,39 @@ test('runtime defaults and explicit overrides agree', () => {
   assert.equal(explicit.LAVISH_AXI_PORT, '1234');
   assert.equal(explicit.LAVISH_AXI_STATE_DIR, '/custom');
   assert.match(lavishCli, /vendor\/lavish\/dist\/cli\.mjs$/);
+});
+
+test('hub url parses arguments and predicts workspace session URLs without side effects', async t => {
+  assert.deepEqual(parseArgs(['hub', 'url']), { hub: 'url' });
+  assert.deepEqual(parseArgs(['hub', 'url', '--workspace', 'sub']), { hub: 'url', workspace: 'sub' });
+  for (const args of [['hub', 'url', '--open'], ['hub', 'url', '--reopen'], ['hub', 'url', '--view', 'commits']]) {
+    assert.throws(() => parseArgs(args), /unknown hub argument/);
+  }
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-url-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const repo = path.join(dir, 'repo'), second = path.join(dir, 'second'), alias = path.join(dir, 'alias');
+  await mkdir(repo);
+  execFileSync('jj', ['git', 'init'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('jj', ['workspace', 'add', second], { cwd: repo, stdio: 'ignore' });
+  await symlink(dir, alias);
+  const data = path.join(alias, 'data'), state = path.join(alias, 'state');
+  const env = { ...process.env, HOME: dir, XDG_DATA_HOME: data, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: '45123', LAVISH_AXI_HOST: '127.0.0.1' };
+  const identity = await resolveWorkspace(repo, env);
+  const expectedKey = createHash('sha256').update(path.join(identity.directory, 'hub.html')).digest('hex').slice(0, 16);
+  const predicted = await hubUrl({ workspace: repo, env }, { client: () => ({ verifyIfRunning: async () => null }) });
+  assert.equal(predicted, `http://127.0.0.1:45123/session/${expectedKey}`);
+  await assert.rejects(stat(path.join(dir, 'data')), { code: 'ENOENT' });
+  const secondUrl = await hubUrl({ workspace: second, env }, { client: () => ({ verifyIfRunning: async () => null }) });
+  assert.notEqual(secondUrl, predicted);
+
+  const noServer = () => ({ verifyIfRunning: async () => null });
+  assert.equal(await computeHubUrl(identity, { env: { ...env, LAVISH_AXI_HOST: '0.0.0.0' }, client: noServer }), `http://127.0.0.1:45123/session/${expectedKey}`);
+  assert.equal(await computeHubUrl(identity, { env: { ...env, LAVISH_AXI_HOST: '::1' }, client: noServer }), `http://[::1]:45123/session/${expectedKey}`);
+  assert.equal(await computeHubUrl(identity, { env: { ...env, LAVISH_AXI_LINK_HOST: 'review.example.test' }, client: noServer }), `http://review.example.test:45123/session/${expectedKey}`);
+  const tailscaleEnv = { ...env };
+  delete tailscaleEnv.LAVISH_AXI_HOST;
+  const detect = async () => ({ ipv4: '100.64.0.9', magicDnsName: 'box.tailnet.ts.net' });
+  assert.equal(await computeHubUrl(identity, { env: tailscaleEnv, detect, client: noServer }), `http://box.tailnet.ts.net:45123/session/${expectedKey}`);
+  assert.equal(await computeHubUrl(identity, { env: tailscaleEnv, detect, client: () => ({ verifyIfRunning: async () => ({ hosts: ['127.0.0.1', '100.64.0.9'] }) }) }), `http://box.tailnet.ts.net:45123/session/${expectedKey}`);
+  assert.equal(await computeHubUrl(identity, { env: tailscaleEnv, detect, client: () => ({ verifyIfRunning: async () => ({ hosts: ['127.0.0.1'] }) }) }), `http://127.0.0.1:45123/session/${expectedKey}`);
 });

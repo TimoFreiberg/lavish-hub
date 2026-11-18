@@ -63,6 +63,8 @@ try {
   assert.equal(run(['diff']).status, 2);
   const init = spawnSync('jj', ['git', 'init'], { cwd: repo, env, encoding: 'utf8' });
   assert.equal(init.status, 0, init.stderr);
+  const predicted = run(['hub', 'url']);
+  assert.equal(predicted.status, 0, predicted.stderr);
   owner = spawn(process.execPath, [cli, 'hub', 'listen'], { cwd: repo, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; owner.stderr.on('data', chunk => { logs += chunk; });
   let status;
@@ -86,6 +88,8 @@ try {
   const runtime = JSON.parse(await readFile(path.join(identity.directory, 'owner/runtime.json'), 'utf8'));
   const url = logs.match(/ready: (https?:\/\/\S+)/)?.[1];
   assert.ok(url, logs);
+  assert.equal(predicted.stdout.trim(), url);
+  assert.equal(run(['hub', 'url']).stdout.trim(), url);
   const page = await fetch(url);
   assert.equal(page.status, 200);
   assert.match(await page.text(), /<html/i);

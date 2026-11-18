@@ -3,13 +3,14 @@
 ```text
 lavish-kit hub listen [--workspace DIR] [--open] [--reopen]
 lavish-kit hub stop [--workspace DIR]
+lavish-kit hub url [--workspace DIR]
 lavish-kit hub [status] [--workspace DIR] [--open] [--view ID]
 lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
 lavish-kit hub tasks --file FILE [--workspace DIR]
 lavish-kit reply PAGE --agent-reply TEXT
 ```
 
-`hub listen` owns a workspace in the foreground; wait until it is ready before using the short commands. `hub` and `hub status` report its status; `hub --view ID` selects a view. `hub stop` requests shutdown. `publish` registers an existing HTML or Markdown file, and `tasks` attaches a task file. `--open` opens an existing review, and `--reopen` permits an explicitly ended review to reopen when starting the owner. `--workspace` selects the jj workspace instead of the current directory.
+`hub listen` owns a workspace in the foreground; wait until it is ready before using the short commands. `hub url` prints the workspace review URL without starting an owner or Lavish server. `hub` and `hub status` report the owner's status; `hub --view ID` selects a view. `hub stop` requests shutdown. `publish` registers an existing HTML or Markdown file, and `tasks` attaches a task file. `--open` opens an existing review, and `--reopen` permits an explicitly ended review to reopen when starting the owner. `--workspace` selects the jj workspace instead of the current directory.
 
 The owner prints each feedback batch as a JSON line with a `reply` command. Replace its placeholder with your response and run it; do not start a second polling consumer. See [hub](hub.md) for document scope, safety, and lifecycle details.
 
