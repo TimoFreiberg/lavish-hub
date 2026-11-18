@@ -8,7 +8,8 @@ let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
 let refreshTimer, rendered = false, refreshRequested = false, snapshotRequest = 0, snapshotApplied = 0;
 let modeView;
-window.addEventListener('lavish:ready', () => { if (modeView === 'commits') globalThis.lavish?.setAnnotationMode?.(false); });
+const startsInExplore = id => id === 'commits' || id === 'changes';
+window.addEventListener('lavish:ready', () => { if (startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(false); });
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
 const button = (text, action) => { const node = el('button', text, { type: 'button' }); node.addEventListener('click', action); return node; };
@@ -57,7 +58,7 @@ async function select(id) {
     if (revision !== navigationRevision) return;
     if (leavesPage) {
       if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
-      if (selected === 'commits') await globalThis.lavish?.setAnnotationMode?.(true);
+      if (startsInExplore(selected)) await globalThis.lavish?.setAnnotationMode?.(true);
       leavingConfirmed = true; location.href = new URL(doc.sibling, location.href).href; return;
     }
     selected = id; renderNav(); await renderView();
@@ -77,7 +78,7 @@ async function refresh(force = false) {
     if (state.selected && !navigationPending && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
-    if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { if (oldSelected === 'commits') await globalThis.lavish?.setAnnotationMode?.(true); location.href = new URL(selectedDoc.sibling, location.href).href; return; }
+    if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true); location.href = new URL(selectedDoc.sibling, location.href).href; return; }
     try { const request = ++snapshotRequest; snapshot = await action('snapshot', { force }); snapshotApplied = request; status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
     catch (error) { snapshot = undefined; status(error.message); }
     let documentChanged = false;
@@ -130,7 +131,7 @@ async function renderView(focusChangeId) {
   const view = document.querySelector('#view'); view.replaceChildren(); rendered = true;
   const id = selected;
   if (modeView !== id) {
-    if (id === 'commits' || modeView === 'commits') globalThis.lavish?.setAnnotationMode?.(id !== 'commits');
+    if (startsInExplore(id) || startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(!startsInExplore(id));
     modeView = id;
   }
   view.classList.toggle('changes-view', id === 'changes');

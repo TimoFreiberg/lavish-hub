@@ -189,10 +189,16 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await frame.getByRole('button', { name: 'Changes', exact: true }).click();
   await frame.locator('.file-link[data-path="changed.txt"]').waitFor();
   assert.equal(await frame.locator('#view').getAttribute('data-lavish-action'), null);
-  await page.waitForFunction(() => document.querySelector('#annotation').getAttribute('aria-pressed') === 'true');
+  await page.waitForFunction(() => document.querySelector('#annotation').getAttribute('aria-pressed') === 'false');
+  await frame.getByRole('heading', { name: 'Changes', exact: true }).click();
+  assert.equal(await frame.locator('.lavish-annotation-card').count(), 0);
+  await page.locator('#annotation').click();
+  await frame.getByRole('button', { name: 'Refresh' }).click();
+  assert.equal(await page.locator('#annotation').getAttribute('aria-pressed'), 'true');
   await frame.getByRole('heading', { name: 'Changes', exact: true }).click();
   await frame.locator('.lavish-annotation-card textarea').waitFor();
   await frame.locator('.lavish-annotation-card').getByRole('button', { name: 'Cancel' }).click();
+  await page.locator('#annotation').click();
   await frame.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
   await frame.getByRole('button', { name: 'Add comment' }).click();
   const comment = frame.getByPlaceholder('Write a comment');
@@ -203,6 +209,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await frame.getByRole('button', { name: 'Review', exact: true }).click();
   await dialog.getByRole('button', { name: 'Leave page' }).click();
   await frame.getByText('Replacement document').waitFor();
+  await page.waitForFunction(() => document.querySelector('#annotation').getAttribute('aria-pressed') === 'true');
   await page.unrouteAll();
   const normalStart = performance.now();
   let normalRequests = 0, normalResponse;

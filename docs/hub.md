@@ -60,10 +60,10 @@ rollback can leave generated pages out of sync. Scope is recorded as supplied an
 is not updated if commits are rewritten. The displayed scope describes the review
 at publication time, not necessarily the current checkout.
 
-Entering Commits turns Lavish annotations off so you can select and edit text.
-Turn the annotation switch back on whenever you want to comment there. Leaving
-Commits turns annotations on in the other views. Refreshing the current view does
-not change your choice. A browser reload prompts before discarding
+Entering Commits or Changes turns Lavish annotations off so you can interact
+with the view. Turn the annotation switch back on whenever you want to comment
+there. Entering another view turns annotations on. Refreshing the current view
+does not change your choice. A browser reload prompts before discarding
 unsaved hub drafts; cancel it to keep editing.
 
 Commits shows each description and its own diff statistics. Use the pencil button
