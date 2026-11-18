@@ -135,7 +135,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
   await diffPage.getByRole('button', { name: 'inside.html', exact: true }).click();
   await diffPage.getByRole('button', { name: 'Leave page' }).click();
-  await diffPage.getByText('original', { exact: true }).waitFor();
+  await diffPage.locator('p').getByText('original', { exact: true }).waitFor();
   await diffPage.close();
   const siblingPage = await browser.newPage();
   await siblingPage.goto(`${browserBase}/${sibling}`);
