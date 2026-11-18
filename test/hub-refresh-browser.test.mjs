@@ -37,6 +37,71 @@ test('navigation renders before snapshot and serializes delayed owner updates', 
   assert.equal(selected, 'commits');
 });
 
+test('a stale document render cannot append another editor', { timeout: 30000 }, async t => {
+  let selected = 'commits', reads = 0, releaseRead;
+  const gate = new Promise(resolve => { releaseRead = resolve; });
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    readDocument: async () => { const read = ++reads; if (read === 1) await gate; return { text: read === 1 ? 'Stale' : 'Current', hash: String(read), version: 'one' }; },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { releaseRead(); await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await assertEventually(() => assert.equal(reads, 1));
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
+  const editor = page.getByRole('textbox', { name: 'Tasks Markdown' });
+  await editor.fill('Draft');
+  const response = page.waitForResponse(async response => response.url().endsWith('/action') && (await response.request().postDataJSON()).operation === 'readDocument');
+  releaseRead();
+  await response;
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+  assert.equal(await page.locator('#view textarea').count(), 1);
+  assert.equal(await editor.inputValue(), 'Draft');
+  assert.equal(await page.locator('#view h1').count(), 1);
+});
+
+test('failed navigation survives polling and can be retried without losing a draft', { timeout: 30000 }, async t => {
+  let selected = 'commits', attempts = 0, statusCalls = 0;
+  const transport = await createHubTransport({
+    status: () => { statusCalls++; return { available: true, selected }; }, documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: ({ id }) => { if (++attempts === 1) throw new Error('Navigation rejected'); selected = id; return { selected }; },
+    readDocument: () => ({ text: 'Original', hash: 'one', version: 'one' }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByText('Navigation rejected').waitFor();
+  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
+  const editor = page.getByRole('textbox', { name: 'Tasks Markdown' });
+  await editor.fill('Draft');
+  const before = statusCalls;
+  const snapshotResponse = page.waitForResponse(response => response.url().endsWith('/action') && response.request().postDataJSON().operation === 'snapshot');
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await assertEventually(() => assert.ok(statusCalls > before));
+  await snapshotResponse;
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+  assert.equal(await page.locator('#connection').textContent(), 'Navigation rejected');
+  assert.equal(await editor.inputValue(), 'Draft');
+  assert.equal(await page.getByRole('button', { name: 'Tasks', exact: true }).getAttribute('aria-current'), 'page');
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await assertEventually(() => assert.equal(selected, 'tasks'));
+  await assertEventually(async () => assert.equal(await page.locator('#connection').textContent(), 'Connected'));
+  assert.equal(await editor.inputValue(), 'Draft');
+});
+
 test('refresh updates clean documents and retains dirty drafts and their target', { timeout: 30000 }, async t => {
   let selected = 'tasks';
   let document = { text: 'First\n', hash: 'first', version: 'one' };

@@ -27,7 +27,8 @@ async function action(operation, body = {}) {
   if (!response.ok) throw new Error(data.error || 'Action failed');
   return data.result;
 }
-function status(text) { document.querySelector('#connection').textContent = text; }
+let navigationError = '', connectionStatus = 'Connecting…';
+function status(text) { connectionStatus = text; document.querySelector('#connection').textContent = navigationError || connectionStatus; }
 function renderNav() {
   const nav = document.querySelector('#navigation'); nav.replaceChildren();
   for (const [id, label] of [...Object.entries(labels), ...documents.map(doc => [doc.id, doc.title])]) {
@@ -63,7 +64,11 @@ async function select(id) {
     }
     if (!leavesPage) {
       selected = id; renderNav();
-      const synchronization = synchronizeNavigation(id).catch(error => { status(error.message); });
+      const synchronization = synchronizeNavigation(id).then(() => {
+        if (revision === navigationRevision) { navigationError = ''; status(connectionStatus); }
+      }, error => {
+        if (revision === navigationRevision) { navigationError = error.message; status(connectionStatus); }
+      });
       navigationPending = false;
       await renderView();
       await synchronization;
@@ -91,7 +96,7 @@ async function refresh(force = false) {
     documents = list.documents;
     const remoteDoc = documents.find(item => item.id === state.selected);
     const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
-    if (state.selected && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
+    if (state.selected && !navigationError && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && hasUnsavedDrafts())) selected = state.selected;
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
     if (selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) { if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true); location.href = new URL(selectedDoc.sibling, location.href).href; return; }
@@ -106,6 +111,7 @@ async function refresh(force = false) {
     if (result.error) { snapshot = undefined; status(result.error.message); }
     else { snapshot = result.value; snapshotApplied = request; status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
     let documentChanged = false;
+    const documentNavigation = navigationRevision;
     const cached = drafts.get(`doc:${selected}`);
     if (cached && cached.text === cached.original && !cached.saving) {
       try {
@@ -117,12 +123,14 @@ async function refresh(force = false) {
         }
       } catch (error) { if (cached.message !== error.message) { cached.message = error.message; documentChanged = true; } }
     }
+    if (documentNavigation !== navigationRevision) return;
     const doc = documents.find(item => item.id === selected);
     const frame = frames.get(selected);
     let htmlData;
     if (doc?.source?.toLowerCase().endsWith('.html')) {
       try {
         const data = await action('readDocument', { id: selected });
+        if (documentNavigation !== navigationRevision) return;
         htmlData = data;
         if (frame && (frame.version !== data.version || (frame.hash !== undefined && frame.hash !== data.hash))) { frame.version = data.version; frame.hash = data.hash; frame.node.src = frame.url; }
         else if (frame) { frame.version = data.version; frame.hash = data.hash; }
@@ -133,7 +141,10 @@ async function refresh(force = false) {
       const active = document.activeElement;
       const label = active?.closest('#view') && active.getAttribute('aria-label');
       const selection = label && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
-      await renderView();
+      const rendering = renderView();
+      const generation = renderGeneration;
+      await rendering;
+      if (generation !== renderGeneration || documentNavigation !== navigationRevision) return;
       const createdFrame = frames.get(selected);
       if (!frame && createdFrame && htmlData) { createdFrame.version = htmlData.version; createdFrame.hash = htmlData.hash; }
       if (label) {
@@ -151,7 +162,9 @@ async function refresh(force = false) {
 function draft(key, initial) { if (!drafts.has(key)) drafts.set(key, initial); return drafts.get(key); }
 function editor(label, value, onInput) { const area = el('textarea', null, { 'aria-label': label, rows: '5', spellcheck: 'false' }); area.value = value; area.addEventListener('input', () => onInput(area.value)); return area; }
 function notice(text) { return el('p', text, { role: 'status', class: 'notice' }); }
+let renderGeneration = 0;
 async function renderView(focusChangeId) {
+  const generation = ++renderGeneration;
   const view = document.querySelector('#view'); view.replaceChildren(); rendered = true;
   const id = selected;
   if (modeView !== id) {
@@ -238,10 +251,10 @@ async function renderView(focusChangeId) {
   }
   let state = drafts.get(`doc:${id}`);
   if (!state) {
-    try { const data = await action('readDocument', { id }); state = draft(`doc:${id}`, { text: data.text, original: data.text, hash: data.hash, version: data.version, preview: true }); }
-    catch (error) { if (selected === id) view.append(notice(error.message)); return; }
+    try { const data = await action('readDocument', { id }); if (generation !== renderGeneration) return; state = draft(`doc:${id}`, { text: data.text, original: data.text, hash: data.hash, version: data.version, preview: true }); }
+    catch (error) { if (generation === renderGeneration) view.append(notice(error.message)); return; }
   }
-  if (selected !== id) return;
+  if (generation !== renderGeneration) return;
   const info = notice(state.message || '');
   const area = editor(id === 'tasks' ? 'Tasks Markdown' : 'Document Markdown', state.text, value => { state.text = value; info.textContent = value === state.original ? '' : 'Unsaved changes'; });
   if (id === 'tasks') {
