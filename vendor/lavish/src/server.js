@@ -856,7 +856,11 @@ export async function serve({
   const hubProxy = createHubProxy({ store, events, jsonParser: express.json({ limit: "4kb" }) });
   app.get("/hubs", (req, res) =>
     res
-      .set({ "Cache-Control": "no-store", "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'" })
+      .set({
+        "Cache-Control": "no-store",
+        "X-Frame-Options": "DENY",
+        "Content-Security-Policy": "frame-ancestors 'none'",
+      })
       .type("html")
       .send(hubDashboard),
   );
@@ -2441,6 +2445,23 @@ export async function serve({
     sendArtifactHtml(res, representation);
   }
 
+  const verifiedHubAssets = new Map();
+  let verifiedHubAssetBytes = 0;
+  const maxVerifiedHubAssetBytes = 16 * 1024 * 1024;
+
+  function hubAssetIdentity(stats) {
+    if (
+      !stats.isFile() ||
+      ![stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].every((value) => typeof value === "bigint") ||
+      stats.dev === 0n ||
+      stats.ino === 0n ||
+      stats.mtimeNs <= 0n ||
+      stats.ctimeNs <= 0n
+    )
+      return null;
+    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
+  }
+
   const compressedHubAssets = new Map();
   const compressingHubAssets = new Map();
   const hubCompressionQueue = [];
@@ -2450,7 +2471,12 @@ export async function serve({
 
   async function cachedHubCompression(cacheKey, encoding, bytes, res) {
     if (shuttingDown || res.destroyed) throw Object.assign(new Error("Compression cancelled"), { status: 503 });
-    if (compressedHubAssets.has(cacheKey)) return compressedHubAssets.get(cacheKey);
+    if (compressedHubAssets.has(cacheKey)) {
+      const cached = compressedHubAssets.get(cacheKey);
+      compressedHubAssets.delete(cacheKey);
+      compressedHubAssets.set(cacheKey, cached);
+      return cached;
+    }
     let job = compressingHubAssets.get(cacheKey);
     if (job) {
       onHubCompressionJoin?.();
@@ -2474,7 +2500,7 @@ export async function serve({
           const result = await compressArtifact(encoding, bytes);
           if (result.length <= maxCompressedHubAssetBytes && !shuttingDown) {
             while (
-              compressedHubAssets.size >= 6 ||
+              compressedHubAssets.size >= 24 ||
               compressedHubAssetBytes + result.length > maxCompressedHubAssetBytes
             ) {
               const oldest = compressedHubAssets.keys().next().value;
@@ -2659,8 +2685,47 @@ export async function serve({
       const registration = hubProxy.generatedAssetRegistration(key, assetPath);
       let registeredEtag;
       if (registration) {
-        const bytes = await opened.handle.readFile();
-        const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+        let identity = null;
+        try {
+          identity = hubAssetIdentity(await opened.handle.stat({ bigint: true }));
+        } catch {
+          // Filesystems without usable high-resolution metadata always reverify the bytes.
+        }
+        const cacheKey = `${file}:${assetPath}`;
+        const cached = identity && verifiedHubAssets.get(cacheKey);
+        let bytes;
+        let hash;
+        if (cached && cached.identity === identity) {
+          ({ bytes, hash } = cached);
+          verifiedHubAssets.delete(cacheKey);
+          verifiedHubAssets.set(cacheKey, cached);
+        } else {
+          bytes = await opened.handle.readFile();
+          hash = crypto.createHash("sha256").update(bytes).digest("hex");
+          let after = null;
+          try {
+            after = hubAssetIdentity(await opened.handle.stat({ bigint: true }));
+          } catch {
+            // Do not cache when the post-read metadata is unavailable.
+          }
+          if (
+            identity &&
+            identity === after &&
+            assetPath === `hub-asset-${hash}.js` &&
+            bytes.length <= maxVerifiedHubAssetBytes
+          ) {
+            const previous = verifiedHubAssets.get(cacheKey);
+            if (previous) verifiedHubAssetBytes -= previous.bytes.length;
+            verifiedHubAssets.delete(cacheKey);
+            while (verifiedHubAssets.size >= 24 || verifiedHubAssetBytes + bytes.length > maxVerifiedHubAssetBytes) {
+              const oldest = verifiedHubAssets.keys().next().value;
+              verifiedHubAssetBytes -= verifiedHubAssets.get(oldest).bytes.length;
+              verifiedHubAssets.delete(oldest);
+            }
+            verifiedHubAssets.set(cacheKey, { identity, bytes, hash });
+            verifiedHubAssetBytes += bytes.length;
+          }
+        }
         if (
           assetPath === `hub-asset-${hash}.js` &&
           hubProxy.generatedAssetRegistration(key, assetPath) === registration
@@ -2671,6 +2736,19 @@ export async function serve({
           if (!req.get("range") || !choice.identityAllowed) {
             res.setHeader("cache-control", "public, max-age=0");
             if (!choice.encoding) return res.status(406).send("Not acceptable");
+            res.type("js");
+            res.setHeader("last-modified", stats.mtime.toUTCString());
+            if (app.enabled("etag")) res.setHeader("etag", registeredEtag);
+            const match = req.get("if-match");
+            const unmodified = Date.parse(req.get("if-unmodified-since") || "");
+            if (
+              match
+                ? !res.getHeader("etag") || match !== "*"
+                : Number.isFinite(unmodified) && Date.parse(stats.mtime.toUTCString()) > unmodified
+            ) {
+              throw Object.assign(new Error("Precondition Failed"), { status: 412 });
+            }
+            if (req.fresh) return res.status(304).end();
             let encoding = choice.encoding;
             let representation = bytes;
             if (encoding !== "identity") {
@@ -2684,21 +2762,7 @@ export async function serve({
             }
             if (hubProxy.generatedAssetRegistration(key, assetPath) !== registration)
               return res.status(404).send("Not found");
-            const etag = registeredEtag;
-            res.type("js");
-            res.setHeader("last-modified", stats.mtime.toUTCString());
-            if (app.enabled("etag")) res.setHeader("etag", etag);
-            const match = req.get("if-match");
-            const unmodified = Date.parse(req.get("if-unmodified-since") || "");
-            if (
-              match
-                ? !res.getHeader("etag") || match !== "*"
-                : Number.isFinite(unmodified) && Date.parse(stats.mtime.toUTCString()) > unmodified
-            ) {
-              throw Object.assign(new Error("Precondition Failed"), { status: 412 });
-            }
             if (encoding !== "identity") res.setHeader("content-encoding", encoding);
-            if (req.fresh) return res.status(304).end();
             res.setHeader("content-length", String(representation.length));
             return res.send(representation);
           }

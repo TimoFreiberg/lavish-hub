@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { on, once } from "node:events";
-import { link, mkdtemp, mkdir, open, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdtemp,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
@@ -2944,7 +2956,25 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
   await writeFile(artifact, "<!doctype html><title>Hub</title>");
   await writeFile(path.join(dir, name), content);
   await writeFile(path.join(dir, oldName), content);
-  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json") });
+  let reads = 0;
+  let compressions = 0;
+  const server = await serve({
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    artifactAssetOpen: async (file, flags) => {
+      const handle = await open(file, flags);
+      const read = handle.readFile.bind(handle);
+      handle.readFile = (...args) => {
+        reads++;
+        return read(...args);
+      };
+      return handle;
+    },
+    compressArtifact: async (_encoding, bytes) => {
+      compressions++;
+      return zlib.gzipSync(bytes);
+    },
+  });
   const wire = (url, headers = {}, method = "GET") =>
     new Promise((resolve, reject) => {
       const req = httpRequest(url, { method, headers }, (res) => {
@@ -2981,7 +3011,15 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
     const url = `${base}/artifact/${key}/${name}`;
     assert.equal((await wire(url, { "accept-encoding": "gzip" })).headers["content-encoding"], undefined);
     assert.equal((await register()).status, 200);
+    const first = await wire(url, { "accept-encoding": "identity" });
+    assert.equal(reads, 1);
+    const fresh = await wire(url, { "accept-encoding": "gzip", "if-none-match": first.headers.etag });
+    assert.equal(fresh.status, 304);
+    assert.equal(reads, 1);
+    assert.equal(compressions, 0);
     const gzip = await wire(url, { "accept-encoding": "gzip" });
+    assert.equal(reads, 1);
+    assert.equal(compressions, 1);
     assert.equal(gzip.status, 200);
     assert.equal(gzip.headers["content-encoding"], "gzip");
     assert.match(gzip.headers.vary, /Accept-Encoding/i);
@@ -3029,7 +3067,14 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
       (await wire(`${base}/artifact/${key}/${oldName}`, { "accept-encoding": "gzip" })).headers["content-encoding"],
       undefined,
     );
-    await writeFile(path.join(dir, name), "authored replacement");
+    const replacement = Buffer.alloc(content.length, 120);
+    await writeFile(path.join(dir, name), replacement);
+    const mutated = await wire(url, { "accept-encoding": "gzip" });
+    assert.equal(mutated.headers["content-encoding"], undefined);
+    assert.deepEqual(mutated.body, replacement);
+    assert.equal(reads, 2);
+    await writeFile(path.join(dir, "replacement.js"), "authored replacement");
+    await rename(path.join(dir, "replacement.js"), path.join(dir, name));
     const replaced = await wire(url, { "accept-encoding": "gzip" });
     assert.equal(replaced.headers["content-encoding"], undefined);
     assert.equal(replaced.body.toString(), "authored replacement");

@@ -323,7 +323,7 @@ export function createHubProxy({ store, events, jsonParser }) {
     unregister,
     generatedAssetRegistration: (key, name) => {
       const target = targets.get(key);
-      return target?.assets.includes(name) ? target : null;
+      return target && target.expires > Date.now() && target.assets.includes(name) ? target : null;
     },
     handle,
     clear: () => {
