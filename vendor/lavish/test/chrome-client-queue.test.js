@@ -132,6 +132,9 @@ async function createChromeHarness({
   const beginRequests = [];
   const artifactBeginRequests = [];
   const bindingValidationRequests = [];
+  // The signal each validation was sent with, so a test can check whether a retired load withdrew
+  // it. Kept beside the requests rather than on them: the recorded request shape is asserted on.
+  const bindingValidationSignals = [];
   const focusLog = [];
   const clipboardWrites = [];
   let activeElement = null;
@@ -441,6 +444,7 @@ async function createChromeHarness({
     }
     if (String(url).includes("/artifact-bindings/validate")) {
       bindingValidationRequests.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+      bindingValidationSignals.push(init?.signal || null);
       if (bindingValidationResponses.length > 0) return bindingValidationResponses.shift();
       return { ok: true, status: 204, json: async () => ({}) };
     }
@@ -761,6 +765,7 @@ async function createChromeHarness({
     beginRequests,
     artifactBeginRequests,
     bindingValidationRequests,
+    bindingValidationSignals,
     artifactLoadToken: frameLoadToken,
     beginLegacyQueue() {
       frame.dispatch("load");
@@ -12990,4 +12995,352 @@ test("protocol 1 retires an unbound handshake when a later frame document loads"
     chrome.modernPostedToFrame.some((message) => message.type === "lavish:activate"),
     false,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Navigation-triggered outer requests
+// ---------------------------------------------------------------------------
+// None of these requests is started by a click, so no user action ever ends one. A server that
+// accepts the request and then says nothing must not keep the connection (and its slot in the
+// browser's pool) for the life of the tab. Mirrors NAVIGATION_REQUEST_TIMEOUT_MS in the client.
+const NAVIGATION_REQUEST_BUDGET_MS = 7000;
+
+test("a chrome-auth request that never answers is withdrawn and retried on the next readiness", async () => {
+  const binding = {
+    page: "page-a.html",
+    proof: "proof-a",
+    route: "page-a.html",
+    destination: "/artifact/abc/page-a.html",
+    documentId: "document-a",
+    token: "harness-load-1",
+    revision: 1,
+    chromeAuth: "server-mac",
+  };
+  /** @type {any} */
+  let stalledSignal = null;
+  let stallAuth = true;
+  const chrome = await createChromeHarness({
+    artifactSrc: binding.destination,
+    sessionData: {
+      ...defaultSessionData,
+      pageProtocol: 1,
+      initialArtifactLoadToken: "harness-load-1",
+      initialArtifactRevision: 1,
+    },
+    modernBinding: binding,
+    fetchImpl: async (url, init = {}) => {
+      if (!String(url).includes("/artifact-bindings/chrome-auth"))
+        return { ok: true, status: 200, json: async () => ({}) };
+      if (!stallAuth) return { ok: true, status: 200, json: async () => ({ chrome_auth: "server-mac" }) };
+      stalledSignal = init.signal;
+      return new Promise(() => {});
+    },
+  });
+  await flushPromises();
+  const announceReady = () =>
+    chrome.dispatchWindowEvent("message", {
+      source: chrome.frame.contentWindow,
+      data: {
+        type: "lavish:ready",
+        page_protocol: 1,
+        document_id: "document-a",
+        document_nonce: "nonce-CHROME-AUTH-BUDGET",
+      },
+    });
+  const challenged = () =>
+    chrome.postedToFrame.some((message) => message.type === "lavish:challenge" && message.chrome_auth);
+
+  announceReady();
+  await flushPromises();
+  await flushPromises();
+  assert.ok(stalledSignal, "the chrome asks the server for its challenge material");
+  assert.equal(challenged(), false);
+
+  chrome.runTimers(NAVIGATION_REQUEST_BUDGET_MS);
+  await flushPromises();
+  await flushPromises();
+  assert.equal(stalledSignal.aborted, true, "the stalled request is withdrawn at its budget");
+  assert.equal(challenged(), false);
+
+  // Only successes are cached, so the document's next readiness announcement retries the fetch
+  // instead of leaving the document permanently unchallenged.
+  stallAuth = false;
+  announceReady();
+  await flushPromises();
+  await flushPromises();
+  assert.equal(challenged(), true, "the handshake recovers on its own");
+});
+
+test("a layout diagnostic report that never answers is withdrawn at its budget", async () => {
+  /** @type {any} */
+  let stalledSignal = null;
+  /** @type {{ url: string, body: any }[]} */
+  const posts = [];
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url, init = {}) => {
+      posts.push({ url: String(url), body: init.body ? JSON.parse(init.body) : null });
+      if (String(url).endsWith("/layout-diagnostics")) {
+        stalledSignal = init.signal;
+        return new Promise(() => {});
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  await flushPromises();
+  const pass = () =>
+    chrome.sendFrameMessage({
+      type: "lavish:layoutDiagnostics",
+      artifact_revision: 1,
+      complete: true,
+      findings: [],
+    });
+  const reports = () => posts.filter((post) => post.url === "/api/abc/layout-diagnostics");
+
+  pass();
+  await flushPromises();
+  assert.equal(reports().length, 1);
+
+  chrome.runTimers(NAVIGATION_REQUEST_BUDGET_MS);
+  await flushPromises();
+  await flushPromises();
+  assert.equal(stalledSignal.aborted, true);
+
+  // Withdrawal is per request, not a breaker: the next pass still reaches the server.
+  pass();
+  await flushPromises();
+  assert.equal(reports().length, 2);
+});
+
+test("the artifact failure report releases the response it never reads", async () => {
+  let cancelled = 0;
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/artifact-failures")) {
+        return {
+          ok: true,
+          status: 204,
+          body: {
+            async cancel() {
+              cancelled += 1;
+            },
+          },
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  await flushPromises();
+  chrome.sendFrameMessage({ type: "lavish:artifactAssetFailure", detail: "a local asset failed" });
+  await flushPromises();
+  await flushPromises();
+  assert.equal(cancelled, 1, "an unread body keeps its connection busy for as long as it lives");
+});
+
+test("the layout warning refresh is bounded and never clears the inbox", async () => {
+  /** @type {any} */
+  let stalledSignal = null;
+  const chrome = await createChromeHarness({
+    sessionData: { ...defaultSessionData, initialLayoutWarnings: [warningPayload()] },
+    fetchImpl: async (url, init = {}) => {
+      if (String(url) === "/api/abc/layout-warnings") {
+        stalledSignal = init.signal;
+        return new Promise(() => {});
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  await flushPromises();
+  assert.equal(chrome.element("warningsCount").textContent, "1");
+
+  chrome.eventSource().protocolListeners.get("open")();
+  await flushPromises();
+  assert.ok(stalledSignal, "a reconnected stream refreshes the inbox");
+
+  chrome.runTimers(NAVIGATION_REQUEST_BUDGET_MS);
+  await flushPromises();
+  await flushPromises();
+  assert.equal(stalledSignal.aborted, true);
+  assert.equal(chrome.element("warningsCount").textContent, "1", "a withdrawn refresh keeps what it had");
+});
+
+test("the layout warning refresh outlives a load change and still stops at its budget", async () => {
+  /** @type {any} */
+  let stalledSignal = null;
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/start.html",
+    sessionData: { ...defaultSessionData, initialLayoutWarnings: [warningPayload()] },
+    fetchImpl: async (url, init = {}) => {
+      if (String(url) === "/api/abc/layout-warnings") {
+        stalledSignal = init.signal;
+        return new Promise(() => {});
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  await flushPromises();
+  chrome.eventSource().protocolListeners.get("open")();
+  await flushPromises();
+  assert.ok(stalledSignal, "a reconnected stream refreshes the inbox");
+
+  // The inbox is session-wide, so the load a live reload starts does not retire this answer.
+  const loadsBefore = chrome.artifactBeginRequests.length;
+  chrome.eventSource().listeners.get("reload")();
+  await flushPromises();
+  await flushPromises();
+  assert.ok(chrome.artifactBeginRequests.length > loadsBefore, "the reload began a newer load");
+  assert.equal(stalledSignal.aborted, false, "a session-wide read is not withdrawn by a load change");
+
+  chrome.runTimers(NAVIGATION_REQUEST_BUDGET_MS);
+  await flushPromises();
+  await flushPromises();
+  assert.equal(stalledSignal.aborted, true, "the budget still ends it");
+});
+
+test("a caller-supplied signal is composed with the request deadline", async () => {
+  const source = await readFile(sourceUrl, "utf8");
+  const start = source.indexOf("async function navigationRequest(");
+  const end = source.indexOf("\n}\n", start);
+  assert.ok(start !== -1 && end !== -1, "navigationRequest is still a top-level function");
+
+  // The helper runs in its own context here: its callers never pass a signal today, so composition
+  // is only reachable by driving the helper itself, and silently dropping the caller's signal is
+  // the footgun this pins.
+  const timers = new Map();
+  let nextTimerId = 1;
+  let seenSignal = null;
+  const runtime = vm.runInNewContext(`${source.slice(start, end + 2)}\n({ navigationRequest });`, {
+    navigationRequests: new Set(),
+    NAVIGATION_REQUEST_TIMEOUT_MS: NAVIGATION_REQUEST_BUDGET_MS,
+    AbortController,
+    AbortSignal,
+    setTimeout(fn) {
+      const id = nextTimerId++;
+      timers.set(id, fn);
+      return id;
+    },
+    clearTimeout(id) {
+      timers.delete(id);
+    },
+    fetch: async (url, init) => {
+      seenSignal = init.signal;
+      return { url, ok: true, json: async () => ({}) };
+    },
+  });
+
+  const caller = new AbortController();
+  const response = await runtime.navigationRequest(
+    "/api/abc/layout-warnings",
+    { signal: caller.signal },
+    async (next) => next,
+  );
+  assert.equal(response.url, "/api/abc/layout-warnings");
+  assert.ok(seenSignal, "the request reached fetch");
+  assert.notEqual(seenSignal, caller.signal, "the caller's signal is composed, not replaced");
+  assert.equal(seenSignal.aborted, false);
+  caller.abort();
+  assert.equal(seenSignal.aborted, true, "the caller's own cancellation still ends the request");
+
+  // Without a caller signal the deadline is the only thing that ends it, and it still does.
+  const stalled = runtime.navigationRequest("/api/abc/layout-diagnostics", {}, () => new Promise(() => {}));
+  await flushPromises();
+  assert.equal(seenSignal.aborted, false);
+  for (const [id, fire] of [...timers]) {
+    timers.delete(id);
+    fire();
+  }
+  await assert.rejects(stalled, /timed out/);
+  assert.equal(seenSignal.aborted, true, "the deadline aborts the socket it gave up on");
+});
+
+test("a newer artifact load withdraws the outer requests it retired", async () => {
+  /** @type {any} */
+  let stalledSignal = null;
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/start.html",
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/layout-diagnostics")) {
+        stalledSignal = init.signal;
+        return new Promise(() => {});
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  await flushPromises();
+  chrome.sendFrameMessage({
+    type: "lavish:layoutDiagnostics",
+    artifact_load_token: "harness-load-1",
+    artifact_revision: 1,
+    complete: true,
+    findings: [],
+  });
+  await flushPromises();
+  assert.ok(stalledSignal, "the diagnostic pass reached the server");
+
+  // A live reload begins a newer artifact load, which retires the pass in flight.
+  chrome.eventSource().listeners.get("reload")();
+  await flushPromises();
+  await flushPromises();
+  assert.equal(stalledSignal.aborted, true, "a report for the retired load cannot be applied anywhere");
+});
+
+test("a binding validation the server already signed survives its retirement", async () => {
+  const binding = {
+    page: "page-a.html",
+    proof: "proof-a",
+    route: "page-a.html",
+    destination: "/artifact/abc/page-a.html",
+    documentId: "document-a",
+    token: "harness-load-1",
+    revision: 1,
+    chromeAuth: "server-mac",
+  };
+  /** @type {(response: any) => void} */
+  let releaseValidation = () => {};
+  const validation = new Promise((resolve) => {
+    releaseValidation = resolve;
+  });
+  const chrome = await createChromeHarness({
+    artifactSrc: binding.destination,
+    sessionData: {
+      ...defaultSessionData,
+      pageProtocol: 1,
+      initialArtifactLoadToken: "harness-load-1",
+      initialArtifactRevision: 1,
+    },
+    modernBinding: binding,
+    bindingValidationResponses: [validation],
+    fetchImpl: async (url) => {
+      if (String(url).includes("/artifact-bindings/chrome-auth"))
+        return { ok: true, status: 200, json: async () => ({ chrome_auth: "server-mac" }) };
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
+  });
+  await flushPromises();
+  chrome.dispatchWindowEvent("message", {
+    source: chrome.frame.contentWindow,
+    data: {
+      type: "lavish:ready",
+      page_protocol: 1,
+      document_id: "document-a",
+      document_nonce: "nonce-VALIDATION-SURVIVES",
+    },
+  });
+  await flushPromises();
+  await flushPromises();
+  assert.equal(chrome.bindingValidationRequests.length, 1);
+
+  chrome.eventSource().listeners.get("reload")();
+  await flushPromises();
+  const [validationSignal] = chrome.bindingValidationSignals;
+  assert.equal(
+    validationSignal?.aborted,
+    false,
+    "signing was authorized before the response was sent, so retirement does not void it",
+  );
+
+  releaseValidation({ ok: true, status: 200, json: async () => ({ receipt: "r".repeat(43) }) });
+  await flushPromises();
+  await flushPromises();
+  const history = JSON.parse(chrome.storage.get("lavish-axi:destination:abc:history") || "[]");
+  assert.equal(history.some((record) => record.document_id === "document-a"), true);
 });

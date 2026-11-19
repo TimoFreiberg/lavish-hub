@@ -341,6 +341,14 @@ const HEALTH_PROBE_TIMEOUT_MS = 4000;
 // the thing that hangs: a server that accepts the connection and then says nothing would otherwise
 // hold this request - and its connection slot - for as long as the tab lives.
 const ARTIFACT_AVAILABILITY_PROBE_TIMEOUT_MS = 6000;
+// The requests below are started by a navigation or a document message, never by a click, so no
+// user action ever ends one. Same-origin loopback routes answer in milliseconds, so this budget
+// exists only to stop a request that will never answer: a server that accepts the connection and
+// then says nothing would otherwise hold that request - and its slot in the browser's connection
+// pool - for as long as the tab lives.
+const NAVIGATION_REQUEST_TIMEOUT_MS = 7000;
+/** @type {Set<{ controller: AbortController }>} */
+const navigationRequests = new Set();
 // A send starts before the artifact snapshot arrives and ends only when /prompts acknowledges the
 // batch. Bound that whole wait so a missing SDK response or a browser/network stall can never look
 // like a dead button while the user's queue remains safely stored in this tab.
@@ -434,26 +442,32 @@ async function refreshHistoricalDestination(binding) {
   const documentId = binding.documentId;
   if (!destination) return;
   try {
-    const response = await fetch("/api/" + key + "/artifact-bindings/validate", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        page: binding.page,
-        page_proof: binding.proof,
-        served_route: binding.route,
-        artifact_load_token: binding.token,
-        artifact_revision: binding.revision,
-        document_id: binding.documentId,
-        destination,
-      }),
-    });
-    const result = await response.json();
+    const { response, data } = await navigationRequest(
+      "/api/" + key + "/artifact-bindings/validate",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          page: binding.page,
+          page_proof: binding.proof,
+          served_route: binding.route,
+          artifact_load_token: binding.token,
+          artifact_revision: binding.revision,
+          document_id: binding.documentId,
+          destination,
+        }),
+      },
+      readResponseJson,
+      // Signing was authorized before the response was sent, so a receipt that arrives after the
+      // load retires still belongs to that exact document and destination.
+      { abortOnNewLoad: false },
+    );
     if (!response.ok) return;
     // Responses for different URLs may arrive in any order. They populate exact keys,
     // and never restore an older destination into the current binding.
     // Signing was authorized by the server before the response was sent. Retirement
     // while that response is in flight does not invalidate historical evidence.
-    rememberHistoricalDestination(documentId, destination, result.receipt);
+    rememberHistoricalDestination(documentId, destination, data.receipt);
   } catch {
     /* Recovery without evidence fails closed. */
   }
@@ -1932,6 +1946,68 @@ async function fetchLoadJson(url, options, onHeaders = (_response) => {}) {
   }
 }
 
+// A navigation starts these requests and nothing in the chrome will ever end one on its behalf, so
+// the budget has to. The deadline covers the response body: headers arriving does not finish the
+// request, and a body that never completes holds the connection just as firmly as no answer at all.
+// Aborting the controller as well as rejecting keeps the browser off a socket this client has
+// already given up on.
+/**
+ * @param {string} url
+ * @param {RequestInit} options A `signal` here is composed with the deadline, never replaced.
+ * @param {(response: Response) => Promise<any>} settle Reads, or releases, the body inside the deadline.
+ * @param {{ abortOnNewLoad?: boolean }} [scope]
+ */
+async function navigationRequest(url, options, settle, { abortOnNewLoad = true } = {}) {
+  const entry = { controller: new AbortController() };
+  if (abortOnNewLoad) navigationRequests.add(entry);
+  // Composed rather than overwritten: a caller that passes its own signal would otherwise lose it
+  // here without a trace, and both the caller's cancellation and this deadline must end the request.
+  const signal = options.signal ? AbortSignal.any([options.signal, entry.controller.signal]) : entry.controller.signal;
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => settle(await fetch(url, { ...options, signal })))(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          entry.controller.abort();
+          reject(new Error("navigation request timed out"));
+        }, NAVIGATION_REQUEST_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    navigationRequests.delete(entry);
+  }
+}
+
+// The status is the whole answer for some of these, but an unread body keeps its connection busy
+// for as long as the response stream lives, so the body is released either way.
+/** @param {Response} response */
+async function releaseResponseBody(response) {
+  try {
+    await response.body?.cancel?.();
+  } catch {
+    // The connection is the browser's to reclaim from here.
+  }
+  return response;
+}
+
+/** @param {Response} response */
+async function readResponseJson(response) {
+  const data = typeof response.json === "function" ? await response.json().catch(() => ({})) : {};
+  return { response, data };
+}
+
+// A newer artifact load retires every answer these requests could still produce: each carries a
+// token, revision, or document identity that no longer describes what the user is looking at, so
+// applying one would be acting on a retired document. Their only remaining effect is holding a
+// connection, so they are withdrawn here instead of at each caller.
+function abortSupersededNavigationRequests() {
+  const pending = [...navigationRequests];
+  navigationRequests.clear();
+  for (const entry of pending) entry.controller.abort();
+}
+
 async function refreshChromeLoadHandoff(requestSequence) {
   const { response, data } = await fetchLoadJson("/api/" + key + "/chrome-loads/begin", {
     method: "POST",
@@ -1954,6 +2030,7 @@ async function refreshChromeLoadHandoff(requestSequence) {
   if (loadToken) {
     const changed = artifactLoadToken !== loadToken;
     artifactLoadToken = loadToken;
+    if (changed) abortSupersededNavigationRequests();
     if (changed && !modernArtifactProtocol) retireQueueReceipts(queueReceiptScope(null));
   }
   return true;
@@ -3653,28 +3730,32 @@ function initializeLayoutGate() {
 // ---------------------------------------------------------------------------
 
 async function submitLayoutDiagnostics(pass) {
-  const response = await fetch("/api/" + key + "/layout-diagnostics", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      complete: pass?.complete !== false,
-      target_presence_complete: pass?.targetPresenceComplete === true,
-      artifact_revision: Number(pass?.artifactRevision) || 0,
-      artifact_load_token: String(pass?.artifactLoadToken || artifactLoadToken),
-      artifact_pass_sequence: Number(pass?.artifactPassSequence) || 0,
-      ...(modernArtifactProtocol
-        ? {
-            document_sequence: Number(pass?.documentSequence) || 0,
-            page: typeof pass?.page === "string" ? pass.page : null,
-            page_proof: String(pass?.pageProof || ""),
-          }
-        : {}),
-      viewport_width: Number(pass?.viewportWidth) || 0,
-      findings: normalizeLayoutFindings(pass?.findings),
-    }),
-  });
+  const { response, data } = await navigationRequest(
+    "/api/" + key + "/layout-diagnostics",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        complete: pass?.complete !== false,
+        target_presence_complete: pass?.targetPresenceComplete === true,
+        artifact_revision: Number(pass?.artifactRevision) || 0,
+        artifact_load_token: String(pass?.artifactLoadToken || artifactLoadToken),
+        artifact_pass_sequence: Number(pass?.artifactPassSequence) || 0,
+        ...(modernArtifactProtocol
+          ? {
+              document_sequence: Number(pass?.documentSequence) || 0,
+              page: typeof pass?.page === "string" ? pass.page : null,
+              page_proof: String(pass?.pageProof || ""),
+            }
+          : {}),
+        viewport_width: Number(pass?.viewportWidth) || 0,
+        findings: normalizeLayoutFindings(pass?.findings),
+      }),
+    },
+    readResponseJson,
+  );
   if (!response.ok) throw new Error("failed to submit layout diagnostics");
-  return response.json();
+  return data;
 }
 
 async function reportArtifactFailures(failures, context = {}) {
@@ -3682,22 +3763,27 @@ async function reportArtifactFailures(failures, context = {}) {
   const revision = Number(context.revision ?? artifactLoadRevision) || 0;
   const binding = context.binding || null;
   if (loadToken !== artifactLoadToken || revision !== artifactLoadRevision) return;
-  await fetch("/api/" + key + "/artifact-failures", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      failures,
-      artifact_load_token: loadToken,
-      artifact_revision: revision,
-      ...(modernArtifactProtocol
-        ? {
-            page: binding?.page ?? null,
-            page_proof: binding?.proof || "",
-            document_sequence: Number(binding?.documentSequence) || 0,
-          }
-        : {}),
-    }),
-  });
+  await navigationRequest(
+    "/api/" + key + "/artifact-failures",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        failures,
+        artifact_load_token: loadToken,
+        artifact_revision: revision,
+        ...(modernArtifactProtocol
+          ? {
+              page: binding?.page ?? null,
+              page_proof: binding?.proof || "",
+              document_sequence: Number(binding?.documentSequence) || 0,
+            }
+          : {}),
+      }),
+    },
+    // Nothing reads this answer; the release is what keeps the connection from staying busy.
+    releaseResponseBody,
+  );
 }
 
 // The narrow fatal probe. A healthy artifact boots its SDK and starts talking within seconds; if
@@ -4400,9 +4486,12 @@ async function queueSelectedWarningFixes() {
 
 async function refreshLayoutWarnings() {
   try {
-    const response = await fetch("/api/" + key + "/layout-warnings");
+    const { response, data } = await navigationRequest("/api/" + key + "/layout-warnings", {}, readResponseJson, {
+      // The inbox is session-wide, not load-scoped, and this only runs when the live stream
+      // reconnects: a load change does not make the answer wrong, so only the budget ends it.
+      abortOnNewLoad: false,
+    });
     if (!response.ok) return;
-    const data = await response.json();
     if (Array.isArray(data.warnings)) setLayoutWarnings(data.warnings);
   } catch {
     // Keep whatever the chrome already has; never clear on a failed refresh.
@@ -4893,6 +4982,7 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   artifactLoadRevision = revision;
   const previousQueueToken = artifactLoadToken;
   artifactLoadToken = token;
+  if (previousQueueToken !== token) abortSupersededNavigationRequests();
   if (!modernArtifactProtocol && previousQueueToken !== token) retireQueueReceipts(queueReceiptScope(null));
   artifactSpokeToken = "";
   abortArtifactAvailabilityProbe();
@@ -6175,19 +6265,20 @@ function requestChromeAuth(nonce) {
   const cached = chromeAuthRequests.get(cacheKey);
   if (cached) return cached;
   if (chromeAuthRequests.size >= 32) chromeAuthRequests.clear();
-  const request = fetch("/api/" + key + "/artifact-bindings/chrome-auth", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      artifact_load_token: String(artifactLoadToken || ""),
-      artifact_revision: Number(artifactLoadRevision),
-      document_nonce: nonce,
-    }),
-  })
-    .then(async (response) => {
-      const body = response.ok ? await response.json().catch(() => ({})) : {};
-      return typeof body?.chrome_auth === "string" ? body.chrome_auth : "";
-    })
+  const request = navigationRequest(
+    "/api/" + key + "/artifact-bindings/chrome-auth",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        artifact_load_token: String(artifactLoadToken || ""),
+        artifact_revision: Number(artifactLoadRevision),
+        document_nonce: nonce,
+      }),
+    },
+    readResponseJson,
+  )
+    .then(({ response, data }) => (response.ok && typeof data?.chrome_auth === "string" ? data.chrome_auth : ""))
     .catch(() => "")
     .then((auth) => {
       if (!auth && chromeAuthRequests.get(cacheKey) === request) chromeAuthRequests.delete(cacheKey);
@@ -6241,29 +6332,36 @@ function challengeArtifactDocument(expectedDocumentId = "", chromeAuth = "") {
       return;
     let validation;
     try {
-      validation = await fetch("/api/" + key + "/artifact-bindings/validate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          page: message.page,
-          page_proof: message.page_proof,
-          served_route: String(message.served_route || ""),
-          artifact_load_token: String(message.artifact_load_token || ""),
-          artifact_revision: Number(message.artifact_revision),
-          document_id: message.document_id,
-          destination: destinationPayload({
+      validation = await navigationRequest(
+        "/api/" + key + "/artifact-bindings/validate",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
             page: message.page,
-            proof: message.page_proof,
-            route: String(message.served_route || ""),
-            destination: normalizeArtifactDestination(message.destination, String(message.served_route || "")),
+            page_proof: message.page_proof,
+            served_route: String(message.served_route || ""),
+            artifact_load_token: String(message.artifact_load_token || ""),
+            artifact_revision: Number(message.artifact_revision),
+            document_id: message.document_id,
+            destination: destinationPayload({
+              page: message.page,
+              proof: message.page_proof,
+              route: String(message.served_route || ""),
+              destination: normalizeArtifactDestination(message.destination, String(message.served_route || "")),
+            }),
           }),
-        }),
-      });
+        },
+        readResponseJson,
+        // A retired challenge cannot activate a document, but the receipt a signed response carries
+        // is still exact evidence for that document and destination.
+        { abortOnNewLoad: false },
+      );
     } catch {
       return;
     }
-    if (!validation.ok) {
-      const rejected = await validation.json().catch(() => ({}));
+    if (!validation.response.ok) {
+      const rejected = validation.data;
       if (
         rejected?.status === "stale" &&
         !answered &&
@@ -6283,7 +6381,7 @@ function challengeArtifactDocument(expectedDocumentId = "", chromeAuth = "") {
       }
       return;
     }
-    const validated = typeof validation.json === "function" ? await validation.json().catch(() => ({})) : {};
+    const validated = validation.data;
     // A retired challenge cannot activate a document, but a successfully signed
     // response still belongs to its exact historical document/destination.
     rememberHistoricalDestination(
