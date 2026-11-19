@@ -95,6 +95,39 @@ test('new selection wins while remote navigation waits for annotation mode', { t
   assert.equal(await page.locator('#view h1').textContent(), 'Tasks');
 });
 
+test('older remote navigation cannot resume polling during a newer cross-page selection', { timeout: 30000 }, async t => {
+  let selected = 'commits', statusCalls = 0, navigations = 0, releaseNavigation;
+  const navigationGate = new Promise(resolve => { releaseNavigation = resolve; });
+  const transport = await createHubTransport({
+    status: () => { statusCalls++; return { available: true, selected }; },
+    documents: () => ({ documents: [
+      { id: 'first', title: 'First', source: 'first.html', sibling: 'first.html' },
+      { id: 'second', title: 'Second', source: 'second.html', sibling: 'second.html' },
+    ] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: async () => { navigations++; await navigationGate; selected = 'commits'; throw new Error('navigation failed'); },
+    readDocument: () => ({ text: '', hash: 'one', version: 'one' }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { releaseNavigation(); await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.lavish={setAnnotationMode(value){if(value)return new Promise(resolve=>{globalThis.releaseMode=resolve})}};globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  await page.getByText('No commits in this range.').waitFor();
+  selected = 'first';
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.waitForFunction(() => typeof globalThis.releaseMode === 'function');
+  await page.getByRole('button', { name: 'Second', exact: true }).click();
+  await assertEventually(() => assert.equal(navigations, 1));
+  const before = statusCalls;
+  await page.evaluate(() => globalThis.releaseMode());
+  await page.waitForTimeout(2200);
+  assert.equal(statusCalls, before, 'polling remains paused while the newer navigation is pending');
+  releaseNavigation();
+  await assertEventually(() => assert.ok(statusCalls > before));
+  assert.equal(await page.locator('#connection').textContent(), 'navigation failed');
+});
+
 test('document failure does not also display a renderer failure', { timeout: 30000 }, async t => {
   let releaseRead;
   const gate = new Promise(resolve => { releaseRead = resolve; });

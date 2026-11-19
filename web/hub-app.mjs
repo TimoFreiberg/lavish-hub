@@ -73,8 +73,8 @@ function renderNav() {
   }
 }
 let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
-let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false, attemptedSelection = '', navigationCancelled = false, navigationUncertain = false, leaveTimer;
-function pauseRefresh() { refreshPaused = true; clearTimeout(refreshTimer); }
+let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false, refreshPauseRevision = 0, attemptedSelection = '', navigationCancelled = false, navigationUncertain = false, leaveTimer;
+function pauseRefresh() { refreshPaused = true; clearTimeout(refreshTimer); return ++refreshPauseRevision; }
 function resumeRefresh() {
   clearTimeout(leaveTimer); leavingConfirmed = false;
   if (!refreshPaused) return;
@@ -152,6 +152,7 @@ const snapshotContent = value => value && JSON.stringify({ base: value.base, hea
 async function refresh(force = false) {
   if (refreshPaused || busy) { if (force) refreshRequested = true; return; } busy = true;
   const navigationAtStart = navigationRevision, navigationPendingAtStart = pendingOwnerNavigation > 0;
+  let pauseRevision;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
     if (refreshPaused) return;
@@ -168,9 +169,9 @@ async function refresh(force = false) {
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
     if (!navigationError && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
-      pauseRefresh();
+      pauseRevision = pauseRefresh();
       if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true);
-      if (navigationAtStart !== navigationRevision || navigationPending || pendingOwnerNavigation || hasUnsavedDrafts()) { selected = navigationAtStart === navigationRevision ? oldSelected : selected; resumeRefresh(); return; }
+      if (navigationAtStart !== navigationRevision || navigationPending || pendingOwnerNavigation || hasUnsavedDrafts()) { selected = navigationAtStart === navigationRevision ? oldSelected : selected; if (pauseRevision === refreshPauseRevision) resumeRefresh(); return; }
       selected = oldSelected;
       leavePage(new URL(selectedDoc.sibling, location.href).href, selectedDoc.id); return;
     }
@@ -227,7 +228,7 @@ async function refresh(force = false) {
         if (replacement) { replacement.focus(); if (selection) replacement.setSelectionRange(...selection); }
       }
     }
-  } catch (error) { status(error.message); if (refreshPaused && !navigationPending && !leavingConfirmed) resumeRefresh(); }
+  } catch (error) { status(error.message); if (refreshPaused && pauseRevision === refreshPauseRevision && !navigationPending && !leavingConfirmed) resumeRefresh(); }
   finally {
     busy = false; snapshotLoading = false; clearTimeout(refreshTimer);
     if (refreshPaused) return;
