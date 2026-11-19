@@ -3754,6 +3754,18 @@ function abortArtifactAvailabilityProbe() {
   controller?.abort();
 }
 
+// Only the status is read here, and an unread body keeps its connection busy for as long as the
+// response stream lives. Failing to release it is a cleanup problem, so it gets its own scope: a
+// cancel that throws or rejects must not reach the caller's failure report, which the status alone
+// already proved.
+function releaseArtifactProbeBody(response) {
+  try {
+    Promise.resolve(response.body?.cancel?.()).catch(() => {});
+  } catch {
+    // The connection is the browser's to reclaim from here.
+  }
+}
+
 async function probeArtifactAvailability(context) {
   const { loadToken, revision, definitiveBinding, pendingBinding, destination } = context;
   if (
@@ -3773,10 +3785,7 @@ async function probeArtifactAvailability(context) {
       cache: "no-store",
       signal: controller.signal,
     });
-    // Only the status is read here, and an unread body keeps its connection busy for as long as the
-    // response stream lives.
-    const cancellation = response.body?.cancel?.();
-    cancellation?.catch?.(() => {});
+    releaseArtifactProbeBody(response);
     if (
       loadToken !== artifactLoadToken ||
       revision !== artifactLoadRevision ||

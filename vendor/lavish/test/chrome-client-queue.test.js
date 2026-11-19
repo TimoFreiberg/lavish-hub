@@ -9073,6 +9073,64 @@ test("an availability probe cancels the body it never reads", async () => {
   assert.equal(cancelled, 1, "the probe reads only the status, so the document body is cancelled");
 });
 
+test("a body that throws on cancel still leaves a non-OK answer reported", async () => {
+  const posts = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url, init = {}) => {
+      posts.push({ url: String(url), body: init.body ? JSON.parse(init.body) : null });
+      if (String(url).includes("probe=1"))
+        return {
+          ok: false,
+          status: 404,
+          body: {
+            cancel() {
+              throw new Error("the stream is already closed");
+            },
+          },
+        };
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+
+  chrome.element("artifact").dispatch("load");
+  chrome.runTimers(8000);
+  await flushPromises();
+  await flushPromises();
+
+  // Releasing a body the probe never reads is housekeeping. Letting it throw would turn the one
+  // answer that proves the document is unservable into silence.
+  const failure = posts.find((post) => post.url === "/api/abc/artifact-failures");
+  assert.ok(failure, "a body that refuses to cancel does not make a 404 into uncertainty");
+  assert.match(failure.body.failures[0].detail, /404/);
+});
+
+test("a body that rejects on cancel still leaves a non-OK answer reported", async () => {
+  const posts = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url, init = {}) => {
+      posts.push({ url: String(url), body: init.body ? JSON.parse(init.body) : null });
+      if (String(url).includes("probe=1"))
+        return {
+          ok: false,
+          status: 500,
+          body: { cancel: () => Promise.reject(new Error("the stream is already closed")) },
+        };
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+
+  chrome.element("artifact").dispatch("load");
+  chrome.runTimers(8000);
+  await flushPromises();
+  await flushPromises();
+
+  const failure = posts.find((post) => post.url === "/api/abc/artifact-failures");
+  assert.ok(failure, "a rejected cancel is not an answer about the artifact");
+  assert.match(failure.body.failures[0].detail, /500/);
+});
+
 test("an availability probe is withdrawn when a newer load supersedes it", async () => {
   const probes = [];
   const posts = [];
