@@ -822,6 +822,30 @@ test("chrome reconnects its live WebSocket and syncs missed chat", async () => {
   assert.match(chrome.element("chatLog").lastAppendedChild.innerHTML, /Missed while disconnected/);
 });
 
+test("chrome replaces a live WebSocket that has gone silent without closing", async () => {
+  const chrome = await createChromeHarness({ fakeClock: true });
+  // A forwarder that never relays the server's close leaves the socket open and mute.
+  chrome.advanceClock(76_000);
+  chrome.runTimers(5000);
+  chrome.runTimers(500);
+  assert.equal(chrome.webSocketCount(), 2);
+  // The abandoned socket's late close must not schedule a second replacement.
+  chrome.webSocketAt(0).protocolListeners.get("close")();
+  chrome.runTimers();
+  assert.equal(chrome.webSocketCount(), 2);
+});
+
+test("chrome keeps a live WebSocket that keeps receiving heartbeats", async () => {
+  const chrome = await createChromeHarness({ fakeClock: true });
+  const socket = chrome.webSocket();
+  for (let elapsed = 0; elapsed < 300_000; elapsed += 30_000) {
+    chrome.advanceClock(30_000);
+    socket.protocolListeners.get("message")({ data: JSON.stringify({ type: "heartbeat" }) });
+    chrome.runTimers(5000);
+  }
+  assert.equal(chrome.webSocketCount(), 1);
+});
+
 test("a reconnect's stale initial sync cannot erase a newer reply", async () => {
   const sent = { role: "user", kind: "message", text: "Sent note" };
   const reply = { role: "agent", text: "New reply", html: "<p>New reply</p>" };

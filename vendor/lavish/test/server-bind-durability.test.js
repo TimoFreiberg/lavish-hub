@@ -380,6 +380,42 @@ test("a live-event client that answers its pings is left connected", async () =>
   });
 });
 
+test("a live-event client receives heartbeat messages it can see without ping frames", { timeout: 5000 }, async () => {
+  await withTempDir(async (dir) => {
+    const artifact = await writeArtifact(dir);
+    const server = await serve({
+      port: 0,
+      stateFile: path.join(dir, "state.json"),
+      version: "9.9.9-test",
+      env: {},
+      hosts: ["127.0.0.1"],
+      log: () => {},
+      idleTimeoutMs: null,
+      liveEventHeartbeatMs: 40,
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const opened = await fetch(`${base}/api/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ file: artifact }),
+      }).then((response) => response.json());
+      const socket = new WebSocket(`${base.replace(/^http/, "ws")}/events/${opened.key}`, { origin: base });
+      // Browser pages never see ping frames, so only a data message lets the page notice a
+      // connection that a forwarder silently dropped.
+      const heartbeat = new Promise((resolve) => {
+        socket.on("message", (data) => {
+          if (JSON.parse(String(data)).type === "heartbeat") resolve();
+        });
+      });
+      await heartbeat;
+      socket.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 test("a module-load failure after the stdio writer is installed is timestamped", async () => {
   await withTempDir(async (dir) => {
     const thrower = path.join(dir, "throw.mjs");

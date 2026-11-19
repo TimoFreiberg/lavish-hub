@@ -84,9 +84,10 @@ serves a hub whose renderers cannot load. Keep its `Vary: Origin` and the
 `lavish_kit_hub_assets` field its `/health` reports. The release number stays
 upstream's, so only that field lets a lavish-kit process recognize a server built
 without the grant, including one still running from an earlier build of the same
-release, and refuse it. The 330-second keep-alive timeout on every HTTP listener
-is another local difference: upstream keeps Node's 5-second default, which stalls the
-hub behind a port forward that does not relay the server's close.
+release, and refuse it. Closing the connection after every HTTP response, and the
+heartbeat message on live-event WebSockets with the chrome's silence check, are
+further local differences: upstream reuses connections, which stalls the hub behind
+a port forward that does not relay the server's close.
 Retain or adapt any differences still needed here. Only retire code after establishing an
 upstream equivalent and passing the applicable regression tests and full repository
 QA, including visual inspection, on the proposed replacement. Review and document

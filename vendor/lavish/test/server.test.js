@@ -1411,8 +1411,8 @@ test("an explicit bind host overrides automatic Tailscale detection", async () =
   }
 });
 
-test("idle keep-alive connections outlive the browser's reuse window", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "lavish-keepalive-"));
+test("every HTTP response closes its connection so the browser never reuses one", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-connection-close-"));
   const server = await serve({
     port: 0,
     stateFile: path.join(dir, "state.json"),
@@ -1421,11 +1421,10 @@ test("idle keep-alive connections outlive the browser's reuse window", async () 
     idleTimeoutMs: null,
   });
   try {
-    const health = await rawRequest(server.port, "/health");
-    assert.equal(health.status, 200);
-    const advertised = Number(/timeout=(\d+)/.exec(health.headers["keep-alive"] ?? "")?.[1]);
-    // Chrome reuses an idle socket for up to 300 s.
-    assert.ok(advertised > 300, `keep-alive timeout ${advertised}s must exceed 300s`);
+    for (const pathname of ["/health", "/chrome-client.js", "/no-such-route"]) {
+      const response = await rawRequest(server.port, pathname, { headers: { connection: "keep-alive" } });
+      assert.equal(response.headers.connection, "close", pathname);
+    }
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });

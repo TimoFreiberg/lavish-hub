@@ -139,7 +139,6 @@ const designAssetUrls = {
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
 const WHITEBOARD_CHANNEL_TOKEN_TTL_MS = 5 * 60_000;
 const NETWORK_RECONCILE_CACHE_MS = 1_000;
-const KEEP_ALIVE_TIMEOUT_MS = 330_000;
 // Every concrete address gets this retry budget, not just the Tailscale one: an interface that is
 // still coming up fails the same way whichever host names it, and the single-pinned-host case has
 // no second listener to fall back on.
@@ -3408,6 +3407,9 @@ export async function serve({
           awaitingPong = true;
           try {
             webSocket.ping();
+            // A page never sees ping frames. This message is what lets the chrome notice
+            // a connection that a forwarder dropped without telling it.
+            webSocket.send(JSON.stringify({ type: "heartbeat" }));
           } catch {
             webSocket.terminate();
           }
@@ -3785,12 +3787,16 @@ export async function serve({
 
 function listenHttp(app, port, host, onRuntimeError) {
   return new Promise((resolve, reject) => {
-    const server = createServer(app);
-    // The browser must be the side that closes an idle keep-alive socket. Some port
-    // forwarders never relay the server's close, so a browser reusing that socket
-    // sends into a dead tunnel and waits forever. Chrome reuses idle sockets for up
-    // to 300 s, so the server holds them a little longer.
-    server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+    // Every response closes its connection, so the browser never reuses one. Some port
+    // forwarders never relay a close from this side: after an idle timeout or a server
+    // restart the browser still holds the connection, and a request it sends there is
+    // never answered. Those requests have no deadline and fill the browser's
+    // per-origin connection limit until every load stalls. The browser's own close
+    // does reach the forwarder, and a new loopback connection costs little.
+    const server = createServer((req, res) => {
+      res.shouldKeepAlive = false;
+      app(req, res);
+    });
     let listening = false;
     const onError = (error) => {
       if (!listening) {

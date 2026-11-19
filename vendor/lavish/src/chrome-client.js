@@ -246,6 +246,9 @@ let outdatedReloadInFlight = false;
 // tells the user nothing until they reload into a connection error. Past this many consecutive
 // failures the banner says so, with the health-probed reload the banner already offers.
 const LIVE_EVENT_UNREACHABLE_FAILURES = 5;
+// The server sends a heartbeat message every 30 s; missing two means the socket is dead.
+const LIVE_EVENT_SILENCE_LIMIT_MS = 75_000;
+const LIVE_EVENT_SILENCE_CHECK_MS = 5_000;
 let liveEventFailures = 0;
 // Only a banner this path raised may be hidden by this path: a `chrome-outdated` event means the
 // server was replaced, which a reconnect does not disprove.
@@ -6898,7 +6901,32 @@ let eventReconnectDelayMs = 500;
 function connectLiveEvents() {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(protocol + "//" + location.host + "/events/" + encodeURIComponent(key));
+  // A forwarder that never relays the server's close leaves this socket open after a
+  // restart, silently receiving nothing. The server sends a heartbeat message, so
+  // silence past a few intervals means the connection is gone and must be replaced.
+  let lastMessageAt = Date.now();
+  let retired = false;
+  let silenceWatch = setTimeout(watchSilence, LIVE_EVENT_SILENCE_CHECK_MS);
+  function watchSilence() {
+    if (Date.now() - lastMessageAt > LIVE_EVENT_SILENCE_LIMIT_MS) retire();
+    else silenceWatch = setTimeout(watchSilence, LIVE_EVENT_SILENCE_CHECK_MS);
+  }
+  function retire() {
+    if (retired) return;
+    retired = true;
+    clearTimeout(silenceWatch);
+    try {
+      socket.close();
+    } catch {
+      // A socket that cannot even close is still replaced below.
+    }
+    liveEventFailures += 1;
+    noteLiveEventsUnreachable();
+    setTimeout(connectLiveEvents, eventReconnectDelayMs);
+    eventReconnectDelayMs = Math.min(eventReconnectDelayMs * 2, 5000);
+  }
   socket.addEventListener("open", () => {
+    lastMessageAt = Date.now();
     eventReconnectDelayMs = 500;
     liveEventFailures = 0;
     unreachableDismissed = false;
@@ -6909,6 +6937,7 @@ function connectLiveEvents() {
     refreshLayoutWarnings();
   });
   socket.addEventListener("message", (message) => {
+    lastMessageAt = Date.now();
     try {
       const { type, data } = JSON.parse(message.data);
       return events.get(type)?.(data || {});
@@ -6916,12 +6945,7 @@ function connectLiveEvents() {
       // Ignore malformed frames; a later event or reconnect can recover the stream.
     }
   });
-  socket.addEventListener("close", () => {
-    liveEventFailures += 1;
-    noteLiveEventsUnreachable();
-    setTimeout(connectLiveEvents, eventReconnectDelayMs);
-    eventReconnectDelayMs = Math.min(eventReconnectDelayMs * 2, 5000);
-  });
+  socket.addEventListener("close", retire);
 }
 
 // Raise the existing banner once the stream has been down long enough to mean it, and never
