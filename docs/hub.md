@@ -136,8 +136,8 @@ it under Artifacts when available). Publishing selects the document. Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. An open hub checks for selection, repository, and source changes about
 every two seconds after each completed check; slow or unavailable actions can delay
-updates. A read-only check that never answers is abandoned after ten seconds, so a
-stalled owner cannot hold the poll open and the next check follows its own schedule.
+updates. A read-only check that has not answered after ten seconds is abandoned, so a
+stalled owner cannot hold the poll open; the next check follows after the usual delay.
 Polling stops while the tab is hidden and catches up as soon as it is
 visible again, on the hub and on published pages, so a selection the owner made
 meanwhile opens then. A page that loads in a background tab keeps its first poll so

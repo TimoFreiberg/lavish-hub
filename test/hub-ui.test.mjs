@@ -55,12 +55,15 @@ test('published Markdown previews relative assets and retains conflicting edits'
   await page.getByRole('heading', { name: 'Review', level: 1 }).last().waitFor();
 });
 
-test('hub bounds a hung diff file read and falls back to the patch', { timeout: 40000 }, async t => {
+test('hub bounds a hung diff file read, keeps the patch, and retries the expansion', { timeout: 40000 }, async t => {
+  let reads = 0;
+  const files = { oldFile: { name: 'hung.txt', contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name: 'hung.txt', contents: 'one\ntwo\nthree\nfour\nnew\n' } };
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
     snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff --git a/hung.txt b/hung.txt\n--- a/hung.txt\n+++ b/hung.txt\n@@ -5 +5 @@\n-old\n+new\n', commits: [] }),
-    // The owner never answers this read, so only the client-side bound can end it.
-    diffFiles: () => new Promise(() => {}),
+    // The owner never answers the first read, so only the client-side bound can
+    // end it. The second attempt answers, so a retry can still succeed.
+    diffFiles: () => { reads += 1; return reads === 1 ? new Promise(() => {}) : files; },
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
@@ -75,6 +78,14 @@ test('hub bounds a hung diff file read and falls back to the patch', { timeout: 
   await page.locator('.file-link[data-path="hung.txt"]').waitFor();
   await page.locator('[data-expand-button]').first().click();
   await page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.').waitFor({ timeout: 20000 });
+  assert.equal(reads, 1);
+  // The abandoned expansion left the patch it could not complete untouched.
+  const lineTypes = await page.locator('[data-gutter] [data-line-type]').evaluateAll(nodes => nodes.map(node => node.dataset.lineType));
+  assert.deepEqual(lineTypes, ['change-deletion', 'change-addition']);
+  await page.locator('[data-expand-button]:visible').first().click();
+  await page.getByText('four', { exact: true }).first().waitFor();
+  assert.equal(reads, 2);
+  assert.equal(await page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.').count(), 0);
 });
 
 test('hub keeps description drafts across navigation and stale saves', { timeout: 30000 }, async t => {

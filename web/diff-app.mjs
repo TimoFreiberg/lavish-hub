@@ -112,7 +112,9 @@ function options() { return {
     try {
       if (!loadDiffFiles || !data?.operationId || index < 0) throw new Error('unavailable');
       const files = await loadDiffFiles(data.operationId, index);
-      if (state.data === data) state.files[index].fullFiles = files;
+      // A later attempt can succeed after an earlier one failed, so the failure
+      // notice must go away with the failure it described.
+      if (state.data === data) { state.files[index].fullFiles = files; expansionNotice.textContent = ''; }
       return files;
     } catch (error) {
       if (state.data === data) expansionNotice.textContent = 'Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.';
