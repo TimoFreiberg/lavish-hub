@@ -30,9 +30,11 @@ async function sidebarPage(browser, { hidden = false } = {}) {
   await page.goto('http://lavish.test/published.html');
   const script = await shippedSidebarScript();
   const sidebar = '<div id="lavish-hub-sidebar" data-lavish-action><nav aria-label="Hub navigation"><a href="hub.html" data-hub-id="doc">Document</a></nav><div role="status" aria-live="polite"></div></div>';
-  // The stub counts status polls, parks one while __hold is set, and the page
-  // itself never leaves the document view.
-  const stub = `<script>globalThis.__hidden = ${hidden}; Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => globalThis.__hidden ? 'hidden' : 'visible' }); globalThis.confirmDraftNavigation = async () => true; globalThis.__status = 0; globalThis.__hold = false; globalThis.__parked = []; globalThis.__release = () => { globalThis.__hold = false; for (const resolve of globalThis.__parked.splice(0)) resolve(); }; globalThis.fetch = async (_url, options) => { const { operation } = JSON.parse(options.body); if (operation === 'status') { globalThis.__status++; if (globalThis.__hold) await new Promise(resolve => globalThis.__parked.push(resolve)); } const result = operation === 'status' ? { available: true, selected: 'doc' } : operation === 'documents' ? { documents: [{ id: 'doc', title: 'Document', source: 'doc.md' }] } : {}; return { ok: true, json: async () => ({ result }) }; };</script>`;
+  // The stub counts status polls, parks one while __hold is set, answers with an
+  // error while __fail is set, and never answers while __hang is set. The page
+  // itself never leaves the document view. Like a real fetch, a parked or hung
+  // request rejects when its signal aborts.
+  const stub = `<script>globalThis.__hidden = ${hidden}; Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => globalThis.__hidden ? 'hidden' : 'visible' }); globalThis.confirmDraftNavigation = async () => true; globalThis.__status = 0; globalThis.__hold = false; globalThis.__hang = false; globalThis.__fail = false; globalThis.__failNavigate = false; globalThis.__aborted = 0; globalThis.__parked = []; globalThis.__release = () => { globalThis.__hold = false; for (const resolve of globalThis.__parked.splice(0)) resolve(); }; const aborted = signal => new Promise((resolve, reject) => { const rejectAborted = () => { globalThis.__aborted++; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }; if (signal?.aborted) return rejectAborted(); signal?.addEventListener('abort', rejectAborted, { once: true }); }); globalThis.fetch = async (_url, options) => { const { operation } = JSON.parse(options.body); if (operation === 'navigate' && globalThis.__failNavigate) return { ok: false, status: 500, json: async () => ({}) }; if (operation === 'status') { globalThis.__status++; if (globalThis.__fail) { globalThis.__fail = false; return { ok: false, status: 500, json: async () => ({}) }; } if (globalThis.__hold) await new Promise(resolve => globalThis.__parked.push(resolve)); if (globalThis.__hang) await aborted(options.signal); } const result = operation === 'status' ? { available: true, selected: 'doc' } : operation === 'documents' ? { documents: [{ id: 'doc', title: 'Document', source: 'doc.md' }] } : {}; return { ok: true, json: async () => ({ result }) }; };</script>`;
   await page.setContent(`${sidebar}${stub}<script>${script}</script>`);
   return page;
 }
@@ -69,6 +71,49 @@ test('published page sidebar catches up at once when a poll is in flight', { tim
   await page.evaluate(() => globalThis.__release());
   // The catch-up follows the parked poll straight away instead of the next tick.
   await eventually(async () => assert.ok(await statusCalls(page) >= 3), 900);
+});
+
+test('published page sidebar recovers when a status poll never answers', { timeout: 30000 }, async t => {
+  const browser = await launch();
+  t.after(async () => { await browser.close(); });
+  const page = await sidebarPage(browser);
+  await eventually(async () => assert.ok(await statusCalls(page) >= 1), 5000);
+  await page.evaluate(() => { globalThis.__hang = true; });
+  await eventually(async () => assert.ok(await statusCalls(page) >= 2), 4000);
+  const hung = await statusCalls(page);
+  // The bounded read gives up on its own, so the sidebar asks again instead of
+  // staying busy for as long as the request goes unanswered.
+  await eventually(async () => assert.ok(await statusCalls(page) >= hung + 1), 20000);
+  assert.ok(await page.evaluate(() => globalThis.__aborted) >= 1);
+  assert.equal(await page.getByRole('link', { name: 'Document' }).getAttribute('aria-current'), 'page');
+});
+
+test('published page sidebar abandons an obsolete read poll when navigation pauses it', { timeout: 30000 }, async t => {
+  const browser = await launch();
+  t.after(async () => { await browser.close(); });
+  const page = await sidebarPage(browser);
+  await eventually(async () => assert.ok(await statusCalls(page) >= 1), 5000);
+  // A failed navigation action keeps the page in place while still pausing it.
+  await page.evaluate(() => { globalThis.__hang = true; globalThis.__failNavigate = true; });
+  await eventually(async () => assert.ok(await statusCalls(page) >= 2), 4000);
+  const hung = await statusCalls(page);
+  assert.equal(await page.evaluate(() => globalThis.__aborted), 0);
+  await page.getByRole('link', { name: 'Document' }).click();
+  // The pause cancels the read whose answer the page would discard anyway.
+  await eventually(async () => assert.equal(await page.evaluate(() => globalThis.__aborted), 1), 4000);
+  await page.getByText('Could not open Document. Select it again to retry.').waitFor();
+  // The cancelled read released the poll, so the resumed sidebar asks again.
+  await eventually(async () => assert.ok(await statusCalls(page) > hung), 6000);
+});
+
+test('published page sidebar keeps polling after a failed read', { timeout: 30000 }, async t => {
+  const browser = await launch();
+  t.after(async () => { await browser.close(); });
+  const page = await sidebarPage(browser);
+  await eventually(async () => assert.ok(await statusCalls(page) >= 1), 5000);
+  const before = await page.evaluate(() => { globalThis.__fail = true; return globalThis.__status; });
+  await eventually(async () => assert.ok(await statusCalls(page) >= before + 2), 6000);
+  assert.equal(await page.getByRole('link', { name: 'Document' }).getAttribute('aria-current'), 'page');
 });
 
 test('published page sidebar warms once while the tab starts hidden', { timeout: 30000 }, async t => {

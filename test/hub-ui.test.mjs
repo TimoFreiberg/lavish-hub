@@ -55,6 +55,28 @@ test('published Markdown previews relative assets and retains conflicting edits'
   await page.getByRole('heading', { name: 'Review', level: 1 }).last().waitFor();
 });
 
+test('hub bounds a hung diff file read and falls back to the patch', { timeout: 40000 }, async t => {
+  const transport = await createHubTransport({
+    status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff --git a/hung.txt b/hung.txt\n--- a/hung.txt\n+++ b/hung.txt\n@@ -5 +5 @@\n-old\n+new\n', commits: [] }),
+    // The owner never answers this read, so only the client-side bound can end it.
+    diffFiles: () => new Promise(() => {}),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const dist = await ensureHubAssets();
+  const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_KIT_LANGUAGES: '[]' } })).outputFiles[0].text;
+  const markdown = await markdownBundle();
+  const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
+  const page = await browser.newPage(); page.setDefaultTimeout(5000);
+  await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  await page.locator('.file-link[data-path="hung.txt"]').waitFor();
+  await page.locator('[data-expand-button]').first().click();
+  await page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.').waitFor({ timeout: 20000 });
+});
+
 test('hub keeps description drafts across navigation and stale saves', { timeout: 30000 }, async t => {
   const commit = { changeId: 'a'.repeat(32), commitId: 'b'.repeat(40), description: 'Original\n', immutable: false, divergent: false };
   let taskText = '- [ ] Task\n\n> - [ ] Quoted\n';
