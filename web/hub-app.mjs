@@ -38,7 +38,7 @@ async function requireBundle(name, globalName, view, generation) {
 }
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
-let refreshTimer, rendered = false, refreshRequested = false, snapshotRequest = 0, snapshotApplied = 0;
+let refreshTimer, rendered = false, refreshRequested = false, refreshForced = false, snapshotRequest = 0, snapshotApplied = 0;
 let modeView;
 const startsInExplore = id => id === 'commits' || id === 'changes';
 // Only the repository views render a snapshot, and a snapshot costs several jj
@@ -81,21 +81,26 @@ let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused 
 // A hidden tab keeps no poll timer. This is scheduler state only: page-leaving
 // pauses (refreshPaused), drafts, and annotation mode keep their own guards.
 let tabHidden = document.visibilityState === 'hidden';
+// One follow-up is owed to whichever scheduler event asked for it. A forced one
+// asks for an uncached snapshot, so it is tracked apart from a plain poll and
+// survives until a refresh actually reads it.
+function queueRefresh(force) { refreshRequested = true; refreshForced ||= force; }
+function takeRefresh() { const force = refreshForced; refreshRequested = false; refreshForced = false; return force; }
 function pauseRefresh() { refreshPaused = true; clearTimeout(refreshTimer); return ++refreshPauseRevision; }
 function resumeRefresh() {
   clearTimeout(leaveTimer); leavingConfirmed = false;
   if (!refreshPaused) return;
   if (startsInExplore(selected)) globalThis.lavish?.setAnnotationMode?.(false);
   refreshPaused = false;
-  if (busy) refreshRequested = true;
-  else refreshTimer = setTimeout(refresh, 0);
+  if (busy) queueRefresh(false);
+  else refreshTimer = setTimeout(() => refresh(takeRefresh()), 0);
 }
 // Entering a repository view must not wait for the next poll to ask for its
 // snapshot. A refresh already in flight renders the new selection itself, so ask
-// for a follow-up instead of polling twice at once.
+// for a follow-up instead of polling twice at once. A paused or hidden page keeps
+// that follow-up for its own catch-up rather than dropping the request.
 function requestRefresh() {
-  if (busy) { refreshRequested = true; return; }
-  if (refreshPaused || tabHidden) return;
+  if (busy || refreshPaused || tabHidden) { queueRefresh(false); return; }
   refresh();
 }
 document.addEventListener('visibilitychange', () => {
@@ -106,10 +111,8 @@ document.addEventListener('visibilitychange', () => {
   // Page-leaving pauses resume their own work, and a running refresh reschedules
   // from its own finally block. Only the scheduler catches up here.
   if (hidden || refreshPaused) return;
-  if (busy) { refreshRequested = true; return; }
-  const deferred = refreshRequested;
-  refreshRequested = false;
-  refresh(deferred);
+  if (busy) { queueRefresh(false); return; }
+  refresh(takeRefresh());
 });
 function leavePage(url, id) {
   pauseRefresh(); leavingConfirmed = true; attemptedSelection = id;
@@ -151,7 +154,9 @@ async function select(id) {
     }
     if (!leavesPage) {
       selected = id; renderNav();
-      if (needsSnapshot(id) && !snapshot) snapshotLoading = true;
+      // A stale snapshot keeps rendering, but the view marks it as refreshing until
+      // the request below replaces it, and a missing one shows its loading state.
+      if (needsSnapshot(id)) snapshotLoading = true;
       const synchronization = synchronizeNavigation(id).then(() => {
         if (revision === navigationRevision) { attemptedSelection = ''; navigationCancelled = false; navigationUncertain = false; navigationError = ''; status(connectionStatus); }
       }, error => {
@@ -183,14 +188,16 @@ async function select(id) {
 }
 const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
 async function refresh(force = false) {
-  if (refreshPaused || tabHidden || busy) { if (force) refreshRequested = true; return; } busy = true;
+  // The first refresh runs even in a hidden tab so a page opened in the background
+  // has content when it is shown; later polls wait for visibility instead.
+  if (refreshPaused || busy || (tabHidden && rendered)) { if (force) queueRefresh(true); return; } busy = true;
   const navigationAtStart = navigationRevision, navigationPendingAtStart = pendingOwnerNavigation > 0;
   let pauseRevision;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
     if (refreshPaused) return;
     let oldSelected = selected, oldDocuments = JSON.stringify(documents);
-    const oldSnapshot = snapshotContent(snapshot);
+    const oldSnapshot = snapshotContent(snapshot), snapshotWasLoading = snapshotLoading;
     documents = list.documents;
     const remoteDoc = documents.find(item => item.id === state.selected);
     const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
@@ -252,7 +259,10 @@ async function refresh(force = false) {
       } catch (error) { status(error.message); }
     }
     if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents)) renderNav();
-    if ((initialRender && ['commits', 'changes'].includes(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (['commits', 'changes'].includes(selected) && oldSnapshot !== snapshotContent(snapshot))) {
+    // The loading flag is part of the comparison: a snapshot request that fails
+    // before any snapshot exists must still replace the loading notice, and one
+    // that settles back onto unchanged content must drop the refreshing notice.
+    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (needsSnapshot(selected) && (oldSnapshot !== snapshotContent(snapshot) || snapshotWasLoading !== snapshotLoading))) {
       const active = document.activeElement;
       const label = active?.closest('#view') && active.getAttribute('aria-label');
       const selection = label && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
@@ -272,7 +282,7 @@ async function refresh(force = false) {
     busy = false; snapshotLoading = false; clearTimeout(refreshTimer);
     // A hidden tab drops its timer; becoming visible catches up immediately.
     if (refreshPaused || tabHidden) return;
-    if (refreshRequested) { refreshRequested = false; refresh(true); }
+    if (refreshRequested) refresh(takeRefresh());
     else refreshTimer = setTimeout(refresh, 2000);
   }
 }
@@ -294,6 +304,9 @@ async function renderView(focusChangeId) {
   if (id === 'commits' || id === 'changes') {
     if (!snapshot) { view.append(notice(snapshotLoading ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
+    // Re-entering a repository view keeps the previous snapshot on screen while the
+    // fresh one arrives, so say which of the two the owner is looking at.
+    if (snapshotLoading) view.append(el('p', 'Refreshing repository snapshot…', { class: 'muted' }));
     if (id === 'changes') {
       if (!(await requireBundle('diff', 'mountLavishDiff', view, generation))) return;
       view.append(diffContainer);

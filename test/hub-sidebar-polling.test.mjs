@@ -23,27 +23,61 @@ async function eventually(check, timeout) {
   }
 }
 
-test('published page sidebar stops polling while the tab is hidden', { timeout: 30000 }, async t => {
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
-  t.after(async () => { await browser.close(); });
+async function sidebarPage(browser, { hidden = false } = {}) {
   const page = await browser.newPage();
   // A real origin keeps the sidebar's relative hrefs resolvable.
   await page.route('http://lavish.test/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>blank</title>' }));
   await page.goto('http://lavish.test/published.html');
   const script = await shippedSidebarScript();
   const sidebar = '<div id="lavish-hub-sidebar" data-lavish-action><nav aria-label="Hub navigation"><a href="hub.html" data-hub-id="doc">Document</a></nav><div role="status" aria-live="polite"></div></div>';
-  // The stub counts status polls; the page itself never leaves the document view.
-  const stub = `<script>globalThis.__hidden = false; Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => globalThis.__hidden ? 'hidden' : 'visible' }); globalThis.confirmDraftNavigation = async () => true; globalThis.__status = 0; globalThis.fetch = async (_url, options) => { const { operation } = JSON.parse(options.body); if (operation === 'status') globalThis.__status++; const result = operation === 'status' ? { available: true, selected: 'doc' } : operation === 'documents' ? { documents: [{ id: 'doc', title: 'Document', source: 'doc.md' }] } : {}; return { ok: true, json: async () => ({ result }) }; };</script>`;
+  // The stub counts status polls, parks one while __hold is set, and the page
+  // itself never leaves the document view.
+  const stub = `<script>globalThis.__hidden = ${hidden}; Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => globalThis.__hidden ? 'hidden' : 'visible' }); globalThis.confirmDraftNavigation = async () => true; globalThis.__status = 0; globalThis.__hold = false; globalThis.__parked = []; globalThis.__release = () => { globalThis.__hold = false; for (const resolve of globalThis.__parked.splice(0)) resolve(); }; globalThis.fetch = async (_url, options) => { const { operation } = JSON.parse(options.body); if (operation === 'status') { globalThis.__status++; if (globalThis.__hold) await new Promise(resolve => globalThis.__parked.push(resolve)); } const result = operation === 'status' ? { available: true, selected: 'doc' } : operation === 'documents' ? { documents: [{ id: 'doc', title: 'Document', source: 'doc.md' }] } : {}; return { ok: true, json: async () => ({ result }) }; };</script>`;
   await page.setContent(`${sidebar}${stub}<script>${script}</script>`);
-  const statusCalls = () => page.evaluate(() => globalThis.__status);
-  const setHidden = hidden => page.evaluate(value => { globalThis.__hidden = value; document.dispatchEvent(new Event('visibilitychange')); }, hidden);
-  await eventually(async () => assert.ok(await statusCalls() >= 1), 5000);
-  await setHidden(true);
-  const hidden = await statusCalls();
+  return page;
+}
+
+const statusCalls = page => page.evaluate(() => globalThis.__status);
+const setHidden = (page, hidden) => page.evaluate(value => { globalThis.__hidden = value; document.dispatchEvent(new Event('visibilitychange')); }, hidden);
+const launch = () => chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+
+test('published page sidebar stops polling while the tab is hidden', { timeout: 30000 }, async t => {
+  const browser = await launch();
+  t.after(async () => { await browser.close(); });
+  const page = await sidebarPage(browser);
+  await eventually(async () => assert.ok(await statusCalls(page) >= 1), 5000);
+  await setHidden(page, true);
+  const hidden = await statusCalls(page);
   await page.waitForTimeout(2500);
-  assert.equal(await statusCalls(), hidden);
-  await setHidden(false);
+  assert.equal(await statusCalls(page), hidden);
+  await setHidden(page, false);
   // Catch-up runs at once instead of on the next two-second tick.
-  await eventually(async () => assert.ok(await statusCalls() > hidden), 1200);
+  await eventually(async () => assert.ok(await statusCalls(page) > hidden), 1200);
+  assert.equal(await page.getByRole('link', { name: 'Document' }).getAttribute('aria-current'), 'page');
+});
+
+test('published page sidebar catches up at once when a poll is in flight', { timeout: 30000 }, async t => {
+  const browser = await launch();
+  t.after(async () => { await browser.close(); });
+  const page = await sidebarPage(browser);
+  await eventually(async () => assert.ok(await statusCalls(page) >= 1), 5000);
+  await page.evaluate(() => { globalThis.__hold = true; });
+  // The next poll parks in flight, so visibility returns mid-poll.
+  await eventually(async () => assert.ok(await statusCalls(page) >= 2), 4000);
+  await setHidden(page, true);
+  await setHidden(page, false);
+  await page.evaluate(() => globalThis.__release());
+  // The catch-up follows the parked poll straight away instead of the next tick.
+  await eventually(async () => assert.ok(await statusCalls(page) >= 3), 900);
+});
+
+test('published page sidebar warms once while the tab starts hidden', { timeout: 30000 }, async t => {
+  const browser = await launch();
+  t.after(async () => { await browser.close(); });
+  const page = await sidebarPage(browser, { hidden: true });
+  // The first poll runs anyway, so the sidebar is populated when the page is shown.
+  await eventually(async () => assert.ok(await statusCalls(page) >= 1), 5000);
+  await page.waitForTimeout(2500);
+  assert.equal(await statusCalls(page), 1);
   assert.equal(await page.getByRole('link', { name: 'Document' }).getAttribute('aria-current'), 'page');
 });
