@@ -49,14 +49,13 @@ proxy and owner; compare timestamps to relate requests. `arrive` marks receipt,
 `forward` means the proxy has authenticated the owner and is about to send the
 request, and `upstream-response`, `finish`, and `close` mark later stages. The
 proxy handles preflight itself, so an OPTIONS request need not reach the owner.
-A `close` without `finish` indicates an interrupted response. Both proxy and
-owner lines cover resource GETs as well as actions, so a slow asset read shows
+A `close` without `finish` indicates an interrupted response. Proxy and owner
+lines both cover resource GETs as well as actions, so a slow asset read shows
 the same stages on each side. A request the proxy gives up on logs
 `upstream-failure`, or `upstream-timeout` when a resource read never reached
-response headers after a verified identity; only that case answers 504, so an
+response headers after a verified identity. Only that case answers 504, so an
 unanswered identity challenge reads as `upstream-failure` with 502. Server-side
-lines
-also cover all HTTP methods and use fixed route classes: `proxy-action`,
+lines also cover all HTTP methods and use fixed route classes: `proxy-action`,
 `proxy-resource`, `artifact-page`, `artifact-asset`, and `other`. These classes
 are based on the request shape, not the eventual handler; an unusual artifact
 filename may be classified differently from how it is served. Server `arrive`
