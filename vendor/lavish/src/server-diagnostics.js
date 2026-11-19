@@ -16,8 +16,7 @@ export function markServerDiagnostic(res, event) {
   if (events.has(event)) traces.get(res)?.(event);
 }
 
-export function createServerDiagnostics({ enabled, write = writeDiagnostic }) {
-  if (!enabled) return (_req, _res, next) => next();
+export function createServerDiagnostics({ write = writeDiagnostic } = {}) {
   let nextId = 0;
   return (req, res, next) => {
     const id = ++nextId;

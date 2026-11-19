@@ -785,9 +785,8 @@ export async function serve({
   // who front the server with their own authentication. When a reverse proxy sits
   // in front, X-Forwarded-Host is validated too (see isAllowedRequestHost).
   //
-  // This guard is installed as the first middleware so every route - including the
-  // attachment upload/fetch/remove endpoints below - is behind the Host allowlist.
-  // The mutating-route origin/Referer guard is installed immediately after.
+  // Every route, including attachment endpoints, is behind the Host allowlist.
+  // Only opt-in request diagnostics precede it; the origin/Referer guard follows it.
   const allowedHostnames = buildAllowedHostnames({
     host: requestedListenHosts[0],
     hosts: [...requestedListenHosts, ...listenHosts],
@@ -833,7 +832,7 @@ export async function serve({
     return true;
   }
 
-  if (env.LAVISH_HUB_DIAGNOSTICS === "1") app.use(createServerDiagnostics({ enabled: true }));
+  if (env.LAVISH_HUB_DIAGNOSTICS === "1") app.use(createServerDiagnostics());
 
   if (!allowAnyHostname) {
     app.use((req, res, next) => {

@@ -41,8 +41,10 @@ other output may contain private data. The flag must be present when both
 processes start, so an existing demo needs a restart. Unset it on the next
 start to disable logging.
 
-The JSON lines contain UTC time, elapsed milliseconds, method, status where
-available, and a process-local request number. Numbers are not shared across
+Each diagnostic record is JSON containing UTC time, elapsed milliseconds, method,
+status where available, and a process-local request number. In the detached
+server's `server.log`, a separate UTC timestamp and space precede the JSON; strip
+that prefix before parsing the record as JSON. Numbers are not shared across
 proxy and owner; compare timestamps to relate requests. `arrive` marks receipt,
 `forward` means the proxy has authenticated the owner and is about to send the
 request, and `upstream-response`, `finish`, and `close` mark later stages. The
@@ -57,9 +59,10 @@ for proxy requests and path-addressed artifacts when those requests reach that
 step. A missing end can indicate a pending lookup, a lookup failure, a closed
 connection, or a dropped log line. Other work, including compression, has no
 individual phase markers. A request with arrival but no later line may still be
-pending, but cannot locate the delay precisely. Logs are best effort and lines
-may be dropped under stderr backpressure. IDs are local to each process and
-trace type; they cannot correlate server, proxy, and owner records directly.
+pending, but cannot locate the delay precisely. Logs are best effort. The server
+request logger drops lines under stderr backpressure. The existing proxy and
+owner console writers do not apply that dropping policy. IDs are local to each
+process and trace type; they cannot correlate server, proxy, and owner records directly.
 The diagnostic lines do not include URLs, paths, keys, queries, hosts, headers,
 request bodies, errors, or credentials. Other server output can contain private
 data, so inspect and filter before sharing.

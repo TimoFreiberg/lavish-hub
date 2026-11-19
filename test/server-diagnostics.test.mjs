@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import express from 'express';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { serve } from '../vendor/lavish/src/server.js';
@@ -13,7 +13,7 @@ test('server diagnostics are opt-in, bounded in content, and trace held and abor
   let closed;
   const closeObserved = new Promise(resolve => { closed = resolve; });
   const app = express();
-  app.use(createServerDiagnostics({ enabled: true, write: line => { lines.push(line); if (JSON.parse(line).event === 'close') closed(); } }));
+  app.use(createServerDiagnostics({ write: line => { lines.push(line); if (JSON.parse(line).event === 'close') closed(); } }));
   let entered, release;
   const started = new Promise(resolve => { entered = resolve; });
   const held = new Promise(resolve => { release = resolve; });
@@ -42,11 +42,10 @@ test('server diagnostics are opt-in, bounded in content, and trace held and abor
   assert.ok(!lines.join('\n').includes('secret'));
 });
 
-test('disabled diagnostics do not write and successful requests finish', async t => {
+test('successful requests finish', async t => {
   const lines = [];
   const app = express();
-  app.use(createServerDiagnostics({ enabled: false, write: line => lines.push(line) }));
-  app.use(createServerDiagnostics({ enabled: true, write: line => lines.push(line) }));
+  app.use(createServerDiagnostics({ write: line => lines.push(line) }));
   app.use((_req, res) => res.end('ok'));
   const server = http.createServer(app);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -56,6 +55,50 @@ test('disabled diagnostics do not write and successful requests finish', async t
   assert.deepEqual(records.map(record => record.event), ['arrive', 'finish', 'close']);
   assert.ok(records.every(record => record.route === 'artifact-asset'));
   assert.equal(records[1].status, 200);
+});
+
+test('real server traces proxy and artifact lookups only when enabled', async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'lavish-diagnostics-'));
+  const file = path.join(dir, 'review.html');
+  await writeFile(file, '<!doctype html><title>Review</title>');
+  const lines = [];
+  const original = process.stderr.write;
+  process.stderr.write = function (chunk) { lines.push(String(chunk)); return true; };
+  t.after(() => { process.stderr.write = original; });
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const records = () => lines.flatMap(line => { try { const record = JSON.parse(line); return record.side === 'server' ? [record] : []; } catch { return []; } });
+  for (const enabled of [true, false]) {
+    const server = await serve({ port: 0, stateFile: path.join(dir, enabled ? 'on.json' : 'off.json'), env: { LAVISH_HUB_DIAGNOSTICS: enabled ? '1' : '0' }, allowedHosts: [], host: '127.0.0.1', detectTailscale: null });
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const post = (route, body) => fetch(`${base}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const opened = await post('/api/sessions', { file });
+      assert.equal(opened.status, 200);
+      const { key } = await opened.json();
+      const registration = await post('/api/hub-proxy/register', { key, port: 1234, capability: 'a'.repeat(64), resourceKey: 'b'.repeat(64), identityKey: 'c'.repeat(64) });
+      assert.equal(registration.status, 200);
+      lines.length = 0;
+      const proxy = await fetch(`${base}/hub-proxy/${key}/action`, { method: 'OPTIONS', headers: { origin: 'null', 'access-control-request-method': 'POST' } });
+      assert.equal(proxy.status, 204);
+      const artifact = await fetch(`${base}/artifact/${key}/review.html?private-query`);
+      assert.equal(artifact.status, 200);
+      await artifact.text();
+      const missing = await fetch(`${base}/artifact/0000000000000000/missing.html`);
+      assert.equal(missing.status, 404);
+      await missing.text();
+      const logged = records();
+      if (!enabled) { assert.deepEqual(logged, []); continue; }
+      const arrivals = logged.filter(record => record.event === 'arrive');
+      assert.deepEqual(arrivals.map(record => record.route), ['proxy-action', 'artifact-page', 'artifact-page']);
+      assert.equal(new Set(arrivals.map(record => record.id)).size, 3);
+      for (const [index, arrival] of arrivals.entries()) {
+        const trace = logged.filter(record => record.id === arrival.id);
+        assert.deepEqual(trace.map(record => record.event), ['arrive', 'lookup-start', 'lookup-end', 'finish', 'close']);
+        assert.equal(trace[3].status, [204, 200, 404][index]);
+      }
+      assert.ok(!lines.join('\n').includes('private-query'));
+    } finally { await server.close(); }
+  }
 });
 
 test('real server logs arrival before rejecting a host', async t => {
