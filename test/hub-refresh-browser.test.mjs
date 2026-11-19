@@ -1029,8 +1029,9 @@ test('a save keeps its forced snapshot across a parked poll and a failed snapsho
   hold = false;
   for (const release of parked.splice(0)) release();
   // That request fails; the next one is asked for after it settles and brings the save.
-  await assertEventually(async () => assert.equal(await display.textContent(), 'B'), 6000);
-  assert.deepEqual(forces, [false, true, false]);
+  await assertEventually(() => assert.deepEqual(forces, [false, true, false]), 6000);
+  await assertEventually(async () => assert.ok((await page.locator('.card h2').first().textContent()).includes(ids[1].slice(0, 12))), 6000);
+  assert.equal(await display.textContent(), 'B');
   // A draft typed after the save neither loses its text nor forgets the saved target.
   await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
   await editor.fill('C');
