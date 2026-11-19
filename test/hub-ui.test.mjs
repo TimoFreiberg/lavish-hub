@@ -88,6 +88,47 @@ test('hub bounds a hung diff file read, keeps the patch, and retries the expansi
   assert.equal(await page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.').count(), 0);
 });
 
+test('hub keeps an unavailable file expansion notice until that file expands', { timeout: 40000 }, async t => {
+  const reads = [];
+  let bUnavailable = true;
+  const fileFor = name => ({ oldFile: { name, contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name, contents: 'one\ntwo\nthree\nfour\nnew\n' } });
+  const patch = ['a.txt', 'b.txt'].map(name => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -5 +5 @@\n-old\n+new\n`).join('');
+  const transport = await createHubTransport({
+    status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '2 files changed', patch, commits: [] }),
+    diffFiles: ({ fileIndex }) => { reads.push(fileIndex); if (fileIndex === 1 && bUnavailable) throw new Error('unavailable'); return fileFor(fileIndex === 0 ? 'a.txt' : 'b.txt'); },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const dist = await ensureHubAssets();
+  const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_KIT_LANGUAGES: '[]' } })).outputFiles[0].text;
+  const markdown = await markdownBundle();
+  const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
+  const page = await browser.newPage(); page.setDefaultTimeout(5000);
+  await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  const unavailable = page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.');
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  await page.locator('.file-link[data-path="a.txt"]').waitFor();
+  await page.locator('.file-link[data-path="b.txt"]').click();
+  await page.locator('[data-expand-button]:visible').last().click();
+  await unavailable.waitFor();
+  assert.deepEqual(reads, [1]);
+  assert.equal(await page.getByText('four', { exact: true }).count(), 0);
+  // a.txt expands, and that success says nothing about b.txt's unavailable read.
+  await page.locator('.file-link[data-path="a.txt"]').click();
+  await page.locator('[data-expand-button]').first().click();
+  await page.getByText('four', { exact: true }).first().waitFor();
+  assert.deepEqual(reads, [1, 0]);
+  assert.equal(await unavailable.count(), 1);
+  // Only b.txt's own retry clears the notice it raised.
+  bUnavailable = false;
+  await page.locator('.file-link[data-path="b.txt"]').click();
+  await page.locator('[data-expand-button]:visible').last().click();
+  await unavailable.waitFor({ state: 'detached' });
+  assert.deepEqual(reads, [1, 0, 1]);
+});
+
 test('hub keeps description drafts across navigation and stale saves', { timeout: 30000 }, async t => {
   const commit = { changeId: 'a'.repeat(32), commitId: 'b'.repeat(40), description: 'Original\n', immutable: false, divergent: false };
   let taskText = '- [ ] Task\n\n> - [ ] Quoted\n';

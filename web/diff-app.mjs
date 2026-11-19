@@ -14,6 +14,10 @@ if (!embedded) window.addEventListener('beforeunload', event => { if (state.draf
 if (!window.lavishPreview) try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-kit-viewed') || '[]')); } catch { state.storageFailed = true; }
 const header = el('header', null, 'page-header'), toolbar = el('div', null, 'toolbar'), sidebar = el('nav', null, 'sidebar'), viewport = el('div', null, 'viewport'), notice = el('div', null, 'notice'), expansionNotice = el('div', null, 'notice');
 expansionNotice.setAttribute('role', 'status');
+// Expansion failures belong to the file that produced them: each displayed
+// snapshot indexes its own files, so a new snapshot starts with no failures.
+let expansionFailures = new Set();
+function updateExpansionNotice() { expansionNotice.textContent = expansionFailures.size ? 'Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.' : ''; }
 // Lavish sees the shadow host, not the clicked diff line. Let CodeView handle
 // this surface even when Lavish's annotation mode is active.
 viewport.setAttribute('data-lavish-action', '');
@@ -108,16 +112,19 @@ try { worker = makeWorker(); worker.initialize().catch(fallback); } catch { fall
 function options() { return {
   theme: 'orangebox', themeType: 'dark', preferredHighlighter: 'shiki', diffStyle: state.split ? 'split' : 'unified', enableLineSelection: true,
   loadDiffFiles: async parsed => {
-    const data = state.data, index = state.files.findIndex(file => file.parsed === parsed);
+    const data = state.data, index = state.files.findIndex(item => item.parsed === parsed), file = state.files[index];
+    // A result that settles after the display moved on describes a file nobody is
+    // looking at any more, so it must neither be shown nor clear a current notice.
+    const current = () => state.data === data && index >= 0 && state.files[index] === file;
     try {
-      if (!loadDiffFiles || !data?.operationId || index < 0) throw new Error('unavailable');
+      if (!loadDiffFiles || !data?.operationId || !file) throw new Error('unavailable');
       const files = await loadDiffFiles(data.operationId, index);
-      // A later attempt can succeed after an earlier one failed, so the failure
-      // notice must go away with the failure it described.
-      if (state.data === data) { state.files[index].fullFiles = files; expansionNotice.textContent = ''; }
+      // Clear only this file's failure: another file expanding successfully says
+      // nothing about a file whose read is still unavailable.
+      if (current()) { file.fullFiles = files; expansionFailures.delete(index); updateExpansionNotice(); }
       return files;
     } catch (error) {
-      if (state.data === data) expansionNotice.textContent = 'Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.';
+      if (current()) { expansionFailures.add(index); updateExpansionNotice(); }
       throw error;
     }
   },
@@ -325,7 +332,8 @@ function updateNotice() {
   notice.append('Diff changed. '); const refresh = button('Refresh', () => embedded ? applyEmbedded(state.pending) : loadData(state.pending)); refresh.disabled = Boolean(state.draft?.textarea.value); notice.append(refresh); if (refresh.disabled) notice.append(' Finish or cancel your comment first.');
 }
 function render(data) {
-  expansionNotice.textContent = '';
+  expansionFailures = new Set();
+  updateExpansionNotice();
   closeDraft();
   reportPlacements([]); state.digest = null; slots = [];
   const top = view.getScrollTop(), current = currentAt(top), previous = state.files[current]?.newPath, itemTop = view.getTopForItem(String(current)), offset = itemTop == null ? 0 : itemTop - top; state.data = data; state.version = (state.version || 0) + 1; state.files = modelPatch(data.patch); state.current = Math.max(0, state.files.findIndex(f => f.newPath === previous));
