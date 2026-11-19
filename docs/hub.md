@@ -142,7 +142,10 @@ meanwhile opens then. A page that loads in a background tab keeps its first poll
 so it has content when it is shown, then waits. Only Commits and Changes request
 the repository snapshot; the other views poll selection and document lists alone,
 and entering either repository view asks for a snapshot at once. A failed snapshot
-shows as unavailable, and entering the view again or the next poll retries it.
+shows as unavailable, and entering the view again or the next poll retries it. A
+status or document check that fails before the snapshot is requested shows the same
+notice, and the next check asks for the snapshot. A tab that goes hidden while that
+check runs starts no snapshot; it asks when shown again.
 Re-entering a repository view keeps the previous snapshot on screen, marked as
 refreshing, until the new one arrives. Clean Markdown documents update
 automatically, while unsaved drafts remain in the page. Published HTML is generated
@@ -187,7 +190,7 @@ and diff statistics to one jj operation. Viewers share an owner-side snapshot fo
 up to two seconds; refreshes of the repository views then pick up external changes.
 Automatic catch-ups reuse that shared snapshot. The Refresh button forces a new
 one there, sharing a refresh already in progress and keeping that force until it
-runs. Description
+issues a snapshot request, whether or not that request succeeds. Description
 saves invalidate the cached snapshot and check the full change
 and commit IDs and expected description, reject missing, divergent, immutable,
 or stale changes, and recheck the result. Hub saves are serialized, but other

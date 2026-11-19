@@ -1061,3 +1061,102 @@ test('a document view reports an unavailable workspace without a snapshot', { ti
   assert.equal(snapshots, 0);
   assert.equal(await page.locator('#connection').textContent(), 'Workspace unavailable');
 });
+
+test('a save keeps its forced snapshot across a parked poll and a failed snapshot', { timeout: 30000 }, async t => {
+  const changeId = 'c'.repeat(32), ids = ['a', 'b', 'd'].map(character => character.repeat(40));
+  let description = 'A', commitId = ids[0], hold = false, saved;
+  const forces = [], parked = [];
+  const transport = await createHubTransport({
+    status: async () => { if (hold) await new Promise(resolve => parked.push(resolve)); return { available: true, selected: 'commits' }; },
+    documents: () => ({ documents: [] }),
+    snapshot: body => {
+      forces.push(body.force);
+      if (forces.length === 2) throw new Error('Snapshot failed');
+      return { base: ids[0], head: commitId, commits: [{ changeId, commitId, description }] };
+    },
+    describe: body => {
+      saved = body; description = body.description; commitId = ids[1];
+      return { status: 'saved', current: { changeId, commitId, description } };
+    },
+  });
+  const browser = await launch();
+  t.after(async () => { for (const release of parked.splice(0)) release(); await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  const display = page.locator('.commit-description');
+  const editor = page.getByRole('textbox', { name: 'Description cccccccccccc' });
+  const save = page.getByRole('button', { name: 'Save description' });
+  await assertEventually(async () => assert.equal(await display.textContent(), 'A'));
+  // A poll parked across the describe issues the first snapshot request after the save,
+  // so the forced intent has to survive the preflight it is waiting in.
+  hold = true;
+  await assertEventually(() => assert.equal(parked.length, 1));
+  await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
+  await editor.fill('B');
+  await save.click();
+  await assertEventually(() => assert.equal(saved?.description, 'B'));
+  hold = false;
+  for (const release of parked.splice(0)) release();
+  // That request fails; the next one is asked for after it settles and brings the save.
+  await assertEventually(async () => assert.equal(await display.textContent(), 'B'), 6000);
+  assert.deepEqual(forces, [false, true, false]);
+  // A draft typed after the save neither loses its text nor forgets the saved target.
+  await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
+  await editor.fill('C');
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await assertEventually(() => assert.deepEqual(forces, [false, true, false, true]));
+  assert.equal(await editor.inputValue(), 'C');
+  await save.click();
+  await assertEventually(() => assert.deepEqual([saved.description, saved.expectedDescription, saved.commitId], ['C', 'B', ids[1]]));
+});
+
+test('a repository entry whose status preflight fails says so and retries', { timeout: 30000 }, async t => {
+  let selected = 'tasks', failing = false, snapshots = 0;
+  const transport = await createHubTransport({
+    status: () => { if (failing) throw new Error('Hub actions are unreachable.'); return { available: true, selected }; },
+    documents: () => ({ documents: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    snapshot: () => { snapshots++; return commits(); },
+    readDocument: () => ({ text: '- [ ] Task\n', hash: 'one', version: 'one' }),
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  failing = true;
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  // Nothing is being fetched, so the entry must not claim to load the snapshot.
+  await page.getByText('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.').waitFor({ timeout: 3000 });
+  assert.equal(await page.getByText('Loading repository snapshot…').count(), 0);
+  assert.equal(snapshots, 0);
+  assert.equal(await page.locator('#connection').textContent(), 'Hub actions are unreachable.');
+  // The owed request is kept, so a later poll asks for the snapshot on its own.
+  failing = false;
+  await page.getByText('No commits in this range.').waitFor({ timeout: 5000 });
+  assert.ok(snapshots >= 1);
+});
+
+test('a tab hidden during the preflight leaves the snapshot to the visibility catch-up', { timeout: 30000 }, async t => {
+  let statusCalls = 0, snapshots = 0, hold = false;
+  const parked = [];
+  const transport = await createHubTransport({
+    status: async () => { statusCalls++; if (hold) await new Promise(resolve => parked.push(resolve)); return { available: true, selected: 'commits' }; },
+    documents: () => ({ documents: [] }), snapshot: () => { snapshots++; return commits(); },
+  });
+  const browser = await launch();
+  t.after(async () => { for (const release of parked.splice(0)) release(); await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByText('No commits in this range.').waitFor();
+  assert.equal(snapshots, 1);
+  hold = true;
+  await assertEventually(() => assert.equal(parked.length, 1));
+  await setTabHidden(page, true);
+  for (const release of parked.splice(0)) release();
+  // The poll that was already in flight owes nothing it can see; a snapshot costs jj runs.
+  await page.waitForTimeout(600);
+  assert.equal(snapshots, 1);
+  hold = false;
+  await setTabHidden(page, false);
+  await assertEventually(() => assert.equal(snapshots, 2), 2000);
+  assert.equal(await page.getByText('No commits in this range.').count(), 1);
+  assert.ok(statusCalls >= 2);
+});

@@ -38,13 +38,15 @@ async function requireBundle(name, globalName, view, generation) {
 }
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
-let refreshTimer, rendered = false, refreshRequested = false, refreshForced = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false;
+let refreshTimer, rendered = false, refreshRequested = false, snapshotForce = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false, snapshotPreflightFailed = false;
 // Loading is an intent that belongs to a snapshot request, not to whichever refresh
 // happens to be running: a view entered while a document refresh is in flight owes a
 // request that refresh never issues, and only settling a request can end the notice.
 // A queued intent covers the gap before the request exists; the generation gap covers
-// the request itself, so a refresh that skips the snapshot cannot end either.
-const snapshotLoading = () => snapshotQueued || snapshotApplied < snapshotRequest;
+// the request itself, so a refresh that skips the snapshot cannot end either. An owed
+// request whose status and documents preflight failed is not being fetched, so it must
+// say the snapshot is unavailable instead of claiming to load it.
+const snapshotLoading = () => (snapshotQueued && !snapshotPreflightFailed) || snapshotApplied < snapshotRequest;
 let modeView;
 const startsInExplore = id => id === 'commits' || id === 'changes';
 // Only the repository views render a snapshot, and a snapshot costs several jj
@@ -87,26 +89,26 @@ let ownerNavigation = Promise.resolve(), refreshPaused = false, refreshPauseRevi
 // A hidden tab keeps no poll timer. This is scheduler state only: page-leaving
 // pauses (refreshPaused), drafts, and annotation mode keep their own guards.
 let tabHidden = document.visibilityState === 'hidden';
-// One follow-up is owed to whichever scheduler event asked for it. A forced one
-// asks for an uncached snapshot, so it is tracked apart from a plain poll and
-// survives until a refresh actually reads it.
-function queueRefresh(force) { refreshRequested = true; refreshForced ||= force; }
-function takeRefresh() { const force = refreshForced; refreshRequested = false; refreshForced = false; return force; }
+// One follow-up is owed to whichever scheduler event asked for it. A forced snapshot
+// is tracked apart from that queue and spent only by the request it forces: a refresh
+// whose status or documents preflight pauses or fails first owes the uncached snapshot
+// to the next poll rather than dropping back to cached content.
+function queueRefresh() { refreshRequested = true; }
 function pauseRefresh() { refreshPaused = true; clearTimeout(refreshTimer); return ++refreshPauseRevision; }
 function resumeRefresh() {
   clearTimeout(leaveTimer); leavingConfirmed = false;
   if (!refreshPaused) return;
   if (startsInExplore(selected)) globalThis.lavish?.setAnnotationMode?.(false);
   refreshPaused = false;
-  if (busy) queueRefresh(false);
-  else refreshTimer = setTimeout(() => refresh(takeRefresh()), 0);
+  if (busy) queueRefresh();
+  else refreshTimer = setTimeout(refresh, 0);
 }
 // Entering a repository view must not wait for the next poll to ask for its
 // snapshot. A refresh already in flight renders the new selection itself, so ask
 // for a follow-up instead of polling twice at once. A paused or hidden page keeps
 // that follow-up for its own catch-up rather than dropping the request.
 function requestRefresh() {
-  if (busy || refreshPaused || tabHidden) { queueRefresh(false); return; }
+  if (busy || refreshPaused || tabHidden) { queueRefresh(); return; }
   refresh();
 }
 document.addEventListener('visibilitychange', () => {
@@ -117,8 +119,8 @@ document.addEventListener('visibilitychange', () => {
   // Page-leaving pauses resume their own work, and a running refresh reschedules
   // from its own finally block. Only the scheduler catches up here.
   if (hidden || refreshPaused) return;
-  if (busy) { queueRefresh(false); return; }
-  refresh(takeRefresh());
+  if (busy) { queueRefresh(); return; }
+  refresh();
 });
 function leavePage(url, id) {
   pauseRefresh(); leavingConfirmed = true; attemptedSelection = id;
@@ -162,7 +164,7 @@ async function select(id) {
       selected = id; renderNav();
       // A stale snapshot keeps rendering, but the view marks it as refreshing until
       // the request below replaces it, and a missing one shows its loading state.
-      if (needsSnapshot(id)) snapshotQueued = true;
+      if (needsSnapshot(id)) { snapshotQueued = true; snapshotPreflightFailed = false; }
       const synchronization = synchronizeNavigation(id).then(() => {
         if (revision === navigationRevision) { attemptedSelection = ''; navigationCancelled = false; navigationUncertain = false; navigationError = ''; status(connectionStatus); }
       }, error => {
@@ -194,14 +196,23 @@ async function select(id) {
 }
 const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
 async function refresh(force = false) {
+  // A forced snapshot outlives the call that asked for it: the button and a save both
+  // mean "the next snapshot must be uncached", and only the request below spends it.
+  if (force) snapshotForce = true;
   // The first refresh runs even in a hidden tab so a page opened in the background
   // has content when it is shown; later polls wait for visibility instead.
-  if (refreshPaused || busy || (tabHidden && rendered)) { if (force) queueRefresh(true); return; } busy = true;
+  if (refreshPaused || busy || (tabHidden && rendered)) { queueRefresh(); return; } busy = true;
+  // This run honours the owed follow-up; anything asked for while it runs is queued again.
+  refreshRequested = false;
   const navigationAtStart = navigationRevision, navigationPendingAtStart = pendingOwnerNavigation > 0;
   let pauseRevision;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
     if (refreshPaused) return;
+    // The tab went hidden while status and documents were in flight. A snapshot costs
+    // several jj runs, so a refresh that is no longer being watched leaves it to the
+    // visibility catch-up rather than starting it in the background.
+    if (tabHidden && rendered) return;
     let oldSelected = selected, oldDocuments = JSON.stringify(documents);
     const oldSnapshot = snapshotContent(snapshot), snapshotWasLoading = snapshotLoading();
     documents = list.documents;
@@ -227,8 +238,11 @@ async function refresh(force = false) {
     // only its own.
     const requestSnapshot = needsSnapshot(selected);
     const request = requestSnapshot ? ++snapshotRequest : 0;
-    if (request) snapshotQueued = false;
-    const snapshotResult = request ? action('snapshot', { force }).then(value => ({ value }), error => ({ error })) : null;
+    // The request itself spends the forced intent, whether or not it succeeds, so a
+    // failed snapshot does not force every later poll.
+    const forced = snapshotForce;
+    if (request) { snapshotQueued = false; snapshotPreflightFailed = false; snapshotForce = false; }
+    const snapshotResult = request ? action('snapshot', { force: forced }).then(value => ({ value }), error => ({ error })) : null;
     const initialRender = !rendered;
     if (initialRender) { renderNav(); oldSelected = selected; oldDocuments = JSON.stringify(documents); await renderView(); }
     const result = await snapshotResult;
@@ -288,12 +302,18 @@ async function refresh(force = false) {
         if (replacement) { replacement.focus(); if (selection) replacement.setSelectionRange(...selection); }
       }
     }
-  } catch (error) { status(error.message); if (refreshPaused && pauseRevision === refreshPauseRevision && !navigationPending && !leavingConfirmed) resumeRefresh(); }
+  } catch (error) {
+    status(error.message);
+    // The preflight failed before any snapshot request could be issued: the owed request
+    // has to stop claiming to load, while it stays queued so the next poll asks again.
+    if (snapshotQueued && !snapshotPreflightFailed) { snapshotPreflightFailed = true; if (needsSnapshot(selected)) await renderView(); }
+    if (refreshPaused && pauseRevision === refreshPauseRevision && !navigationPending && !leavingConfirmed) resumeRefresh();
+  }
   finally {
     busy = false; clearTimeout(refreshTimer);
     // A hidden tab drops its timer; becoming visible catches up immediately.
     if (refreshPaused || tabHidden) return;
-    if (refreshRequested) refresh(takeRefresh());
+    if (refreshRequested) refresh();
     else refreshTimer = setTimeout(refresh, 2000);
   }
 }
