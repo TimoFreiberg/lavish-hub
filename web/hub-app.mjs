@@ -38,7 +38,13 @@ async function requireBundle(name, globalName, view, generation) {
 }
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
-let refreshTimer, rendered = false, refreshRequested = false, refreshForced = false, snapshotRequest = 0, snapshotApplied = 0;
+let refreshTimer, rendered = false, refreshRequested = false, refreshForced = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false;
+// Loading is an intent that belongs to a snapshot request, not to whichever refresh
+// happens to be running: a view entered while a document refresh is in flight owes a
+// request that refresh never issues, and only settling a request can end the notice.
+// A queued intent covers the gap before the request exists; the generation gap covers
+// the request itself, so a refresh that skips the snapshot cannot end either.
+const snapshotLoading = () => snapshotQueued || snapshotApplied < snapshotRequest;
 let modeView;
 const startsInExplore = id => id === 'commits' || id === 'changes';
 // Only the repository views render a snapshot, and a snapshot costs several jj
@@ -77,7 +83,7 @@ function renderNav() {
   }
 }
 let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
-let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false, refreshPauseRevision = 0, attemptedSelection = '', navigationCancelled = false, navigationUncertain = false, leaveTimer;
+let ownerNavigation = Promise.resolve(), refreshPaused = false, refreshPauseRevision = 0, attemptedSelection = '', navigationCancelled = false, navigationUncertain = false, leaveTimer;
 // A hidden tab keeps no poll timer. This is scheduler state only: page-leaving
 // pauses (refreshPaused), drafts, and annotation mode keep their own guards.
 let tabHidden = document.visibilityState === 'hidden';
@@ -156,7 +162,7 @@ async function select(id) {
       selected = id; renderNav();
       // A stale snapshot keeps rendering, but the view marks it as refreshing until
       // the request below replaces it, and a missing one shows its loading state.
-      if (needsSnapshot(id)) snapshotLoading = true;
+      if (needsSnapshot(id)) snapshotQueued = true;
       const synchronization = synchronizeNavigation(id).then(() => {
         if (revision === navigationRevision) { attemptedSelection = ''; navigationCancelled = false; navigationUncertain = false; navigationError = ''; status(connectionStatus); }
       }, error => {
@@ -197,7 +203,7 @@ async function refresh(force = false) {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
     if (refreshPaused) return;
     let oldSelected = selected, oldDocuments = JSON.stringify(documents);
-    const oldSnapshot = snapshotContent(snapshot), snapshotWasLoading = snapshotLoading;
+    const oldSnapshot = snapshotContent(snapshot), snapshotWasLoading = snapshotLoading();
     documents = list.documents;
     const remoteDoc = documents.find(item => item.id === state.selected);
     const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
@@ -216,20 +222,25 @@ async function refresh(force = false) {
       leavePage(new URL(selectedDoc.sibling, location.href).href, selectedDoc.id); return;
     }
     // Ask for the snapshot only on the views that render it, and only for the
-    // selection the owner settled on above.
+    // selection the owner settled on above. Issuing the request transfers the queued
+    // intent to this generation, so a later entry queues its own and this one settles
+    // only its own.
     const requestSnapshot = needsSnapshot(selected);
-    snapshotLoading = requestSnapshot;
     const request = requestSnapshot ? ++snapshotRequest : 0;
-    const snapshotResult = requestSnapshot ? action('snapshot', { force }).then(value => ({ value }), error => ({ error })) : null;
+    if (request) snapshotQueued = false;
+    const snapshotResult = request ? action('snapshot', { force }).then(value => ({ value }), error => ({ error })) : null;
     const initialRender = !rendered;
     if (initialRender) { renderNav(); oldSelected = selected; oldDocuments = JSON.stringify(documents); await renderView(); }
     const result = await snapshotResult;
     if (navigationAtStart !== navigationRevision) oldSelected = selected;
-    snapshotLoading = false;
     if (refreshPaused) return;
+    // A settled request is spent whether or not it succeeded: the view has to drop its
+    // loading notice and say the snapshot is unavailable. A paused refresh leaves it
+    // unsettled so the catch-up asks again.
+    if (request) snapshotApplied = request;
     if (result?.error) { snapshot = undefined; status(result.error.message); }
     else {
-      if (result) { snapshot = result.value; snapshotApplied = request; }
+      if (result) snapshot = result.value;
       status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable');
     }
     let documentChanged = false;
@@ -262,7 +273,7 @@ async function refresh(force = false) {
     // The loading flag is part of the comparison: a snapshot request that fails
     // before any snapshot exists must still replace the loading notice, and one
     // that settles back onto unchanged content must drop the refreshing notice.
-    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (needsSnapshot(selected) && (oldSnapshot !== snapshotContent(snapshot) || snapshotWasLoading !== snapshotLoading))) {
+    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (needsSnapshot(selected) && (oldSnapshot !== snapshotContent(snapshot) || snapshotWasLoading !== snapshotLoading()))) {
       const active = document.activeElement;
       const label = active?.closest('#view') && active.getAttribute('aria-label');
       const selection = label && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
@@ -279,7 +290,7 @@ async function refresh(force = false) {
     }
   } catch (error) { status(error.message); if (refreshPaused && pauseRevision === refreshPauseRevision && !navigationPending && !leavingConfirmed) resumeRefresh(); }
   finally {
-    busy = false; snapshotLoading = false; clearTimeout(refreshTimer);
+    busy = false; clearTimeout(refreshTimer);
     // A hidden tab drops its timer; becoming visible catches up immediately.
     if (refreshPaused || tabHidden) return;
     if (refreshRequested) refresh(takeRefresh());
@@ -302,11 +313,11 @@ async function renderView(focusChangeId) {
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
   view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
   if (id === 'commits' || id === 'changes') {
-    if (!snapshot) { view.append(notice(snapshotLoading ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
+    if (!snapshot) { view.append(notice(snapshotLoading() ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
     // Re-entering a repository view keeps the previous snapshot on screen while the
     // fresh one arrives, so say which of the two the owner is looking at.
-    if (snapshotLoading) view.append(el('p', 'Refreshing repository snapshot…', { class: 'muted' }));
+    if (snapshotLoading()) view.append(el('p', 'Refreshing repository snapshot…', { class: 'muted' }));
     if (id === 'changes') {
       if (!(await requireBundle('diff', 'mountLavishDiff', view, generation))) return;
       view.append(diffContainer);

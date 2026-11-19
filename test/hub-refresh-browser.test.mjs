@@ -753,20 +753,27 @@ test('entering a repository view requests a snapshot while a refresh is busy', {
 });
 
 test('a remote switch to a repository view asks for its snapshot in that poll', { timeout: 30000 }, async t => {
-  let statusCalls = 0, snapshots = 0;
+  let selected = 'tasks', snapshots = 0, hold = false;
+  const parked = [];
   const transport = await createHubTransport({
-    status: () => { statusCalls++; return { available: true, selected: statusCalls >= 3 ? 'commits' : 'tasks' }; },
+    status: async () => { if (hold) await new Promise(resolve => parked.push(resolve)); return { available: true, selected }; },
     documents: () => ({ documents: [] }),
     snapshot: () => { snapshots++; return commits(); },
     readDocument: () => ({ text: '- [ ] Task\n', hash: 'one', version: 'one' }),
   });
   const browser = await launch();
-  t.after(async () => { await browser.close(); await transport.close(); });
+  t.after(async () => { for (const release of parked.splice(0)) release(); await browser.close(); await transport.close(); });
   const page = await pollingPage(browser, transport);
   await page.getByRole('heading', { name: 'Tasks' }).waitFor();
   assert.equal(snapshots, 0);
-  await page.getByText('No commits in this range.').waitFor({ timeout: 6000 });
-  assert.ok(snapshots >= 1);
+  // Park a poll, switch the remote selection while it is in flight, then let that
+  // poll answer. Later polls stay parked, so only this one can bring the snapshot.
+  hold = true;
+  await assertEventually(() => assert.equal(parked.length, 1));
+  selected = 'commits';
+  parked.shift()();
+  await page.getByText('No commits in this range.').waitFor({ timeout: 4000 });
+  assert.equal(snapshots, 1);
 });
 
 test('description drafts and save targets survive a gated view switch', { timeout: 30000 }, async t => {
@@ -798,22 +805,26 @@ test('description drafts and save targets survive a gated view switch', { timeou
 });
 
 test('a snapshot failure on entry replaces the loading notice and recovers', { timeout: 30000 }, async t => {
-  let selected = 'tasks', failing = true, snapshots = 0;
+  let selected = 'tasks', failing = true, snapshots = 0, hold = true, releaseSnapshot;
+  const gate = new Promise(resolve => { releaseSnapshot = resolve; });
   const transport = await createHubTransport({
     status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
     navigate: ({ id }) => { selected = id; return { selected }; },
-    snapshot: () => { snapshots++; if (failing) throw new Error('Snapshot failed'); return commits(); },
+    snapshot: async () => { snapshots++; if (hold) await gate; if (failing) throw new Error('Snapshot failed'); return commits(); },
     readDocument: () => ({ text: '- [ ] Task\n', hash: 'one', version: 'one' }),
   });
   const browser = await launch();
-  t.after(async () => { await browser.close(); await transport.close(); });
+  t.after(async () => { releaseSnapshot(); await browser.close(); await transport.close(); });
   const page = await pollingPage(browser, transport);
   await page.getByRole('heading', { name: 'Tasks' }).waitFor();
   const unavailable = page.getByText('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.');
   // No earlier snapshot rendered, so a failed first request has to replace the
-  // loading notice rather than leave it on screen.
+  // loading notice rather than leave it on screen. The request is held open so the
+  // notice can be observed instead of raced against the failure.
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   await page.getByText('Loading repository snapshot…').waitFor({ timeout: 2000 });
+  hold = false;
+  releaseSnapshot();
   await unavailable.waitFor({ timeout: 2000 });
   // Repeating the failure settles the same way instead of spinning again.
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
@@ -827,6 +838,80 @@ test('a snapshot failure on entry replaces the loading notice and recovers', { t
   await page.getByRole('button', { name: 'Commits', exact: true }).click();
   await page.getByText('No commits in this range.').waitFor({ timeout: 3000 });
   assert.ok(snapshots >= 3);
+});
+
+test('a parked document poll leaves the snapshot loading state to its request', { timeout: 30000 }, async t => {
+  const documents = [{ id: 'detail', title: 'Detail', source: 'detail.html' }];
+  let selected = 'detail', failing = true, holdRead = false, holdSnapshot = false, snapshots = 0;
+  const parkedReads = [], parkedSnapshots = [];
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }),
+    documents: () => ({ documents }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    snapshot: async () => {
+      snapshots++;
+      if (holdSnapshot) await new Promise(resolve => parkedSnapshots.push(resolve));
+      if (failing) throw new Error('Snapshot failed');
+      return commits();
+    },
+    readDocument: async () => {
+      if (holdRead) await new Promise(resolve => parkedReads.push(resolve));
+      return { text: '- [ ] Task\n', hash: 'one', version: 'one' };
+    },
+  });
+  const releaseAll = parked => { for (const release of parked.splice(0)) release(); };
+  const browser = await launch();
+  t.after(async () => { holdRead = holdSnapshot = false; releaseAll(parkedReads); releaseAll(parkedSnapshots); await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  const loading = page.getByText('Loading repository snapshot…');
+  const refreshing = page.getByText('Refreshing repository snapshot…');
+  const unavailable = page.getByText('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.');
+  const selectView = async name => {
+    await page.getByRole('button', { name, exact: true }).click();
+    await page.getByRole('heading', { name }).waitFor();
+  };
+  // A document view's poll parks in its own document read, so the refresh that owns
+  // the read is still in flight when the repository view is entered.
+  const parkDocumentPoll = async () => { holdRead = true; await assertEventually(() => assert.equal(parkedReads.length, 1)); };
+  await page.getByRole('heading', { name: 'Detail' }).waitFor();
+  await parkDocumentPoll();
+  holdSnapshot = true;
+  await selectView('Commits');
+  await loading.waitFor({ timeout: 2000 });
+  holdRead = false;
+  releaseAll(parkedReads);
+  // Settling that refresh issues the queued request; until it fails the view keeps
+  // its loading notice rather than flashing the unavailable one.
+  await assertEventually(() => assert.equal(parkedSnapshots.length, 1));
+  assert.equal(await loading.count(), 1);
+  assert.equal(await unavailable.count(), 0);
+  holdSnapshot = false;
+  releaseAll(parkedSnapshots);
+  await unavailable.waitFor({ timeout: 2000 });
+  assert.equal(await loading.count(), 0);
+  assert.equal(snapshots, 1);
+  // The same failure followed by a success leaves the view on the snapshot.
+  failing = false;
+  await selectView('Detail');
+  await selectView('Commits');
+  await page.getByText('No commits in this range.').waitFor({ timeout: 3000 });
+  // A stale snapshot stays on screen marked as refreshing; the parked document poll
+  // must not drop that marker before the request it queued settles.
+  await selectView('Detail');
+  await parkDocumentPoll();
+  holdSnapshot = true;
+  await selectView('Commits');
+  await refreshing.waitFor({ timeout: 2000 });
+  assert.equal(await page.getByText('--to bbbbbbbbbbbb').count(), 1);
+  holdRead = false;
+  releaseAll(parkedReads);
+  await assertEventually(() => assert.equal(parkedSnapshots.length, 1));
+  assert.equal(await refreshing.count(), 1);
+  holdSnapshot = false;
+  releaseAll(parkedSnapshots);
+  // An unchanged snapshot still clears the marker.
+  await assertEventually(async () => assert.equal(await refreshing.count(), 0));
+  assert.equal(await page.getByText('--to bbbbbbbbbbbb').count(), 1);
 });
 
 test('a queued visibility catch-up polls without forcing a snapshot', { timeout: 30000 }, async t => {
