@@ -175,7 +175,10 @@ version. If a source is unavailable, the owner leaves its last generated copy in
 place and reports the error. It refuses to overwrite a generated copy edited on
 disk, including after an abrupt owner termination; preserve or remove that copy
 before starting the owner or publishing again. Document registrations are retained
-across restarts. Navigating away or reloading resets its internal state. The owner
+across restarts. Navigating away or reloading resets its internal state. A restarted
+owner issues a new access token, so an open hub page or published page that has no
+unsaved drafts reloads itself when the owner rejects its token. A hub page with
+drafts says to reload instead. The owner
 exits on stop, SIGINT, SIGTERM, an ended Lavish session, or a listener error. It
 does not start a background daemon. A second owner is refused; an unreachable live
 process is not replaced. A stale record is reclaimed only when its recorded process is

@@ -120,6 +120,15 @@ test('published page sidebar gives up on a navigation that is never answered', {
   assert.equal(await page.locator('nav').getAttribute('aria-busy'), null);
 });
 
+test('published page sidebar reloads when a restarted owner rejects its access token', { timeout: 30000 }, async t => {
+  const browser = await launch();
+  t.after(async () => { await browser.close(); });
+  const page = await sidebarPage(browser);
+  await eventually(async () => assert.ok(await statusCalls(page) >= 1), 5000);
+  await page.evaluate(() => { const real = globalThis.fetch; globalThis.fetch = async (url, options) => JSON.parse(options.body).operation === 'status' ? { ok: false, status: 403, json: async () => ({ error: 'Unauthorized' }) } : real(url, options); });
+  await page.waitForEvent('framenavigated', { timeout: 20000 });
+});
+
 test('published page sidebar keeps polling after a failed read', { timeout: 30000 }, async t => {
   const browser = await launch();
   t.after(async () => { await browser.close(); });

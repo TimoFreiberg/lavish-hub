@@ -109,8 +109,19 @@ async function action(operation, body = {}) {
   try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument', 'diffFiles', 'navigate'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
   catch { throw new Error('Hub actions are unreachable. Your edits remain on this page. Local actions require the running hub owner.'); }
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Action failed');
+  if (response.status === 403 && data.error === 'Unauthorized') reconnectAfterOwnerRestart();
+  if (!response.ok) throw new Error(data.error === 'Unauthorized' ? ownerRestartedMessage : data.error || 'Action failed');
   return data.result;
+}
+const ownerRestartedMessage = 'The hub owner restarted. Reload this page to reconnect; unsaved drafts on it would be lost.';
+// A restarted owner rejects the access token this page was generated with, and every
+// later action fails the same way. The regenerated page on disk carries the new token,
+// so reloading reconnects. Drafts are never discarded for it, and a page must have been
+// open a while first, so a token that is not rewritten yet cannot cause a reload loop.
+function reconnectAfterOwnerRestart() {
+  if (performance.now() < 10000 || hasUnsavedDrafts()) return;
+  leavingConfirmed = true; pauseRefresh();
+  location.reload();
 }
 let navigationError = '', connectionStatus = 'Connecting…';
 function status(text) {

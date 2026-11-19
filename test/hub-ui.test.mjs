@@ -112,6 +112,21 @@ test('hub gives up on a navigation the owner never answers and lets the next one
   await page.getByText('Hub actions are unreachable.', { exact: false }).waitFor({ state: 'detached' });
 });
 
+test('hub reloads itself when a restarted owner rejects its access token', { timeout: 40000 }, async t => {
+  const transport = await createHubTransport({ status: () => ({ available: true }), documents: () => ({ documents: [] }), snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '', patch: '', commits: [] }) });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_KIT_LANGUAGES: '[]' } })).outputFiles[0].text;
+  const markdown = await markdownBundle();
+  const page = await browser.newPage(); page.setDefaultTimeout(5000);
+  // The page was generated for the previous owner, so its token no longer matches.
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: 'e'.repeat(64), workspace: '/workspace' })};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByText('The hub owner restarted.', { exact: false }).waitFor();
+  // Once it has been open long enough to rule out a reload loop, it reloads.
+  await page.waitForEvent('framenavigated', { timeout: 20000 });
+});
+
 test('hub keeps an unavailable file expansion notice until that file expands', { timeout: 40000 }, async t => {
   const reads = [];
   let bUnavailable = true;
