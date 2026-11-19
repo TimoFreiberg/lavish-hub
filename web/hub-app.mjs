@@ -406,21 +406,28 @@ async function renderView(focusChangeId) {
     modeView = id;
   }
   view.classList.toggle('changes-view', id === 'changes');
+  app.classList.toggle('is-changes-view', id === 'changes');
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
+  if (id === 'changes') {
+    const bar = el('div', null, { class: 'changes-bar' });
+    bar.append(el('h1', labels[id]));
+    if (!snapshot) { view.append(bar, notice(snapshotLoading() ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
+    bar.append(el('span', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted changes-range' }));
+    if (snapshotLoading()) bar.append(el('span', 'Refreshing repository snapshot…', { class: 'muted' }));
+    view.append(bar);
+    if (!(await requireBundle('diff', 'mountLavishDiff', view, generation))) return;
+    view.append(diffContainer);
+    if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, loadDiffFiles: (operationId, fileIndex) => action('diffFiles', { operationId, fileIndex }) });
+    diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, kind: 'jj', to: snapshot.head });
+    return;
+  }
   view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
-  if (id === 'commits' || id === 'changes') {
+  if (id === 'commits') {
     if (!snapshot) { view.append(notice(snapshotLoading() ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
     // Re-entering a repository view keeps the previous snapshot on screen while the
     // fresh one arrives, so say which of the two the owner is looking at.
     if (snapshotLoading()) view.append(el('p', 'Refreshing repository snapshot…', { class: 'muted' }));
-    if (id === 'changes') {
-      if (!(await requireBundle('diff', 'mountLavishDiff', view, generation))) return;
-      view.append(diffContainer);
-      if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, loadDiffFiles: (operationId, fileIndex) => action('diffFiles', { operationId, fileIndex }) });
-      diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, kind: 'jj', to: snapshot.head });
-      return;
-    }
     if (!snapshot.commits.length) view.append(el('p', 'No commits in this range.'));
     for (const commit of snapshot.commits) {
       const key = `commit:${commit.changeId}`, state = draft(key, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '', editing: false });
