@@ -76,7 +76,12 @@ later changes, including page-scoped feedback, routing and hub integration. The
 local `window.lavish.setAnnotationMode(boolean)` addition requests a chrome switch
 change over the authenticated artifact protocol and resolves on acknowledgment or
 returns false after one second. The `lavish:ready` event signals SDK availability.
-The hub uses these on view transitions.
+The hub uses these on view transitions. The `Access-Control-Allow-Origin: null`
+grant on a verified `hub-asset-<hash>.js` representation in the vendored artifact
+route is a local difference of the same kind: the hub page fetches its renderer
+bundles from the opaque-origin artifact frame, so a candidate that drops the grant
+breaks every hub render and nothing else reports it. Its `Vary: Origin` belongs
+with it.
 Retain or adapt any differences still needed here. Only retire code after establishing an
 upstream equivalent and passing the applicable regression tests and full repository
 QA, including visual inspection, on the proposed replacement. Review and document

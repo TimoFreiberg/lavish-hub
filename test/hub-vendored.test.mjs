@@ -444,12 +444,19 @@ test('hub asset route grants narrow CORS to registered verified bundles', async 
   const fresh = await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity', 'if-none-match': served.headers.etag } });
   assert.equal(fresh.status, 304);
   assert.equal(fresh.headers[allowed], 'null');
+  assert.match(String(fresh.headers.vary), /Origin/);
   const encoded = await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'gzip' } });
   assert.equal(encoded.status, 200);
   assert.equal(encoded.headers['content-encoding'], 'gzip');
   assert.equal(encoded.headers[allowed], 'null');
-  assert.equal((await request(bundle)).headers[allowed], undefined, 'a request without an origin gets no grant');
-  assert.equal((await request(bundle, { headers: { origin: 'http://example.invalid' } })).headers[allowed], undefined, 'a foreign origin gets no grant');
+  // A variant that grants nothing still varies on Origin: a cache that kept it
+  // without that would answer the frame with a body the browser then refuses.
+  const anonymous = await request(bundle);
+  assert.equal(anonymous.headers[allowed], undefined, 'a request without an origin gets no grant');
+  assert.match(String(anonymous.headers.vary), /Origin/);
+  const foreign = await request(bundle, { headers: { origin: 'http://example.invalid' } });
+  assert.equal(foreign.headers[allowed], undefined, 'a foreign origin gets no grant');
+  assert.match(String(foreign.headers.vary), /Origin/);
   const page = await request('hub.html', { headers: { origin: 'null' } });
   assert.equal(page.status, 200);
   assert.equal(page.headers[allowed], undefined, 'the hub page itself is not readable cross-origin');

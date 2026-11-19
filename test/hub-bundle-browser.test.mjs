@@ -33,9 +33,11 @@ async function openPage(t, transport, bundles) {
   t.after(() => browser.close());
   const page = await browser.newPage();
   const audio = Object.entries(bundles).map(([name, src]) => `<audio preload="none" data-hub-bundle="${name}" src="${src}"></audio>`).join('');
-  // The bundle deadline is shortened so a stalled response fails within a test
-  // while the code keeps its real timeout for production.
-  await page.setContent(`<div id="app"></div><script>const nativeTimeout = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => nativeTimeout(fn, ms === 10000 ? 150 : ms, ...rest); globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script>${audio}<script type="module">${app}</script>`);
+  // The bundle deadline is shortened so a stalled response fails inside a test,
+  // while the code keeps its real timeout for production. The shortened value
+  // stays well above a local round trip, so only a response that never arrives
+  // trips it and a slow but healthy load is not read as a failure.
+  await page.setContent(`<div id="app"></div><script>const nativeTimeout = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => nativeTimeout(fn, ms === 10000 ? 750 : ms, ...rest); globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script>${audio}<script type="module">${app}</script>`);
   return page;
 }
 
@@ -126,6 +128,7 @@ test('bundles load on demand, reuse a successful load, and retry a failure', { t
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await page.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 5000 });
   assert.ok(markdown >= 2, `the failed renderer was requested again (${markdown})`);
+  assert.equal(await page.locator('.hub-diff').count(), 0, 'the document view is not left holding the diff view');
   await page.getByRole('button', { name: 'Changes', exact: true }).click();
   await page.locator('.hub-diff').waitFor({ state: 'attached', timeout: 5000 });
   assert.equal(diff, 1, 'a loaded renderer is not fetched again');
@@ -167,6 +170,17 @@ test('a bundle served with a non-script type is refused', { timeout: 30000 }, as
   assert.equal(await page.evaluate(() => typeof globalThis.hubMarkdownRenderer), 'undefined');
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await page.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 5000 });
+});
+
+test('a bundle address that is neither fetchable nor offline is refused', { timeout: 30000 }, async t => {
+  const transport = await actionTransport();
+  t.after(() => transport.close());
+  const page = await openPage(t, transport, { markdown: 'ftp://assets.invalid/markdown.js' });
+  await page.getByText('No commits in this range.').waitFor({ timeout: 5000 });
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByText('Could not load markdown renderer').waitFor({ timeout: 5000 });
+  assert.equal(await page.evaluate(() => typeof globalThis.hubMarkdownRenderer), 'undefined');
+  assert.equal(await page.locator('head script[src]').count(), 0, 'an address no page produces is not appended either');
 });
 
 test('an exported page loads its inlined renderer without fetching it', { timeout: 30000 }, async t => {

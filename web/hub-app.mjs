@@ -42,18 +42,27 @@ function attemptBundle(name, globalName) {
       script.src = url;
       document.head.append(script);
     };
-    if (!/^https?:$/.test(source.protocol)) { execute(href); return; }
-    // An exported page inlines the renderer as data: and cannot be fetched, so
-    // only a network bundle goes through the request below.
+    // An exported page inlines its renderer as a data URL, and a page opened
+    // straight from disk loads it through the file scheme. Neither can be fetched,
+    // so those two keep the plain script load that works offline; any other scheme
+    // is refused rather than executed. Spell the schemes out only in code: export
+    // reads a scheme name followed by a colon here as a local reference to redact.
+    if (!/^https?:$/.test(source.protocol)) {
+      if (!/^(?:data|file):$/.test(source.protocol)) return finish(new Error(`Could not load ${name} renderer`));
+      execute(href);
+      return;
+    }
     request = new AbortController();
     fetch(href, { credentials: 'omit', redirect: 'error', signal: request.signal })
       .then(response => {
         if (!response.ok || !/^(?:text|application)\/(?:x-)?(?:java|ecma)script\b/i.test(response.headers.get('content-type') || '')) throw new Error(`Could not load ${name} renderer`);
-        return response.arrayBuffer();
+        // Every type accepted above is a JavaScript MIME type, so the blob keeps a
+        // type the script loader runs and the body is not copied into a second one.
+        return response.blob();
       })
-      .then(bytes => {
+      .then(blob => {
         if (settled) return;
-        objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
+        objectUrl = URL.createObjectURL(blob);
         execute(objectUrl);
       })
       .catch(() => finish(new Error(`Could not load ${name} renderer`)));

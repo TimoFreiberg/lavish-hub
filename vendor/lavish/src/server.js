@@ -2740,11 +2740,14 @@ export async function serve({
           // The hub page runs in the opaque-origin artifact frame and fetches its
           // renderer bundles so it can abort a stalled load. Only a representation
           // this pass proved registered and hash-matched gets that grant; a page, a
-          // stylesheet, a range, or an error gets none.
+          // stylesheet, a range, or an error gets none. Every variant of THIS
+          // representation varies on Origin, including the ones that grant nothing:
+          // a cache holding the ungranted copy would otherwise answer the frame
+          // with a body the browser then refuses to hand over.
+          res.vary("Origin");
           const grantBundleCors = () => {
             if (req.headers.origin !== "null") return;
             res.setHeader("access-control-allow-origin", "null");
-            res.vary("Origin");
           };
           if (!req.get("range") || !choice.identityAllowed) {
             res.setHeader("cache-control", "public, max-age=0");

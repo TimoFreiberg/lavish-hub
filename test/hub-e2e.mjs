@@ -132,19 +132,28 @@ try {
   assert.ok(warm.some(item => item.url.endsWith(diffName)));
   assert.ok(warm.every(item => !item.url.endsWith(markdownName)));
   // The frame is opaque-origin, so the browser only gets bundle bytes when the
-  // asset route grants this exact origin, and only for the verified bundle.
+  // asset route grants this exact origin, and only for the verified bundle. The
+  // two refused reads below are pages the server does serve: proving that first is
+  // what makes each failure a withheld grant rather than a missing file.
   const siblingName = `document-${createHash('sha256').update(JSON.stringify(['review', canonicalSource])).digest('hex')}.html`;
+  for (const url of [frame.url(), new URL(siblingName, frame.url()).href]) {
+    const served = await page.request.get(url);
+    assert.equal(served.status(), 200, `${new URL(url).pathname} is served`);
+    assert.ok((await served.body()).length > 0, `${new URL(url).pathname} has a body`);
+  }
   const crossOrigin = await frame.evaluate(async ([name, sibling]) => {
     const read = async url => {
-      try { const response = await fetch(new URL(url, location.href).href, { credentials: 'omit' }); return { ok: response.ok, bytes: (await response.arrayBuffer()).byteLength }; }
+      try { const response = await fetch(new URL(url, location.href).href, { credentials: 'omit' }); return { ok: response.ok, status: response.status, bytes: (await response.arrayBuffer()).byteLength }; }
       catch (error) { return { ok: false, error: error.message }; }
     };
     return { bundle: await read(name), page: await read('hub.html'), sibling: await read(sibling) };
   }, [diffName, siblingName]);
   assert.equal(crossOrigin.bundle.ok, true, JSON.stringify(crossOrigin));
   assert.equal(crossOrigin.bundle.bytes, (await readFile(path.join(path.dirname(record.page), diffName))).length);
-  assert.equal(crossOrigin.page.ok, false, 'the hub page is not readable from its own frame');
-  assert.equal(crossOrigin.sibling.ok, false, 'published pages are not readable across origins');
+  for (const [label, read] of [['the hub page', crossOrigin.page], ['a published page', crossOrigin.sibling]]) {
+    assert.ok(read.error, `${label} read is refused: ${JSON.stringify(read)}`);
+    assert.equal(read.status, undefined, `${label} read would expose a status if the grant were granted`);
+  }
   for (const name of assetNames) {
     const assetUrl = new URL(name, frame.url()).href;
     if (name.endsWith('.js')) {

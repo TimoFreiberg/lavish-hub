@@ -117,9 +117,12 @@ data.
 
 The diff and Markdown views fetch their renderer the first time they need it,
 while the same render reads the document. A loaded renderer stays for the page.
-A load that has not finished after ten seconds is cancelled, and the view reports
-the failure with Retry. Export inlines the renderers, so an exported page needs no
-request for them.
+The page reads each bundle from the sandboxed frame's own origin, so the owner has
+to grant that read: an owner process started before an upgrade does not, and every
+renderer fails until it is stopped and started again. A load still incomplete after
+ten seconds is cancelled and the view reports the failure with Retry, which asks
+for the same bundle again. A partly received bundle never runs.
+Export inlines the renderers, so an exported page needs no request for them.
 
 The owner serves files under the published document's directory, including its
 subdirectories, but rejects traversal and symlinks outside that directory. Like
