@@ -1411,6 +1411,27 @@ test("an explicit bind host overrides automatic Tailscale detection", async () =
   }
 });
 
+test("idle keep-alive connections outlive the browser's reuse window", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-keepalive-"));
+  const server = await serve({
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    version: "9.9.9-test",
+    env: { LAVISH_AXI_HOST: "127.0.0.1" },
+    idleTimeoutMs: null,
+  });
+  try {
+    const health = await rawRequest(server.port, "/health");
+    assert.equal(health.status, 200);
+    const advertised = Number(/timeout=(\d+)/.exec(health.headers["keep-alive"] ?? "")?.[1]);
+    // Chrome reuses an idle socket for up to 300 s.
+    assert.ok(advertised > 300, `keep-alive timeout ${advertised}s must exceed 300s`);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a down Tailscale detector keeps the server loopback-only without a phone link", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "lavish-no-tailscale-"));
   const artifact = path.join(dir, "artifact.html");
