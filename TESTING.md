@@ -52,9 +52,11 @@ proxy handles preflight itself, so an OPTIONS request need not reach the owner.
 A `close` without `finish` indicates an interrupted response. Proxy and owner
 lines both cover resource GETs as well as actions, so a slow asset read shows
 the same stages on each side. A request the proxy gives up on logs
-`upstream-failure`, or `upstream-timeout` when a resource read never reached
-response headers after a verified identity. Only that case answers 504, so an
-unanswered identity challenge reads as `upstream-failure` with 502. Server-side
+`upstream-failure`, `upstream-timeout` when a resource read never reached
+response headers after a verified identity, or `lookup-timeout` when its session
+lookup never resolved. Only `upstream-timeout` answers 504; a lookup that never
+resolved answers 502, the same as an unanswered identity challenge, because
+nothing was forwarded and the status can say nothing about the owner. Server-side
 lines also cover all HTTP methods and use fixed route classes: `proxy-action`,
 `proxy-resource`, `artifact-page`, `artifact-asset`, and `other`. These classes
 are based on the request shape, not the eventual handler; an unusual artifact
@@ -62,9 +64,11 @@ filename may be classified differently from how it is served. Server `arrive`
 precedes the host check. `lookup-start` and `lookup-end` surround session lookup
 for proxy requests and path-addressed artifacts when those requests reach that
 step. A missing end can indicate a pending lookup, a lookup failure, a closed
-connection, or a dropped log line. Other work, including compression, has no
-individual phase markers. A request with arrival but no later line may still be
-pending, but cannot locate the delay precisely. Logs are best effort. The server
+connection, or a dropped log line; a proxy line with `lookup-timeout` and no
+`lookup-end` is the store's mutex still holding that lookup. Other work,
+including compression, has no individual phase markers. A request with arrival
+but no later line may still be pending, but cannot locate the delay precisely.
+Logs are best effort. The server
 request logger drops lines under stderr backpressure. The existing proxy and
 owner console writers do not apply that dropping policy. IDs are local to each
 process and trace type; they cannot correlate server, proxy, and owner records directly.

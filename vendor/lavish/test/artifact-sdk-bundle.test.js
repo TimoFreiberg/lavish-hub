@@ -59,6 +59,16 @@ function createElement(tag) {
       }
       return null;
     },
+    // The real `contains` is true for the node itself and every descendant, which is how the SDK
+    // asks whether a mutation landed on, above, or inside something it watches.
+    contains(node) {
+      let current = node;
+      while (current) {
+        if (current === element) return true;
+        current = current.parentElement;
+      }
+      return false;
+    },
     appendChild(child) {
       child.parentElement = element;
       element.children.push(child);
@@ -2039,6 +2049,9 @@ test("the protocol-1 SDK accepts the chrome origin in an opaque artifact and rej
 // the page is open.
 function mermaidDiagram(box) {
   const container = createElement("div");
+  // Mermaid renders its svg inside the container, and a page commonly leaves a wrapper of its own
+  // in between, so the graph a reveal writes to is not the element the SDK watches.
+  const wrapper = appendTo(container, createElement("div"));
   const created = [];
   // Inserting a child connects it on a real page, and `embedWhiteboard` reads `isConnected` to
   // decide whether an existing editor is still there.
@@ -2046,7 +2059,7 @@ function mermaidDiagram(box) {
     element.isConnected = true;
     created.push(element);
   };
-  const svg = createElement("svg");
+  const svg = appendTo(wrapper, createElement("svg"));
   svg.id = "mermaid-1";
   svg.closest = (selector) => (String(selector).includes(".mermaid") ? container : null);
   svg.getBoundingClientRect = () => ({
@@ -2143,6 +2156,39 @@ test("a class-only reveal is enough for a diagram that gave up polling", () => {
   sdk.runFrames();
 
   assert.equal(diagram.container.style.display, "none", "the class change is enough to embed it");
+});
+
+// The same reveal is often written below the container: a panel animates the svg's or a wrapper's
+// transform, and nothing above the container is named in the record.
+test("a reveal written inside the container is enough for a diagram that gave up polling", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+  assert.equal(diagram.container.style.display, undefined, "still hidden while it has no box");
+
+  diagram.box.height = 300;
+  pageChangeObserver(sdk).callback([{ type: "attributes", target: diagram.svg, attributeName: "style" }]);
+  sdk.runFrames();
+
+  assert.equal(diagram.container.style.display, "none", "a reveal below the container counts");
+});
+
+// Pan and zoom rewrite the live `viewBox` on every wheel and pointer move, and a diagram still too
+// short to embed can sit under the pointer. A viewBox cannot reveal anything, so it must not buy a
+// scan per input event - while the style and class writes that do reveal the diagram still must.
+test("a viewBox write on a waiting diagram is not a reveal", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+  const scheduled = sdk.timers.length;
+
+  pageChangeObserver(sdk).callback([{ type: "attributes", target: diagram.svg, attributeName: "viewBox" }]);
+  assert.equal(sdk.timers.length, scheduled, "the SDK's own pan and zoom buys no scan");
+
+  diagram.box.height = 300;
+  pageChangeObserver(sdk).callback([{ type: "attributes", target: diagram.svg, attributeName: "style" }]);
+  sdk.runFrames();
+  assert.equal(diagram.container.style.display, "none", "the same svg restyled by the page still embeds");
 });
 
 test("only a reveal tall enough to embed earns the retries back", () => {
@@ -2269,14 +2315,32 @@ test("a restyle elsewhere on the page is not a reason to scan for diagrams", () 
   assert.equal(pendingLayoutRetries(sdk).length, 0, "and restarts no retries");
 });
 
+// The filters either side of the container are matched by walking record chains, so they have to be
+// told apart from a restyle that shares the tree without being an ancestor, a descendant, or the
+// container itself. This is the over-matching guard; the test above it is the discriminating one.
+test("a restyle below an unrelated element is not a reason to scan for diagrams", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  // The waiting diagram is in the page, so a wrong answer cannot come from a detached node.
+  appendTo(sdk.body, diagram.container);
+  exhaustLayoutRetries(sdk);
+  const scheduled = sdk.timers.length;
+
+  const widget = appendTo(sdk.body, createElement("div"));
+  const leaf = appendTo(widget, createElement("span"));
+  pageChangeObserver(sdk).callback([{ type: "attributes", target: leaf, attributeName: "class" }]);
+
+  assert.equal(sdk.timers.length, scheduled, "a restyle inside an unrelated element buys no scan");
+  assert.equal(pendingLayoutRetries(sdk).length, 0, "and restarts no retries");
+});
+
 // A panel opening is a class change on an ancestor, not on the diagram's own container.
 test("a class change above a waiting diagram is what wakes it", () => {
   const diagram = mermaidDiagram({ width: 600, height: 0 });
   const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  const panel = appendTo(sdk.body, diagram.container);
   exhaustLayoutRetries(sdk);
 
-  const panel = createElement("div");
-  panel.contains = (node) => node === diagram.container;
   diagram.box.height = 300;
   pageChangeObserver(sdk).callback([{ type: "attributes", target: panel, attributeName: "class" }]);
   sdk.runFrames();

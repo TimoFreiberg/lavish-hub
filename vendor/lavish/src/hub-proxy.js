@@ -11,8 +11,10 @@ const maxBody = 64 * 1024;
 // silently budget an extra round trip into it. A mutation keeps one ceiling from
 // receipt, because abandoning it early hides whether it was delivered, while a
 // resource read only has to start answering quickly: a longer wait means a
-// wedged owner.
-const defaultLimits = { actionMs: 120000, resourceMs: 20000, identityMs: 5000 };
+// wedged owner. The session lookup runs before either of them and waits on the
+// store's own mutex, so it needs a bound too - no owner contact is bounded by a
+// phase that can stall on local state.
+const defaultLimits = { actionMs: 120000, lookupMs: 10000, resourceMs: 20000, identityMs: 5000 };
 
 function equal(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
@@ -215,6 +217,9 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
     // socket that already closed never emits the later events this handler waits
     // on, so the request stalls until its overall bound expires.
     const controller = new AbortController();
+    // Set only by a deadline that answers the request, and never cleared: the abort it is followed
+    // by must not tear down a socket this handler already wrote to, so clearing it once the response
+    // exists would turn the next abort into a reset. Any new setter has to call `stop()` too.
     let close, timeout, answerableDeadline = false;
     const stop = () => controller.abort();
     // A deadline that fires while a response can still be written must not tear
@@ -226,6 +231,23 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
       // must never be reported as a timeout.
       if (controller.signal.aborted) return;
       answerableDeadline = true;
+      stop();
+    };
+    // One slot, always replaced rather than added: a phase that arms a longer deadline must
+    // not leave the earlier one to fire behind it, which `settle` alone cannot prevent.
+    const armDeadline = (ms, fire) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(fire, ms);
+    };
+    // A lookup that never resolves is the store's mutex parked, not a wedged owner, so a
+    // resource read answers and keeps its socket instead of holding the connection for as
+    // long as the mutex stays stuck. Nothing was forwarded, so the status says nothing
+    // about the owner and the request never earns the 504 that means one.
+    const expireLookup = () => {
+      if (controller.signal.aborted) return;
+      answerableDeadline = true;
+      log("lookup-timeout");
+      if (!res.headersSent && !res.destroyed) res.status(502).json({ error: "Hub unavailable" });
       stop();
     };
     res.once("close", stop);
@@ -247,6 +269,14 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
       close?.();
     };
     try {
+      // The kind of deadline a stalled request gets depends only on the route, so it is decided
+      // from the request itself. Route validation still runs after the lookup, so an ended
+      // session keeps answering 404 ahead of 403/400 exactly as before.
+      const resourceRead = req.method === "GET" && route.startsWith(`/resources/${target.resourceKey}/`);
+      // A resource read is bounded from receipt as well: its lookup gets `lookupMs`, and the
+      // phases after it replace that deadline rather than adding to it. A mutation keeps one
+      // ceiling from receipt, so the lookup cannot push its own bound out.
+      armDeadline(resourceRead ? bounds.lookupMs : bounds.actionMs, resourceRead ? expireLookup : stop);
       markServerDiagnostic(res, "lookup-start");
       let session;
       try {
@@ -256,10 +286,17 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
       }
       if (!session || session.status === "ended" || targets.get(key) !== target) {
         if (targets.get(key) === target) targets.delete(key);
-        if (!res.destroyed) res.status(404).json({ error: "Hub unavailable" });
+        // A lookup deadline that already answered is complete on its own; writing over it would
+        // throw, and the browser would lose the status it can still use.
+        if (!res.destroyed && !res.headersSent) res.status(404).json({ error: "Hub unavailable" });
         return undefined;
       }
       if (controller.signal.aborted) return undefined;
+      // The lookup is over. A resource read's next bound is the identity challenge's own, which
+      // `authenticatedRequest` applies to that round trip alone, so nothing is armed here; charging
+      // it to the lookup budget would let a slow identity answer be mistaken for a stalled store. A
+      // mutation keeps the single ceiling it armed at receipt.
+      if (resourceRead) clearTimeout(timeout);
       const cors = req.headers.origin === "null" ? { "Access-Control-Allow-Origin": "null", Vary: "Origin" } : {};
       res.set({
         ...cors,
@@ -303,10 +340,9 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
         }
         res.set("Content-Security-Policy", sandbox);
       } else return res.status(404).json({ error: "Not found" });
-      // A mutation is bounded from receipt, so a stalled upload cannot hold the
-      // request open. A resource read arms its deadline once it forwards: the
-      // identity round trip above is budgeted on its own.
-      if (action) timeout = setTimeout(stop, bounds.actionMs);
+      // A mutation is already bounded from receipt, so a stalled upload cannot hold the request
+      // open. A resource read replaces its lookup deadline once it forwards: the identity round
+      // trip above is budgeted on its own.
       try {
         const chunks = [];
         let size = 0;
@@ -331,7 +367,7 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
             log("forward");
             // The owner is now being asked. A resource read that does not start
             // answering within its own deadline is the wedged-owner case.
-            if (!action) timeout = setTimeout(expireAnswerable, bounds.resourceMs);
+            if (!action) armDeadline(bounds.resourceMs, expireAnswerable);
           },
           bounds.identityMs,
         );
@@ -340,8 +376,7 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
         if (!action) {
           // Headers arrived, so the owner is answering. From here the ceiling
           // only guards a dead transfer, never a slow client.
-          clearTimeout(timeout);
-          timeout = setTimeout(stop, bounds.actionMs);
+          armDeadline(bounds.actionMs, stop);
         }
         const upstream = result.response;
         res.status(upstream.statusCode || 502);

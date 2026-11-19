@@ -3289,10 +3289,17 @@ export function createArtifactSdk(
   // `transform` or `zoom`, which a ResizeObserver never sees, and the class, style, or state
   // attribute that drives it is the only record left on the page. That is why every attribute is
   // reported rather than a whitelist - `data-state="open"` and `aria-expanded` drive the same
-  // reveals as `class` - but a record only earns a scan when it lands on, or above, a diagram that
-  // is actually waiting. Without that filter a scroll-linked class toggle or a progress bar's
-  // `style.width` buys a full-document query per frame for as long as one diagram sits behind a
-  // disclosure nobody opened.
+  // reveals as `class` - but a record only earns a scan when it lands on, above, or inside a
+  // diagram that is actually waiting. Without that filter a scroll-linked class toggle or a
+  // progress bar's `style.width` buys a full-document query per frame for as long as one diagram
+  // sits behind a disclosure nobody opened.
+  // "Inside" carries the same weight as "on": a reveal often writes the animated `transform` on
+  // the svg or on a wrapper the page put around it, and the box the watch waits on is the
+  // container that holds them.
+  const onWaitingDiagramChain = (target) => {
+    for (let node = target; node; node = node.parentElement) if (whiteboardLayoutWatches.has(node)) return true;
+    return false;
+  };
   const mermaidObserver = new MutationObserver((records) => {
     const changes = records || [];
     let relevant = changes.some((record) => record?.type === "childList");
@@ -3300,9 +3307,18 @@ export function createArtifactSdk(
       relevant = changes.some((record) => {
         const target = record?.target;
         if (!target) return false;
-        for (const container of whiteboardLayoutWatches.keys()) {
-          if (target === container || target.contains?.(container) === true) return true;
-        }
+        // Pan and zoom rewrite the live `viewBox` on every wheel and pointer move, and a diagram
+        // that is too short to embed can sit under the pointer. A viewBox cannot be the reveal a
+        // waiting diagram waits for - it changes what is drawn inside the box the embed decision
+        // measures, never the box, and a viewBox that did resize the box arrives on the
+        // ResizeObserver instead - so counting it would buy a full-document scan per input event.
+        if (String(record.attributeName || "").toLowerCase() === "viewbox") return false;
+        // One walk of the record's own ancestors answers "on" and "inside", so a record inside a
+        // waiting diagram costs its depth rather than a containment test per watched container.
+        if (onWaitingDiagramChain(target)) return true;
+        // The element that reveals a diagram can also be a wrapper it sits inside, and only the
+        // container itself can answer that, because the target holds the container somewhere.
+        for (const container of whiteboardLayoutWatches.keys()) if (target.contains?.(container) === true) return true;
         return false;
       });
     }
