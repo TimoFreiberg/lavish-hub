@@ -1160,3 +1160,87 @@ test('a tab hidden during the preflight leaves the snapshot to the visibility ca
   assert.equal(await page.getByText('No commits in this range.').count(), 1);
   assert.ok(statusCalls >= 2);
 });
+
+test('a hidden tab whose warm attempt failed waits for visibility instead of asking again', { timeout: 30000 }, async t => {
+  let statusCalls = 0, snapshots = 0, failing = true;
+  const transport = await createHubTransport({
+    status: () => { statusCalls++; if (failing) throw new Error('Hub actions are unreachable.'); return { available: true, selected: 'commits' }; },
+    documents: () => ({ documents: [] }), snapshot: () => { snapshots++; return commits(); },
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport, { hidden: true });
+  await assertEventually(async () => assert.equal(await page.locator('#connection').textContent(), 'Hub actions are unreachable.'));
+  // The warm attempt is spent by failing, so nothing keeps checking in the background.
+  await page.waitForTimeout(2500);
+  assert.equal(statusCalls, 1);
+  assert.equal(snapshots, 0);
+  await page.evaluate(() => document.querySelector('#refresh').click());
+  await page.waitForTimeout(400);
+  assert.equal(statusCalls, 1);
+  assert.equal(await page.locator('#connection').textContent(), 'Hub actions are unreachable.');
+  // Showing the tab catches up at once, without waiting for a poll.
+  failing = false;
+  await setTabHidden(page, false);
+  await page.getByText('No commits in this range.').waitFor({ timeout: 1000 });
+  assert.equal(await page.locator('#connection').textContent(), 'Connected');
+  assert.equal(snapshots, 1);
+});
+
+test('a failed preflight keeps the focused description draft and its caret', { timeout: 30000 }, async t => {
+  let failing = false;
+  const transport = await createHubTransport({
+    status: () => { if (failing) throw new Error('Hub actions are unreachable.'); return { available: true, selected: 'commits' }; },
+    documents: () => ({ documents: [] }),
+    navigate: ({ id }) => ({ selected: id }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [{ changeId: 'c'.repeat(32), commitId: 'b'.repeat(40), description: 'Original' }] }),
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  const editor = page.getByRole('textbox', { name: 'Description cccccccccccc' });
+  await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
+  await editor.fill('Draft text');
+  await editor.evaluate(node => node.setSelectionRange(4, 4));
+  // Re-entering the view while the check fails leaves the owed snapshot request unspent,
+  // and the notice that stops claiming to load renders over the editor being typed in.
+  failing = true;
+  await page.evaluate(() => [...document.querySelectorAll('#navigation button')].find(node => node.textContent === 'Commits').click());
+  await assertEventually(async () => assert.equal(await page.locator('#connection').textContent(), 'Hub actions are unreachable.'));
+  assert.equal(await page.getByText('Loading repository snapshot…').count(), 0);
+  assert.equal(await editor.inputValue(), 'Draft text');
+  assert.equal(await page.evaluate(() => [document.activeElement?.getAttribute('aria-label'), document.activeElement?.selectionStart, document.activeElement?.selectionEnd].join(' ')), 'Description cccccccccccc 4 4');
+});
+
+test('the Changes view asks for a snapshot at once and shows a failed one as unavailable', { timeout: 30000 }, async t => {
+  const ids = ['a', 'b', 'd'].map(character => character.repeat(40));
+  let head = ids[1], failing = false, selected = 'commits';
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    snapshot: () => {
+      if (failing) throw new Error('Snapshot failed');
+      return { base: ids[0], head, commits: [], patch: '' };
+    },
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByText('No commits in this range.').waitFor();
+  await page.evaluate(() => { globalThis.mountLavishDiff = () => ({ hide() {}, update: value => (globalThis.__diffUpdates ||= []).push(value) }); });
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  // Entering the view asks for its snapshot now instead of at the next poll.
+  await page.getByText(`--from ${ids[0].slice(0, 12)} --to ${ids[1].slice(0, 12)}`).waitFor({ timeout: 1200 });
+  await page.locator('.hub-diff').waitFor({ state: 'attached', timeout: 2000 });
+  failing = true; head = ids[2];
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  // The failed snapshot replaces the diff rather than leaving a stale patch on screen.
+  await page.getByText('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.').waitFor({ timeout: 3000 });
+  assert.equal(await page.locator('.hub-diff').count(), 0);
+  assert.equal(await page.locator('#connection').textContent(), 'Snapshot failed');
+  failing = false;
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.getByText(`--from ${ids[0].slice(0, 12)} --to ${ids[2].slice(0, 12)}`).waitFor({ timeout: 3000 });
+  await assertEventually(async () => assert.equal(await page.evaluate(() => globalThis.__diffUpdates.at(-1).to), ids[2]));
+  assert.equal(await page.locator('#connection').textContent(), 'Connected');
+});

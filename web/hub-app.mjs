@@ -38,7 +38,7 @@ async function requireBundle(name, globalName, view, generation) {
 }
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
-let refreshTimer, rendered = false, refreshRequested = false, snapshotForce = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false, snapshotPreflightFailed = false;
+let refreshTimer, rendered = false, warmed = false, refreshRequested = false, snapshotForce = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false, snapshotPreflightFailed = false;
 // Loading is an intent that belongs to a snapshot request, not to whichever refresh
 // happens to be running: a view entered while a document refresh is in flight owes a
 // request that refresh never issues, and only settling a request can end the notice.
@@ -175,7 +175,7 @@ async function select(id) {
       // for a current snapshot now instead of waiting for the next poll. A failed
       // earlier snapshot is retried the same way.
       if (needsSnapshot(id)) requestRefresh();
-      await renderView();
+      await renderViewKeepingFocus();
       await synchronization;
       return;
     }
@@ -195,13 +195,34 @@ async function select(id) {
   finally { if (revision === navigationRevision) { navigationPending = false; if (leavesPage && !leavingConfirmed) resumeRefresh(); } }
 }
 const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
+// A rerender replaces the focused editor, so one made only to update a notice carries the
+// caret into the replacement field. Returns the generation it rendered, or null when a
+// newer render took its place.
+async function renderViewKeepingFocus() {
+  const active = document.activeElement;
+  const label = active?.closest('#view') && active.getAttribute('aria-label');
+  const selection = label && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
+  const rendering = renderView(); const generation = renderGeneration;
+  await rendering;
+  if (generation !== renderGeneration) return null;
+  if (label) {
+    const replacement = [...document.querySelectorAll('#view [aria-label]')].find(node => node.getAttribute('aria-label') === label);
+    if (replacement) { replacement.focus(); if (selection) replacement.setSelectionRange(...selection); }
+  }
+  return generation;
+}
 async function refresh(force = false) {
   // A forced snapshot outlives the call that asked for it: the button and a save both
   // mean "the next snapshot must be uncached", and only the request below spends it.
   if (force) snapshotForce = true;
-  // The first refresh runs even in a hidden tab so a page opened in the background
-  // has content when it is shown; later polls wait for visibility instead.
-  if (refreshPaused || busy || (tabHidden && rendered)) { queueRefresh(); return; } busy = true;
+  // The first refresh runs even in a hidden tab so a page opened in the background has
+  // content when it is shown, and only that one: it is spent whether or not it succeeds,
+  // because a page that never rendered has no rendered state to tell the warm attempt
+  // from a background poll. Later polls wait for visibility instead.
+  const warm = tabHidden && !warmed;
+  if (refreshPaused || busy || (tabHidden && !warm)) { queueRefresh(); return; }
+  warmed = true;
+  busy = true;
   // This run honours the owed follow-up; anything asked for while it runs is queued again.
   refreshRequested = false;
   const navigationAtStart = navigationRevision, navigationPendingAtStart = pendingOwnerNavigation > 0;
@@ -210,9 +231,9 @@ async function refresh(force = false) {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
     if (refreshPaused) return;
     // The tab went hidden while status and documents were in flight. A snapshot costs
-    // several jj runs, so a refresh that is no longer being watched leaves it to the
-    // visibility catch-up rather than starting it in the background.
-    if (tabHidden && rendered) return;
+    // several jj runs, so only the warm attempt asked for in the background keeps going;
+    // a refresh that is no longer being watched leaves it to the visibility catch-up.
+    if (tabHidden && !warm) return;
     let oldSelected = selected, oldDocuments = JSON.stringify(documents);
     const oldSnapshot = snapshotContent(snapshot), snapshotWasLoading = snapshotLoading();
     documents = list.documents;
@@ -247,10 +268,19 @@ async function refresh(force = false) {
     if (initialRender) { renderNav(); oldSelected = selected; oldDocuments = JSON.stringify(documents); await renderView(); }
     const result = await snapshotResult;
     if (navigationAtStart !== navigationRevision) oldSelected = selected;
-    if (refreshPaused) return;
+    // A snapshot that settles while the page is leaving is still the newest repository
+    // state, so keep it with the generation it belongs to and let the resumed page start
+    // from it. Both have to move together: advancing the generation alone would clear a
+    // save's awaiting-snapshot watermark against content older than the save. Nothing
+    // renders, reads, or navigates here, and a failed snapshot stays unsettled so the
+    // catch-up retries it.
+    if (refreshPaused) {
+      if (request && result && !result.error) { snapshot = result.value; snapshotApplied = request; }
+      return;
+    }
     // A settled request is spent whether or not it succeeded: the view has to drop its
-    // loading notice and say the snapshot is unavailable. A paused refresh leaves it
-    // unsettled so the catch-up asks again.
+    // loading notice and say the snapshot is unavailable. Only a paused or superseded
+    // refresh leaves it unsettled, and the pause path above keeps a successful one.
     if (request) snapshotApplied = request;
     if (result?.error) { snapshot = undefined; status(result.error.message); }
     else {
@@ -288,25 +318,21 @@ async function refresh(force = false) {
     // before any snapshot exists must still replace the loading notice, and one
     // that settles back onto unchanged content must drop the refreshing notice.
     if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (needsSnapshot(selected) && (oldSnapshot !== snapshotContent(snapshot) || snapshotWasLoading !== snapshotLoading()))) {
-      const active = document.activeElement;
-      const label = active?.closest('#view') && active.getAttribute('aria-label');
-      const selection = label && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
-      const rendering = renderView();
-      const generation = renderGeneration;
-      await rendering;
-      if (generation !== renderGeneration || documentNavigation !== navigationRevision) return;
+      const generation = await renderViewKeepingFocus();
+      if (generation === null || documentNavigation !== navigationRevision) return;
       const createdFrame = frames.get(selected);
       if (!frame && createdFrame && htmlData) { createdFrame.version = htmlData.version; createdFrame.hash = htmlData.hash; }
-      if (label) {
-        const replacement = [...document.querySelectorAll('#view [aria-label]')].find(node => node.getAttribute('aria-label') === label);
-        if (replacement) { replacement.focus(); if (selection) replacement.setSelectionRange(...selection); }
-      }
     }
   } catch (error) {
     status(error.message);
     // The preflight failed before any snapshot request could be issued: the owed request
     // has to stop claiming to load, while it stays queued so the next poll asks again.
-    if (snapshotQueued && !snapshotPreflightFailed) { snapshotPreflightFailed = true; if (needsSnapshot(selected)) await renderView(); }
+    // The notice renders over the draft being typed, so it keeps that editor's focus, and
+    // a render that fails here cannot stand in for the preflight error it reports.
+    if (snapshotQueued && !snapshotPreflightFailed) {
+      snapshotPreflightFailed = true;
+      if (needsSnapshot(selected)) try { await renderViewKeepingFocus(); } catch { }
+    }
     if (refreshPaused && pauseRevision === refreshPauseRevision && !navigationPending && !leavingConfirmed) resumeRefresh();
   }
   finally {
