@@ -221,6 +221,59 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     release();
     await page.close();
   }
+  {
+    await request('navigate', { id: 'tasks' });
+    const page = await browser.newPage();
+    await page.addInitScript(() => { Object.defineProperty(window, 'navigation', { value: undefined }); });
+    await page.goto(`${browserBase}/hub.html`);
+    await page.evaluate(() => { window.blockLeave = e => { e.preventDefault(); e.returnValue = ''; }; window.addEventListener('beforeunload', window.blockLeave); });
+    const dialog = page.waitForEvent('dialog');
+    await page.getByRole('button', { name: 'inside.html', exact: true }).click({ noWaitAfter: true });
+    await (await dialog).dismiss();
+    await page.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
+    const notice = 'Navigation may still be in progress; select a destination to continue';
+    await page.getByText(notice).waitFor();
+    let failSelection = true, snapshotFailure = false, workspaceUnavailable = false, competing = 0, statusPolls = 0;
+    page.on('request', req => { if (req.isNavigationRequest() && req.frame() === page.mainFrame()) competing++; });
+    await page.route('**/action', async route => {
+      const operation = route.request().postDataJSON()?.operation;
+      if (operation === 'navigate' && failSelection) return route.fulfill({ status: 503, json: { error: 'Selection failed' } });
+      if (operation === 'snapshot' && snapshotFailure) return route.fulfill({ status: 503, json: { error: 'Snapshot failed' } });
+      if (operation === 'status') {
+        statusPolls++;
+        if (workspaceUnavailable) {
+          const response = await route.fetch(), body = await response.json();
+          body.result.available = false;
+          return route.fulfill({ response, json: body });
+        }
+      }
+      return route.continue();
+    });
+    await page.getByRole('button', { name: 'inside.html', exact: true }).click();
+    await page.getByText('Selection failed', { exact: false }).waitFor();
+    assert.match(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
+    snapshotFailure = true;
+    await page.getByText('Snapshot failed', { exact: false }).waitFor();
+    assert.match(await page.locator('#connection').textContent(), /Selection failed.*Snapshot failed.*Navigation may still be in progress/);
+    snapshotFailure = false; workspaceUnavailable = true;
+    await page.getByText('Workspace unavailable', { exact: false }).waitFor();
+    assert.match(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
+    workspaceUnavailable = false;
+    const baseline = statusPolls;
+    await request('navigate', { id: 'other-html' });
+    for (let i = 0; i < 200 && statusPolls < baseline + 2; i++) await delay(30);
+    assert.ok(statusPolls >= baseline + 2, 'remote selection was polled');
+    assert.equal(competing, 0, 'failed selection must not permit a competing navigation without a draft');
+    assert.match(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
+    failSelection = false;
+    await page.getByRole('button', { name: 'Changes', exact: true }).click();
+    await page.getByRole('button', { name: 'Changes', exact: true }).waitFor();
+    for (let i = 0; i < 200 && (await page.locator('#connection').textContent()).includes(notice); i++) await delay(30);
+    assert.doesNotMatch(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
+    await request('navigate', { id: 'other-html' });
+    await page.waitForURL(`**/${otherSibling}`);
+    await page.close();
+  }
   for (const fromHub of [true, false]) for (const disableNavigationApi of [true, false]) {
     await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
     const cancelled = await browser.newPage();

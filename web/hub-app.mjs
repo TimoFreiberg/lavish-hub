@@ -60,7 +60,12 @@ async function action(operation, body = {}) {
   return data.result;
 }
 let navigationError = '', connectionStatus = 'Connecting…';
-function status(text) { connectionStatus = text; document.querySelector('#connection').textContent = navigationError || (navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : connectionStatus); }
+function status(text) {
+  connectionStatus = text;
+  const notice = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : '';
+  const connection = (navigationError || notice) && ['Connected', 'Connecting…'].includes(connectionStatus) ? '' : connectionStatus;
+  document.querySelector('#connection').textContent = [navigationError, connection, notice].filter(Boolean).join(' · ');
+}
 function renderNav() {
   const nav = document.querySelector('#navigation'); nav.replaceChildren();
   for (const [id, label] of [...Object.entries(labels), ...documents.map(doc => [doc.id, doc.title])]) {
