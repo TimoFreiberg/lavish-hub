@@ -47,8 +47,22 @@ proxy and owner; compare timestamps to relate requests. `arrive` marks receipt,
 `forward` means the proxy has authenticated the owner and is about to send the
 request, and `upstream-response`, `finish`, and `close` mark later stages. The
 proxy handles preflight itself, so an OPTIONS request need not reach the owner.
-A `close` without `finish` indicates an interrupted response. The diagnostics do
-not include URLs, headers, request bodies, or credentials.
+A `close` without `finish` indicates an interrupted response. Server-side lines
+also cover all HTTP methods and use fixed route classes: `proxy-action`,
+`proxy-resource`, `artifact-page`, `artifact-asset`, and `other`. These classes
+are based on the request shape, not the eventual handler; an unusual artifact
+filename may be classified differently from how it is served. Server `arrive`
+precedes the host check. `lookup-start` and `lookup-end` surround session lookup
+for proxy requests and path-addressed artifacts when those requests reach that
+step. A missing end can indicate a pending lookup, a lookup failure, a closed
+connection, or a dropped log line. Other work, including compression, has no
+individual phase markers. A request with arrival but no later line may still be
+pending, but cannot locate the delay precisely. Logs are best effort and lines
+may be dropped under stderr backpressure. IDs are local to each process and
+trace type; they cannot correlate server, proxy, and owner records directly.
+The diagnostic lines do not include URLs, paths, keys, queries, hosts, headers,
+request bodies, errors, or credentials. Other server output can contain private
+data, so inspect and filter before sharing.
 
 For remote development, forward the demo URL's port (4399 by default). The UI,
 actions and published document assets all use that browser-facing address, even

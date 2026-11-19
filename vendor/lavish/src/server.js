@@ -101,6 +101,7 @@ import {
 import { detectTailscale } from "./tailscale.js";
 import { isArtifactPathError, isHtmlPath, resolveAllowedArtifactFile } from "./artifact-path.js";
 import { canonicalFile, SessionStore, sessionKey } from "./session-store.js";
+import { createServerDiagnostics, markServerDiagnostic } from "./server-diagnostics.js";
 import { AsyncMutex } from "./async-mutex.js";
 import { generateSharePassword } from "./share-password.js";
 import {
@@ -831,6 +832,8 @@ export async function serve({
     res.status(403).send("Forbidden");
     return true;
   }
+
+  if (env.LAVISH_HUB_DIAGNOSTICS === "1") app.use(createServerDiagnostics({ enabled: true }));
 
   if (!allowAnyHostname) {
     app.use((req, res, next) => {
@@ -2548,7 +2551,9 @@ export async function serve({
   async function serveArtifactPath(req, res, requestedPath = undefined) {
     const key = req.params[0];
     const assetPath = requestedPath === undefined ? req.params[1] : requestedPath;
+    markServerDiagnostic(res, "lookup-start");
     const session = await store.findByKey(key);
+    markServerDiagnostic(res, "lookup-end");
     if (!session) {
       sendSessionNotFound(req, res);
       return;

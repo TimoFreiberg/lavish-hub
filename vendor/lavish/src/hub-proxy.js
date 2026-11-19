@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import { markServerDiagnostic } from "./server-diagnostics.js";
 
 const secretPattern = /^[a-f0-9]{64}$/;
 const sessionPattern = /^[a-f0-9]{16}$/;
@@ -190,7 +191,9 @@ export function createHubProxy({ store, events, jsonParser }) {
       return res.status(404).json({ error: "Hub unavailable" });
     }
     if (req.headers.origin && req.headers.origin !== "null") return res.status(403).json({ error: "Invalid origin" });
+    markServerDiagnostic(res, "lookup-start");
     const session = await store.findByKey(key);
+    markServerDiagnostic(res, "lookup-end");
     if (!session || session.status === "ended" || targets.get(key) !== target) {
       if (targets.get(key) === target) targets.delete(key);
       return res.status(404).json({ error: "Hub unavailable" });
