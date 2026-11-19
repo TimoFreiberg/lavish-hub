@@ -42,6 +42,14 @@ test('snapshot requests share cached work and refresh after an external rewrite'
   const [first, second] = await Promise.all([jj.snapshot(), jj.snapshot()]);
   assert.strictEqual(first, second);
   assert.strictEqual(await jj.snapshot(), first);
+  await new Promise(resolve => setTimeout(resolve, 2100));
+  assert.ok(first.version);
+  assert.deepEqual(await jj.snapshot({ knownVersion: first.version }), { unchanged: true });
+  assert.strictEqual(await jj.snapshot(), first, 'reuse the snapshot after checking the operation');
+  const forced = await jj.snapshot({ force: true, knownVersion: first.version });
+  assert.equal(forced.operationId, first.operationId);
+  assert.notEqual(forced.version, first.version);
+  assert.strictEqual(await jj.snapshot({ knownVersion: first.version }), forced);
   await writeFile(path.join(cwd, 'file'), 'external rewrite\n');
   run(cwd, 'jj', 'describe', '-m', 'external');
   const refreshed = await jj.snapshot({ force: true });

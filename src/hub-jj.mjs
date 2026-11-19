@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { modelPatch } from './diff/model.mjs';
 
@@ -53,7 +54,10 @@ async function rows(cwd, op, revset) {
 }
 
 export async function readHubSnapshot(cwd, { afterMetadata } = {}) {
-  const op = await operation(cwd);
+  return readSnapshotAt(cwd, await operation(cwd), afterMetadata);
+}
+
+async function readSnapshotAt(cwd, op, afterMetadata) {
   const baseRows = await rows(cwd, op, 'fork_point(trunk() | @)');
   const headRows = await rows(cwd, op, '@');
   if (baseRows.length !== 1 || headRows.length !== 1) throw new Error('The jj base and working-copy head must each resolve to one commit');
@@ -103,20 +107,28 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
       if (result.length !== 1) throw new Error('Working-copy parent unavailable');
       return result[0].description.split('\n')[0].slice(0, 240) || '(no description)';
     },
-    async snapshot({ force = false } = {}) {
+    async snapshot({ force = false, knownVersion } = {}) {
       await checkWorkspace();
+      if (force) knownVersion = undefined;
       while (true) {
-        if (flight) { await flight; force = false; continue; }
-        if (!force && cached && Date.now() < expires) return cached;
+        if (flight) { await flight; continue; }
+        if (!force && cached && Date.now() < expires) return knownVersion === cached.version ? { unchanged: true } : cached;
         const started = generation;
-        const refresh = readHubSnapshot(cwd).then(value => {
+        const refresh = (async () => {
+          const op = await operation(cwd);
+          if (generation !== started) return;
+          if (!force && cached?.operationId === op) {
+            expires = Date.now() + 2000;
+            return;
+          }
+          const value = { ...await readSnapshotAt(cwd, op), version: randomUUID() };
           if (generation === started) {
             cached = value; expires = Date.now() + 2000;
             snapshots.delete(value.operationId);
             snapshots.set(value.operationId, { base: value.base, head: value.head, files: modelPatch(value.patch).map(({ oldPath, newPath, parseError, status, oldMode, newMode }) => ({ oldPath, newPath, parseError, status, oldMode, newMode })) });
             while (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value);
           }
-        });
+        })();
         flight = refresh;
         try { await refresh; } finally { if (flight === refresh) flight = undefined; }
         force = false;

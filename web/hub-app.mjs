@@ -287,7 +287,7 @@ async function refresh(force = false) {
     // a refresh that is no longer being watched leaves it to the visibility catch-up.
     if (tabHidden && !warm) return;
     let oldSelected = selected, oldDocuments = JSON.stringify(documents);
-    const oldSnapshot = snapshotContent(snapshot), snapshotWasLoading = snapshotLoading();
+    const oldSnapshot = snapshot, snapshotWasLoading = snapshotLoading();
     documents = list.documents;
     const remoteDoc = documents.find(item => item.id === state.selected);
     const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
@@ -315,7 +315,9 @@ async function refresh(force = false) {
     // failed snapshot does not force every later poll.
     const forced = snapshotForce;
     if (request) { snapshotQueued = false; snapshotPreflightFailed = false; snapshotForce = false; }
-    const snapshotResult = request ? action('snapshot', { force: forced }).then(value => ({ value }), error => ({ error })) : null;
+    const snapshotResult = request ? action('snapshot', { force: forced, knownVersion: forced ? undefined : oldSnapshot?.version })
+      .then(value => ({ value: value.unchanged === true ? oldSnapshot : value }))
+      .catch(error => ({ error })) : null;
     const initialRender = !rendered;
     if (initialRender) { renderNav(); oldSelected = selected; oldDocuments = JSON.stringify(documents); await renderView(); }
     const result = await snapshotResult;
@@ -376,7 +378,7 @@ async function refresh(force = false) {
     // that settles back onto unchanged content must drop the refreshing notice. A
     // snapshot kept across a pause compares equal to its own content, so the flag it
     // left behind is what tells the resumed view to render it.
-    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (snapshotUnrendered && needsSnapshot(selected)) || (needsSnapshot(selected) && (oldSnapshot !== snapshotContent(snapshot) || snapshotWasLoading !== snapshotLoading()))) {
+    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (snapshotUnrendered && needsSnapshot(selected)) || (needsSnapshot(selected) && ((oldSnapshot !== snapshot && snapshotContent(oldSnapshot) !== snapshotContent(snapshot)) || snapshotWasLoading !== snapshotLoading()))) {
       const generation = await renderViewKeepingFocus();
       snapshotUnrendered = false;
       if (generation === null || documentNavigation !== navigationRevision) return;

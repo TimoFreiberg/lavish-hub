@@ -37,6 +37,34 @@ test('navigation renders before snapshot and serializes delayed owner updates', 
   assert.equal(selected, 'commits');
 });
 
+test('unchanged snapshot polls keep the rendered repository and manual refresh fetches it again', { timeout: 30000 }, async t => {
+  const requests = [];
+  const fullSnapshot = { version: 'initial', base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] };
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    snapshot: ({ force, knownVersion }) => {
+      requests.push({ force, knownVersion });
+      return knownVersion === fullSnapshot.version ? { unchanged: true } : fullSnapshot;
+    },
+  });
+  t.after(() => transport.close());
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(() => browser.close());
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
+  const empty = page.getByText('No commits in this range.');
+  await empty.waitFor();
+  await empty.evaluate(node => { node.dataset.retained = 'true'; document.querySelector('#connection').textContent = 'Waiting for poll'; });
+  const unchanged = await page.waitForResponse(response => response.request().method() === 'POST' && response.url() === `${transport.url}/action` && response.request().postDataJSON().knownVersion === fullSnapshot.version, { timeout: 5000 });
+  assert.deepEqual(await unchanged.json(), { result: { unchanged: true } });
+  await page.waitForFunction(() => document.querySelector('#connection').textContent === 'Connected');
+  assert.equal(await empty.getAttribute('data-retained'), 'true');
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await assertEventually(() => assert.ok(requests.some(({ force, knownVersion }) => force && knownVersion === undefined)));
+  await empty.waitFor();
+});
+
 test('cross-page navigation pauses pending refresh and resumes after failure', { timeout: 30000 }, async t => {
   let releaseStatus, releaseNavigation, statusCalls = 0, snapshots = 0, navigations = 0;
   const statusGate = new Promise(resolve => { releaseStatus = resolve; });

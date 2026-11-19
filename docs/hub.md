@@ -159,8 +159,11 @@ it has content when it is shown, then waits; that first poll is spent even when 
 fails, so a page that never rendered waits for visibility instead of retrying in
 the background. Only Commits and Changes request the repository snapshot; the other
 views poll selection and document lists alone, and entering either repository view
-asks for a snapshot at once. A failed snapshot replaces the previous one with an
-unavailable notice, and entering the view again or the next poll retries it. A
+asks for a snapshot at once. If the jj operation is unchanged, the owner reuses
+its snapshot and sends only an unchanged reply to a browser that already has it.
+Use **Refresh** to rebuild the snapshot even if the operation is unchanged. If
+a snapshot fails, the view shows an unavailable notice and retries on the next
+poll or when you enter the view again. A
 status or document check that fails before the snapshot is requested shows the same
 notice, and the next check asks for the snapshot. A tab that goes hidden while that
 check runs starts no snapshot; it asks when shown again.
