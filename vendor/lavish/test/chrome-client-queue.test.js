@@ -9001,6 +9001,151 @@ test("protocol 1 availability probes stay on the captured authored destination",
   assert.equal(failure.body.page_proof, "proof-details");
 });
 
+// A probe request that accepts the connection and then says nothing, as a wedged server would. The
+// record carries the signal so a test can see the probe withdrawn rather than merely ignored.
+function stalledArtifactProbe(probes) {
+  return (url, init = {}) => {
+    if (!String(url).includes("probe=1")) return Promise.resolve({ ok: true, json: async () => ({}) });
+    const probe = { url: String(url), signal: init.signal, aborted: false };
+    probes.push(probe);
+    return new Promise((resolve, reject) => {
+      probe.signal?.addEventListener("abort", () => {
+        probe.aborted = true;
+        reject(new Error("aborted"));
+      });
+    });
+  };
+}
+
+test("an availability probe that never answers is abandoned without a report", async () => {
+  const probes = [];
+  const posts = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: (url, init = {}) => {
+      posts.push({ url: String(url) });
+      return stalledArtifactProbe(probes)(url, init);
+    },
+  });
+
+  chrome.element("artifact").dispatch("load");
+  chrome.runTimers(8000);
+  await flushPromises();
+  assert.equal(probes.length, 1, "the silence timer issued one probe");
+
+  // A server that accepted the request but never sent headers would otherwise hold the probe open
+  // for as long as the tab lives.
+  chrome.runTimers(6000);
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(probes[0].aborted, true, "a stalled probe is withdrawn instead of left holding the request");
+  assert.equal(
+    posts.some((post) => post.url === "/api/abc/artifact-failures"),
+    false,
+    "a probe that never answered proves nothing about the artifact",
+  );
+});
+
+test("an availability probe cancels the body it never reads", async () => {
+  let cancelled = 0;
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url) =>
+      String(url).includes("probe=1")
+        ? {
+            ok: true,
+            status: 200,
+            body: {
+              cancel() {
+                cancelled += 1;
+              },
+            },
+          }
+        : { ok: true, json: async () => ({}) },
+  });
+
+  chrome.element("artifact").dispatch("load");
+  chrome.runTimers(8000);
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(cancelled, 1, "the probe reads only the status, so the document body is cancelled");
+});
+
+test("an availability probe is withdrawn when a newer load supersedes it", async () => {
+  const probes = [];
+  const posts = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: (url, init = {}) => {
+      posts.push({ url: String(url) });
+      return stalledArtifactProbe(probes)(url, init);
+    },
+  });
+
+  chrome.element("artifact").dispatch("load");
+  chrome.runTimers(8000);
+  await flushPromises();
+  assert.equal(probes.length, 1);
+
+  chrome.eventSource().listeners.get("reload")();
+  await flushPromises();
+  await flushPromises();
+
+  assert.equal(probes[0].aborted, true, "a probe for a retired load is not left running");
+  assert.equal(
+    posts.some((post) => post.url === "/api/abc/artifact-failures"),
+    false,
+    "a superseded probe never reports against the artifact the user is now looking at",
+  );
+});
+
+test("an availability probe is withdrawn once the artifact starts talking", async () => {
+  const probes = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: stalledArtifactProbe(probes),
+  });
+
+  chrome.element("artifact").dispatch("load");
+  chrome.runTimers(8000);
+  await flushPromises();
+  assert.equal(probes.length, 1);
+
+  await sendDocumentMeta(chrome, { title: "The artifact is alive" });
+  await flushPromises();
+
+  assert.equal(probes[0].aborted, true, "an artifact that answers on its own makes the request pointless");
+});
+
+test("a retired probe's cleanup never disarms the probe that replaced it", async () => {
+  const probes = [];
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: stalledArtifactProbe(probes),
+  });
+
+  chrome.element("artifact").dispatch("load");
+  chrome.runTimers(8000);
+  await flushPromises();
+  assert.equal(probes.length, 1);
+
+  // Re-arm and fire the next probe in one synchronous stretch: the retired probe's cleanup is
+  // queued behind the new controller's installation, which is exactly the race it must not lose.
+  chrome.element("artifact").dispatch("load");
+  chrome.runTimers(8000);
+  await flushPromises();
+
+  assert.equal(probes.length, 2, "the newer probe starts");
+  assert.equal(probes[0].aborted, true, "only one probe is ever in flight");
+
+  await sendDocumentMeta(chrome, { title: "Alive" });
+  await flushPromises();
+
+  assert.equal(probes[1].aborted, true, "the newer probe still owns the slot the older one released");
+});
+
 test("protocol 1 fatal probes retain the accepted destination before SDK binding", async () => {
   const requests = [];
   const storage = new Map([

@@ -337,6 +337,10 @@ const CHROME_RESTART_PROBE_MS = 100;
 const CHROME_RESTART_SLOW_PROBE_MS = 500;
 // A probe must always settle, so the control that is waiting on it always comes back.
 const HEALTH_PROBE_TIMEOUT_MS = 4000;
+// The availability probe runs when the artifact is already suspect, so it must not be able to become
+// the thing that hangs: a server that accepts the connection and then says nothing would otherwise
+// hold this request - and its connection slot - for as long as the tab lives.
+const ARTIFACT_AVAILABILITY_PROBE_TIMEOUT_MS = 6000;
 // A send starts before the artifact snapshot arrives and ends only when /prompts acknowledges the
 // batch. Bound that whole wait so a missing SDK response or a browser/network stall can never look
 // like a dead button while the user's queue remains safely stored in this tab.
@@ -378,6 +382,8 @@ let artifactLoadRecoveryAttempt = 0;
 let artifactLoadRecoveryTimer;
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let artifactSilenceTimer;
+/** @type {AbortController | null} */
+let artifactProbeController = null;
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let copyHintTimer;
 /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -3739,6 +3745,15 @@ function artifactProbeSrc(destination, revision, loadToken) {
   );
 }
 
+// The probe is the one request nothing downstream waits on, so nothing downstream would ever clean it
+// up either. Withdraw it the moment it stops being worth asking: the artifact answers for itself, or a
+// newer load takes the question over.
+function abortArtifactAvailabilityProbe() {
+  const controller = artifactProbeController;
+  artifactProbeController = null;
+  controller?.abort();
+}
+
 async function probeArtifactAvailability(context) {
   const { loadToken, revision, definitiveBinding, pendingBinding, destination } = context;
   if (
@@ -3748,8 +3763,20 @@ async function probeArtifactAvailability(context) {
     (pendingBinding && pendingArtifactFailureBinding !== pendingBinding)
   )
     return;
+  abortArtifactAvailabilityProbe();
+  const controller = new AbortController();
+  artifactProbeController = controller;
+  const timeout = setTimeout(() => controller.abort(), ARTIFACT_AVAILABILITY_PROBE_TIMEOUT_MS);
+  timeout?.unref?.();
   try {
-    const response = await fetch(artifactProbeSrc(destination, revision, loadToken), { cache: "no-store" });
+    const response = await fetch(artifactProbeSrc(destination, revision, loadToken), {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    // Only the status is read here, and an unread body keeps its connection busy for as long as the
+    // response stream lives.
+    const cancellation = response.body?.cancel?.();
+    cancellation?.catch?.(() => {});
     if (
       loadToken !== artifactLoadToken ||
       revision !== artifactLoadRevision ||
@@ -3764,7 +3791,12 @@ async function probeArtifactAvailability(context) {
       context,
     );
   } catch {
-    // A transient fetch failure is uncertainty, not proof - stay silent.
+    // A transient fetch failure is uncertainty, not proof - stay silent. The timeout above lands
+    // here too: a probe that never answered says nothing about whether the artifact is servable.
+  } finally {
+    clearTimeout(timeout);
+    // By now the slot can belong to a newer probe, and that probe's cleanup is not this one's to do.
+    if (artifactProbeController === controller) artifactProbeController = null;
   }
 }
 
@@ -4854,6 +4886,7 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   artifactLoadToken = token;
   if (!modernArtifactProtocol && previousQueueToken !== token) retireQueueReceipts(queueReceiptScope(null));
   artifactSpokeToken = "";
+  abortArtifactAvailabilityProbe();
   annotationDefaultReceived = false;
   retireAllWhiteboardChannels();
   setHandoffSuperseded(false);
@@ -5943,6 +5976,7 @@ function handleArtifactMessage(event, binding = null) {
   const messageSequence = ++artifactMessageSequence;
   artifactSpokeToken = messageToken;
   clearTimeout(artifactSilenceTimer);
+  abortArtifactAvailabilityProbe();
   if (binding && typeof msg.destination === "string") {
     const destination = normalizeArtifactDestination(msg.destination, binding.route);
     const changed = binding.destination !== (destination || msg.destination);
@@ -6325,6 +6359,7 @@ function challengeArtifactDocument(expectedDocumentId = "", chromeAuth = "") {
     postQueuedDiffAnchors(true);
     artifactSpokeToken = binding.token;
     clearTimeout(artifactSilenceTimer);
+    abortArtifactAvailabilityProbe();
     // The initial load handler may have run before the SDK announced readiness.
     // Release the retained chrome state only after the accepted binding exists.
     postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
