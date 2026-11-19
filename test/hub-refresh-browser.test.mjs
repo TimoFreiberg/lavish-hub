@@ -914,6 +914,42 @@ test('a parked document poll leaves the snapshot loading state to its request', 
   assert.equal(await page.getByText('--to bbbbbbbbbbbb').count(), 1);
 });
 
+test('a snapshot that settles during a leaving pause renders when the navigation fails', { timeout: 30000 }, async t => {
+  const ids = ['a', 'b', 'd'].map(character => character.repeat(40));
+  let head = ids[1], releaseSnapshot, releaseNavigation, snapshots = 0, navigations = 0;
+  const snapshotGate = new Promise(resolve => { releaseSnapshot = resolve; });
+  const navigationGate = new Promise(resolve => { releaseNavigation = resolve; });
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }),
+    documents: () => ({ documents: [{ id: 'published', title: 'Published', source: 'index.html', sibling: 'published.html' }] }),
+    snapshot: async () => {
+      if (++snapshots === 2) { await snapshotGate; head = ids[2]; }
+      return { ...commits(), head };
+    },
+    navigate: async () => { navigations++; await navigationGate; throw new Error('navigation failed'); },
+  });
+  const browser = await launch();
+  t.after(async () => { releaseSnapshot(); releaseNavigation(); await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByText(`--to ${ids[1].slice(0, 12)}`).waitFor({ timeout: 3000 });
+  // A manual refresh parks its snapshot request in flight.
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await assertEventually(() => assert.equal(snapshots, 2));
+  // Leaving for the published page pauses polling while that request is still in flight.
+  await page.getByRole('button', { name: 'Published' }).click();
+  await assertEventually(() => assert.equal(navigations, 1));
+  releaseSnapshot();
+  // The paused page renders nothing, so the older snapshot stays on screen.
+  await page.waitForTimeout(300);
+  assert.equal(await page.getByText(`--to ${ids[1].slice(0, 12)}`).count(), 1);
+  assert.equal(await page.getByText(`--to ${ids[2].slice(0, 12)}`).count(), 0);
+  // The failed navigation resumes polling, and the resumed request returns the content the
+  // paused one already kept, so the view has to render that kept snapshot instead of
+  // comparing it with itself and leaving the old one on screen.
+  releaseNavigation();
+  await page.getByText(`--to ${ids[2].slice(0, 12)}`).waitFor({ timeout: 3000 });
+});
+
 test('a queued visibility catch-up polls without forcing a snapshot', { timeout: 30000 }, async t => {
   const forces = [];
   let releaseSnapshot;

@@ -150,19 +150,19 @@ notice, and the next check asks for the snapshot. A tab that goes hidden while t
 check runs starts no snapshot; it asks when shown again.
 Re-entering a repository view keeps the previous snapshot on screen, marked as
 refreshing, until the new one arrives, and a snapshot that arrives after a
-page-leaving pause has begun is kept for the page that comes back. Clean Markdown
-documents update automatically, while unsaved drafts remain in the page. Published
-HTML is generated when the owner starts or that document is published; publishing
-another document does not rewrite it. Its navigation updates while the owner is
-running. Republish after changing its source, then reload to see the new version. If
-a source is unavailable, the owner leaves its last generated copy in place and
-reports the error. It refuses to overwrite a generated copy edited on disk, including
-after an abrupt owner termination; preserve or remove that copy before starting the
-owner or publishing again. Document registrations are retained across restarts.
-Navigating away or reloading resets its internal state. The owner exits on stop,
-SIGINT, SIGTERM, an ended Lavish session, or a listener error. It does not start a
-background daemon. A second owner is refused; an unreachable live process is
-not replaced. A stale record is reclaimed only when its recorded process is
+page-leaving pause has begun is kept and shown when that page comes back. Clean
+Markdown documents update automatically, while unsaved drafts remain in the page.
+Published HTML is generated when the owner starts or that document is published;
+publishing another document does not rewrite it. Its navigation updates while the
+owner is running. Republish after changing its source, then reload to see the new
+version. If a source is unavailable, the owner leaves its last generated copy in
+place and reports the error. It refuses to overwrite a generated copy edited on
+disk, including after an abrupt owner termination; preserve or remove that copy
+before starting the owner or publishing again. Document registrations are retained
+across restarts. Navigating away or reloading resets its internal state. The owner
+exits on stop, SIGINT, SIGTERM, an ended Lavish session, or a listener error. It
+does not start a background daemon. A second owner is refused; an unreachable live
+process is not replaced. A stale record is reclaimed only when its recorded process is
 provably gone. An incomplete ownership record requires manual investigation;
 do not delete it while an owner might still be running.
 

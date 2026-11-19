@@ -38,7 +38,7 @@ async function requireBundle(name, globalName, view, generation) {
 }
 let selected = 'commits', snapshot, documents = [], busy = false;
 const frames = new Map();
-let refreshTimer, rendered = false, warmed = false, refreshRequested = false, snapshotForce = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false, snapshotPreflightFailed = false;
+let refreshTimer, rendered = false, warmed = false, refreshRequested = false, snapshotForce = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false, snapshotPreflightFailed = false, snapshotUnrendered = false;
 // Loading is an intent that belongs to a snapshot request, not to whichever refresh
 // happens to be running: a view entered while a document refresh is in flight owes a
 // request that refresh never issues, and only settling a request can end the notice.
@@ -272,16 +272,21 @@ async function refresh(force = false) {
     // state, so keep it with the generation it belongs to and let the resumed page start
     // from it. Both have to move together: advancing the generation alone would clear a
     // save's awaiting-snapshot watermark against content older than the save. Nothing
-    // renders, reads, or navigates here, and a failed snapshot stays unsettled so the
-    // catch-up retries it.
+    // renders, reads, or navigates here, so the view is marked unrendered and the resumed
+    // refresh renders the kept snapshot even when its own request returns the same
+    // content. A failed snapshot keeps nothing and stays unsettled, so the catch-up
+    // retries it.
     if (refreshPaused) {
-      if (request && result && !result.error) { snapshot = result.value; snapshotApplied = request; }
+      if (request && result && !result.error) { snapshot = result.value; snapshotApplied = request; snapshotUnrendered = true; }
       return;
     }
     // A settled request is spent whether or not it succeeded: the view has to drop its
-    // loading notice and say the snapshot is unavailable. Only a paused or superseded
-    // refresh leaves it unsettled, and the pause path above keeps a successful one.
+    // loading notice and say the snapshot is unavailable. The pause path above keeps only
+    // a successful one, so a failed one stays unsettled and the catch-up asks again.
     if (request) snapshotApplied = request;
+    // Clearing the failed snapshot is what makes settling its generation safe: with nothing
+    // on screen no render can read the advanced generation against content older than a
+    // save and clear that save's awaiting-snapshot watermark.
     if (result?.error) { snapshot = undefined; status(result.error.message); }
     else {
       if (result) snapshot = result.value;
@@ -316,9 +321,12 @@ async function refresh(force = false) {
     if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents)) renderNav();
     // The loading flag is part of the comparison: a snapshot request that fails
     // before any snapshot exists must still replace the loading notice, and one
-    // that settles back onto unchanged content must drop the refreshing notice.
-    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (needsSnapshot(selected) && (oldSnapshot !== snapshotContent(snapshot) || snapshotWasLoading !== snapshotLoading()))) {
+    // that settles back onto unchanged content must drop the refreshing notice. A
+    // snapshot kept across a pause compares equal to its own content, so the flag it
+    // left behind is what tells the resumed view to render it.
+    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (snapshotUnrendered && needsSnapshot(selected)) || (needsSnapshot(selected) && (oldSnapshot !== snapshotContent(snapshot) || snapshotWasLoading !== snapshotLoading()))) {
       const generation = await renderViewKeepingFocus();
+      snapshotUnrendered = false;
       if (generation === null || documentNavigation !== navigationRevision) return;
       const createdFrame = frames.get(selected);
       if (!frame && createdFrame && htmlData) { createdFrame.version = htmlData.version; createdFrame.hash = htmlData.hash; }
@@ -327,11 +335,12 @@ async function refresh(force = false) {
     status(error.message);
     // The preflight failed before any snapshot request could be issued: the owed request
     // has to stop claiming to load, while it stays queued so the next poll asks again.
-    // The notice renders over the draft being typed, so it keeps that editor's focus, and
-    // a render that fails here cannot stand in for the preflight error it reports.
+    // The notice renders over the draft being typed, so it keeps that editor's focus. A
+    // render that fails instead is reported: it leaves the notice the failure was meant to
+    // correct, and swallowing it would hide why the view still claims to load.
     if (snapshotQueued && !snapshotPreflightFailed) {
       snapshotPreflightFailed = true;
-      if (needsSnapshot(selected)) try { await renderViewKeepingFocus(); } catch { }
+      if (needsSnapshot(selected)) try { await renderViewKeepingFocus(); } catch (error) { status(error.message); }
     }
     if (refreshPaused && pauseRevision === refreshPauseRevision && !navigationPending && !leavingConfirmed) resumeRefresh();
   }
