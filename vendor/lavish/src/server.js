@@ -2737,6 +2737,15 @@ export async function serve({
           const choice = artifactEncoding(req.get("Accept-Encoding"));
           registeredEtag = `W/"${hash}"`;
           res.vary("Accept-Encoding");
+          // The hub page runs in the opaque-origin artifact frame and fetches its
+          // renderer bundles so it can abort a stalled load. Only a representation
+          // this pass proved registered and hash-matched gets that grant; a page, a
+          // stylesheet, a range, or an error gets none.
+          const grantBundleCors = () => {
+            if (req.headers.origin !== "null") return;
+            res.setHeader("access-control-allow-origin", "null");
+            res.vary("Origin");
+          };
           if (!req.get("range") || !choice.identityAllowed) {
             res.setHeader("cache-control", "public, max-age=0");
             if (!choice.encoding) return res.status(406).send("Not acceptable");
@@ -2752,7 +2761,10 @@ export async function serve({
             ) {
               throw Object.assign(new Error("Precondition Failed"), { status: 412 });
             }
-            if (req.fresh) return res.status(304).end();
+            if (req.fresh) {
+              grantBundleCors();
+              return res.status(304).end();
+            }
             let encoding = choice.encoding;
             let representation = bytes;
             if (encoding !== "identity") {
@@ -2766,6 +2778,7 @@ export async function serve({
             }
             if (hubProxy.generatedAssetRegistration(key, assetPath) !== registration)
               return res.status(404).send("Not found");
+            grantBundleCors();
             if (encoding !== "identity") res.setHeader("content-encoding", encoding);
             res.setHeader("content-length", String(representation.length));
             return res.send(representation);

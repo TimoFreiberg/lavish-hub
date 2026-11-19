@@ -5,28 +5,59 @@ const drafts = new Map();
 const diffContainer = document.createElement('div'); diffContainer.className = 'hub-diff';
 let diffView;
 const bundleLoads = new Map();
+// A load attempt serves every view that asks for it while it runs, so a render
+// that abandons one does not start a second; only a settled failure is retried.
 function loadBundle(name, globalName) {
   if (typeof globalThis[globalName] === 'function') return Promise.resolve();
   if (bundleLoads.has(name)) return bundleLoads.get(name);
+  const loading = attemptBundle(name, globalName).catch(error => { bundleLoads.delete(name); throw error; });
+  bundleLoads.set(name, loading);
+  return loading;
+}
+function attemptBundle(name, globalName) {
   const reference = document.querySelector(`audio[data-hub-bundle="${name}"]`);
-  const loading = new Promise((resolve, reject) => {
-    if (!reference?.src) { reject(new Error(`Missing ${name} renderer`)); return; }
-    const script = document.createElement('script');
-    script.src = reference.src;
-    let settled = false;
+  if (!reference?.src) return Promise.reject(new Error(`Missing ${name} renderer`));
+  const source = new URL(reference.src);
+  const href = source.href;
+  return new Promise((resolve, reject) => {
+    let settled = false, script, objectUrl, request;
+    // The deadline covers the bytes, not just the response head, and cancelling
+    // is what ends the transfer: a removed script element keeps its request alive
+    // and can hold the connection a retry of the same URL needs.
     const finish = error => {
       if (settled) return;
       settled = true; clearTimeout(timer);
-      script.onload = null; script.onerror = null;
-      if (error) { script.remove(); reject(error); } else resolve();
+      request?.abort();
+      if (script) { script.onload = null; script.onerror = null; script.remove(); }
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (error) reject(error); else resolve();
     };
     const timer = setTimeout(() => finish(new Error(`Could not load ${name} renderer`)), 10000);
-    script.onload = () => finish(typeof globalThis[globalName] === 'function' ? null : new Error(`Invalid ${name} renderer`));
-    script.onerror = () => finish(new Error(`Could not load ${name} renderer`));
-    document.head.append(script);
-  }).catch(error => { bundleLoads.delete(name); throw error; });
-  bundleLoads.set(name, loading);
-  return loading;
+    // The renderer runs from this document either way, so a bundle is only ever
+    // executed as a whole: a partial body is not something a script can act on.
+    const execute = url => {
+      script = document.createElement('script');
+      script.onload = () => finish(typeof globalThis[globalName] === 'function' ? null : new Error(`Invalid ${name} renderer`));
+      script.onerror = () => finish(new Error(`Could not load ${name} renderer`));
+      script.src = url;
+      document.head.append(script);
+    };
+    if (!/^https?:$/.test(source.protocol)) { execute(href); return; }
+    // An exported page inlines the renderer as data: and cannot be fetched, so
+    // only a network bundle goes through the request below.
+    request = new AbortController();
+    fetch(href, { credentials: 'omit', redirect: 'error', signal: request.signal })
+      .then(response => {
+        if (!response.ok || !/^(?:text|application)\/(?:x-)?(?:java|ecma)script\b/i.test(response.headers.get('content-type') || '')) throw new Error(`Could not load ${name} renderer`);
+        return response.arrayBuffer();
+      })
+      .then(bytes => {
+        if (settled) return;
+        objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
+        execute(objectUrl);
+      })
+      .catch(() => finish(new Error(`Could not load ${name} renderer`)));
+  });
 }
 async function requireBundle(name, globalName, view, generation) {
   try { await loadBundle(name, globalName); }

@@ -115,6 +115,12 @@ editors that do not emit trusted input or change events may not be detected. A
 published page remains marked edited even if its own save control has saved the
 data.
 
+The diff and Markdown views fetch their renderer the first time they need it,
+while the same render reads the document. A loaded renderer stays for the page.
+A load that has not finished after ten seconds is cancelled, and the view reports
+the failure with Retry. Export inlines the renderers, so an exported page needs no
+request for them.
+
 The owner serves files under the published document's directory, including its
 subdirectories, but rejects traversal and symlinks outside that directory. Like
 Lavish's asset serving, this makes other files in that directory readable to a

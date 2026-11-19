@@ -387,6 +387,102 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   assert.equal(exit, 0, stderr);
 });
 
+test('hub asset route grants narrow CORS to registered verified bundles', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-cors-'));
+  const repo = path.join(dir, 'repo'), state = path.join(dir, 'state');
+  await mkdir(repo); await mkdir(state); await run('jj', ['git', 'init', repo]);
+  const socket = net.createServer();
+  await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
+  const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
+  const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
+  delete env.HC_TERMINAL_ID;
+  try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
+  const cli = path.resolve('bin/lavish-kit');
+  const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
+  const child = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; }); child.stdout.resume();
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); }
+    try { await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) }); } catch {}
+    await rm(dir, { recursive: true, force: true });
+  });
+  for (let i = 0; i < 400; i++) { try { await stat(runtime); break; } catch { if (child.exitCode !== null) throw new Error(stderr); await delay(50); } }
+  const record = JSON.parse(await readFile(runtime, 'utf8'));
+  const localBase = `http://127.0.0.1:${port}`;
+  const sessionKey = createHash('sha256').update(await realpath(record.page)).digest('hex').slice(0, 16);
+  const html = await readFile(record.page, 'utf8');
+  const bundles = [...html.matchAll(/src="(hub-asset-[a-f0-9]{64}\.js)"/g)].map(match => match[1]);
+  assert.equal(bundles.length, 3);
+  const stylesheet = html.match(/href="(hub-asset-[a-f0-9]{64}\.css)"/)[1];
+  const source = path.join(dir, 'review.html');
+  await writeFile(source, '<!doctype html><title>Review</title><p>Published</p>');
+  await run(process.execPath, [cli, 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
+  const sibling = `document-${createHash('sha256').update(JSON.stringify(['review', await realpath(source)])).digest('hex')}.html`;
+  // The hub page loads its bundles from the opaque-origin artifact frame, so only
+  // `Origin: null` is the caller that needs the grant, and only for a bundle.
+  const request = (name, { method = 'GET', headers = {} } = {}) => new Promise((resolve, reject) => {
+    const call = http.request(`${localBase}/artifact/${sessionKey}/${name}`, { method, headers }, response => {
+      const chunks = [];
+      response.on('data', chunk => { chunks.push(chunk); });
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks) }));
+    });
+    call.on('error', reject); call.end();
+  });
+  const allowed = 'access-control-allow-origin';
+  const bundle = bundles[0];
+  const served = await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity' } });
+  assert.equal(served.status, 200);
+  assert.equal(served.headers[allowed], 'null');
+  assert.match(String(served.headers.vary), /Origin/);
+  assert.match(served.headers['content-type'], /javascript/);
+  assert.match(served.headers['content-security-policy'], /^sandbox /);
+  const head = await request(bundle, { method: 'HEAD', headers: { origin: 'null', 'accept-encoding': 'identity' } });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers[allowed], 'null');
+  assert.equal(head.body.length, 0);
+  const fresh = await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity', 'if-none-match': served.headers.etag } });
+  assert.equal(fresh.status, 304);
+  assert.equal(fresh.headers[allowed], 'null');
+  const encoded = await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'gzip' } });
+  assert.equal(encoded.status, 200);
+  assert.equal(encoded.headers['content-encoding'], 'gzip');
+  assert.equal(encoded.headers[allowed], 'null');
+  assert.equal((await request(bundle)).headers[allowed], undefined, 'a request without an origin gets no grant');
+  assert.equal((await request(bundle, { headers: { origin: 'http://example.invalid' } })).headers[allowed], undefined, 'a foreign origin gets no grant');
+  const page = await request('hub.html', { headers: { origin: 'null' } });
+  assert.equal(page.status, 200);
+  assert.equal(page.headers[allowed], undefined, 'the hub page itself is not readable cross-origin');
+  const published = await request(sibling, { headers: { origin: 'null' } });
+  assert.equal(published.status, 200);
+  assert.equal(published.headers[allowed], undefined, 'a generated document page is not readable cross-origin');
+  const style = await request(stylesheet, { headers: { origin: 'null', 'accept-encoding': 'identity' } });
+  assert.equal(style.status, 200);
+  assert.equal(style.headers[allowed], undefined, 'only registered bundles are granted, not stylesheets');
+  assert.equal((await request(bundle, { headers: { origin: 'null', range: 'bytes=0-9' } })).headers[allowed], undefined, 'a range of a bundle is not granted');
+  assert.equal((await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity;q=0' } })).headers[allowed], undefined, 'an unacceptable encoding is not granted');
+  const stray = `hub-asset-${'0'.repeat(64)}.js`;
+  await writeFile(path.join(identity.directory, stray), 'globalThis.strayBundle = true;');
+  const unregistered = await request(stray, { headers: { origin: 'null', 'accept-encoding': 'identity' } });
+  assert.equal(unregistered.status, 200);
+  assert.equal(unregistered.headers[allowed], undefined, 'an unregistered bundle name is not granted');
+  const original = await readFile(path.join(identity.directory, bundle));
+  await writeFile(path.join(identity.directory, bundle), `/* replaced */\n${original}`);
+  const tampered = await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity' } });
+  assert.equal(tampered.status, 200);
+  assert.equal(tampered.headers[allowed], undefined, 'bytes that do not hash to the registered name are not granted');
+  assert.notEqual(tampered.headers.etag, served.headers.etag);
+  await writeFile(path.join(identity.directory, bundle), original);
+  assert.equal((await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity' } })).headers[allowed], 'null', 'restoring the bytes restores the grant');
+  await run(process.execPath, [cli, 'hub', 'stop', '--workspace', repo], { env });
+  const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
+  assert.equal(exit, 0, stderr);
+  const ended = await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity' } });
+  // The session outlives the owner in the store, so the file still serves; what
+  // the stopped owner takes with it is the registration that allowed the grant.
+  assert.equal(ended.headers[allowed], undefined, 'an ended owner grants nothing');
+});
+
 test('CLI recovers published HTML after SIGKILL and refuses edited generated files', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-crash-'));
   const repo = path.join(dir, 'repo'), state = path.join(dir, 'state');
