@@ -136,9 +136,13 @@ it under Artifacts when available). Publishing selects the document. Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. An open hub checks for selection, repository, and source changes about
 every two seconds after each completed check; slow or unavailable actions can delay
-updates. Clean Markdown documents update automatically, while unsaved drafts remain
-in the page. Published HTML is generated when the owner starts or that document is
-published; publishing another document does not rewrite it. Its navigation updates
+updates. Polling stops while the tab is hidden and catches up as soon as it is
+visible again, on the hub and on published pages. Only Commits and Changes request
+the repository snapshot; the other views poll selection and document lists alone,
+and entering either repository view asks for a snapshot at once. Clean Markdown
+documents update automatically, while unsaved drafts remain in the page. Published
+HTML is generated when the owner starts or that document is published; publishing
+another document does not rewrite it. Its navigation updates
 while the owner is running. Republish after changing its source, then reload to see the
 new version. If a source is unavailable, the owner leaves its last generated copy
 in place and reports the error. It refuses to overwrite a generated copy edited on
@@ -176,8 +180,9 @@ they must remain available. Remove unwanted hub data only after stopping its own
 The authenticated action endpoint supports `snapshot` and `describe` for the
 workspace views. A snapshot pins its commit metadata, endpoints, patch,
 and diff statistics to one jj operation. Viewers share an owner-side snapshot for
-up to two seconds; automatic refreshes then pick up external changes. The Refresh
-button requests a new snapshot, sharing a refresh already in progress. Description
+up to two seconds; refreshes of the repository views then pick up external changes.
+The Refresh button forces a new snapshot there, sharing a refresh already in
+progress. Description
 saves invalidate the cached snapshot and check the full change
 and commit IDs and expected description, reject missing, divergent, immutable,
 or stale changes, and recheck the result. Hub saves are serialized, but other

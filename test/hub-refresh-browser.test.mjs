@@ -304,11 +304,13 @@ test('failed navigation survives polling and can be retried without losing a dra
   const editor = page.getByRole('textbox', { name: 'Tasks Markdown' });
   await editor.fill('Draft');
   const before = statusCalls;
-  const snapshotResponse = page.waitForResponse(response => response.url().endsWith('/action') && response.request().postDataJSON().operation === 'snapshot');
+  // A document view polls status and documents without a repository snapshot,
+  // so wait for the poll a manual refresh runs here.
+  const refreshed = page.waitForResponse(response => response.url().endsWith('/action') && response.request().postDataJSON().operation === 'documents');
   await page.getByRole('button', { name: 'Refresh' }).click();
   await assertEventually(() => assert.ok(statusCalls > before));
-  await snapshotResponse;
-  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+  await refreshed;
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 100)));
   assert.equal(await page.locator('#connection').textContent(), 'Navigation rejected');
   assert.equal(await editor.inputValue(), 'Draft');
   assert.equal(await page.getByRole('button', { name: 'Tasks', exact: true }).getAttribute('aria-current'), 'page');
@@ -631,9 +633,162 @@ test('Markdown controls save task toggles and retain failed drafts', { timeout: 
   assert.equal(await page.getByRole('button', { name: 'Preview', exact: true }).count(), 0);
 });
 
-async function assertEventually(check) {
-  const deadline = Date.now() + 5000;
+async function assertEventually(check, timeout = 5000) {
+  const deadline = Date.now() + timeout;
   while (true) {
     try { return await check(); } catch (error) { if (Date.now() >= deadline) throw error; await new Promise(resolve => setTimeout(resolve, 20)); }
   }
 }
+
+let markdownScript;
+async function pollingPage(browser, transport) {
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  markdownScript ??= (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
+  // Polling pauses in hidden tabs, so drive visibility rather than waiting it out.
+  const visibility = `<script>globalThis.__hidden = false; Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => globalThis.__hidden ? 'hidden' : 'visible' });</script>`;
+  const page = await browser.newPage();
+  await page.setContent(`${visibility}<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdownScript.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  return page;
+}
+const setTabHidden = (page, hidden) => page.evaluate(value => { globalThis.__hidden = value; document.dispatchEvent(new Event('visibilitychange')); }, hidden);
+const commits = () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] });
+const launch = () => chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+
+test('repository snapshots are requested only by repository views', { timeout: 30000 }, async t => {
+  let selected = 'tasks', statusCalls = 0, snapshots = 0;
+  const transport = await createHubTransport({
+    status: () => { statusCalls++; return { available: true, selected }; },
+    documents: () => ({ documents: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    snapshot: () => { snapshots++; return commits(); },
+    readDocument: () => ({ text: '- [ ] Task\n', hash: 'one', version: 'one' }),
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  await assertEventually(() => assert.ok(statusCalls >= 2));
+  // The initial document selection never asks for the working-copy snapshot.
+  assert.equal(snapshots, 0);
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByText('No commits in this range.').waitFor({ timeout: 2000 });
+  assert.ok(snapshots >= 1);
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  const during = snapshots, polls = statusCalls;
+  await page.waitForTimeout(2300);
+  // Polling continues on the document view, but without a snapshot request.
+  assert.equal(snapshots, during);
+  assert.ok(statusCalls > polls);
+});
+
+test('entering a repository view retries a failed snapshot', { timeout: 30000 }, async t => {
+  let selected = 'commits', failing = true, snapshots = 0;
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    snapshot: () => { snapshots++; if (failing) throw new Error('Snapshot failed'); return commits(); },
+    readDocument: () => ({ text: '- [ ] Task\n', hash: 'one', version: 'one' }),
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByText('Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.').waitFor();
+  failing = false;
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  const before = snapshots;
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByText('No commits in this range.').waitFor({ timeout: 2000 });
+  assert.ok(snapshots > before);
+});
+
+test('a hidden tab stops polling and catches up when visible', { timeout: 30000 }, async t => {
+  let statusCalls = 0;
+  const transport = await createHubTransport({
+    status: () => { statusCalls++; return { available: true, selected: 'commits' }; },
+    documents: () => ({ documents: [] }), snapshot: () => commits(),
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByText('No commits in this range.').waitFor();
+  await assertEventually(() => assert.ok(statusCalls >= 2));
+  await setTabHidden(page, true);
+  const hidden = statusCalls;
+  await page.waitForTimeout(2300);
+  assert.equal(statusCalls, hidden);
+  await setTabHidden(page, false);
+  // Catch-up runs at once rather than on the next two-second tick.
+  await assertEventually(() => assert.ok(statusCalls > hidden), 1200);
+});
+
+test('entering a repository view requests a snapshot while a refresh is busy', { timeout: 30000 }, async t => {
+  let releaseSnapshot, selected = 'commits', snapshots = 0;
+  const gate = new Promise(resolve => { releaseSnapshot = resolve; });
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    snapshot: async () => { snapshots++; if (snapshots === 1) await gate; return commits(); },
+    readDocument: () => ({ text: '- [ ] Task\n', hash: 'one', version: 'one' }),
+  });
+  const browser = await launch();
+  t.after(async () => { releaseSnapshot(); await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByText('Loading repository snapshot…').waitFor({ timeout: 3000 });
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('heading', { name: 'Commits' }).waitFor();
+  await page.getByText('Loading repository snapshot…').waitFor();
+  assert.equal(snapshots, 1);
+  releaseSnapshot();
+  await page.getByText('No commits in this range.').waitFor({ timeout: 3000 });
+  // The busy-entry request is retried straight after the in-flight refresh.
+  await assertEventually(() => assert.ok(snapshots >= 2), 1500);
+});
+
+test('a remote switch to a repository view asks for its snapshot in that poll', { timeout: 30000 }, async t => {
+  let statusCalls = 0, snapshots = 0;
+  const transport = await createHubTransport({
+    status: () => { statusCalls++; return { available: true, selected: statusCalls >= 3 ? 'commits' : 'tasks' }; },
+    documents: () => ({ documents: [] }),
+    snapshot: () => { snapshots++; return commits(); },
+    readDocument: () => ({ text: '- [ ] Task\n', hash: 'one', version: 'one' }),
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  assert.equal(snapshots, 0);
+  await page.getByText('No commits in this range.').waitFor({ timeout: 6000 });
+  assert.ok(snapshots >= 1);
+});
+
+test('description drafts and save targets survive a gated view switch', { timeout: 30000 }, async t => {
+  const changeId = 'c'.repeat(32), commitId = 'b'.repeat(40);
+  let selected = 'commits', description = 'Original\n', saved;
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
+    navigate: ({ id }) => { selected = id; return { selected }; },
+    snapshot: () => ({ base: 'a'.repeat(40), head: commitId, commits: [{ changeId, commitId, description }] }),
+    describe: body => { saved = body; description = body.description; return { status: 'saved', current: [{ changeId, commitId, description }] }; },
+    readDocument: () => ({ text: '- [ ] Task\n', hash: 'one', version: 'one' }),
+  });
+  const browser = await launch();
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await pollingPage(browser, transport);
+  await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
+  await page.getByRole('textbox', { name: 'Description cccccccccccc' }).fill('Saved text\n');
+  await page.getByRole('button', { name: 'Save description' }).click();
+  await assertEventually(async () => assert.equal(await page.locator('.commit-description').textContent(), 'Saved text\n'));
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('heading', { name: 'Commits' }).waitFor();
+  await assertEventually(async () => assert.equal(await page.locator('.commit-description').textContent(), 'Saved text\n'));
+  await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
+  await page.getByRole('textbox', { name: 'Description cccccccccccc' }).fill('Second\n');
+  await page.getByRole('button', { name: 'Save description' }).click();
+  await assertEventually(() => assert.deepEqual([saved.description, saved.expectedDescription, saved.commitId], ['Second\n', 'Saved text\n', commitId]));
+});

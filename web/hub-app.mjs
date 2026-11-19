@@ -41,6 +41,10 @@ const frames = new Map();
 let refreshTimer, rendered = false, refreshRequested = false, snapshotRequest = 0, snapshotApplied = 0;
 let modeView;
 const startsInExplore = id => id === 'commits' || id === 'changes';
+// Only the repository views render a snapshot, and a snapshot costs several jj
+// runs per request, so only those views ask for one. Status and documents keep
+// polling on every view.
+const needsSnapshot = startsInExplore;
 window.addEventListener('lavish:ready', () => { if (startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(false); });
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks' };
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
@@ -74,6 +78,9 @@ function renderNav() {
 }
 let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
 let ownerNavigation = Promise.resolve(), snapshotLoading = false, refreshPaused = false, refreshPauseRevision = 0, attemptedSelection = '', navigationCancelled = false, navigationUncertain = false, leaveTimer;
+// A hidden tab keeps no poll timer. This is scheduler state only: page-leaving
+// pauses (refreshPaused), drafts, and annotation mode keep their own guards.
+let tabHidden = document.visibilityState === 'hidden';
 function pauseRefresh() { refreshPaused = true; clearTimeout(refreshTimer); return ++refreshPauseRevision; }
 function resumeRefresh() {
   clearTimeout(leaveTimer); leavingConfirmed = false;
@@ -83,6 +90,27 @@ function resumeRefresh() {
   if (busy) refreshRequested = true;
   else refreshTimer = setTimeout(refresh, 0);
 }
+// Entering a repository view must not wait for the next poll to ask for its
+// snapshot. A refresh already in flight renders the new selection itself, so ask
+// for a follow-up instead of polling twice at once.
+function requestRefresh() {
+  if (busy) { refreshRequested = true; return; }
+  if (refreshPaused || tabHidden) return;
+  refresh();
+}
+document.addEventListener('visibilitychange', () => {
+  const hidden = document.visibilityState === 'hidden';
+  if (hidden === tabHidden) return;
+  tabHidden = hidden;
+  clearTimeout(refreshTimer);
+  // Page-leaving pauses resume their own work, and a running refresh reschedules
+  // from its own finally block. Only the scheduler catches up here.
+  if (hidden || refreshPaused) return;
+  if (busy) { refreshRequested = true; return; }
+  const deferred = refreshRequested;
+  refreshRequested = false;
+  refresh(deferred);
+});
 function leavePage(url, id) {
   pauseRefresh(); leavingConfirmed = true; attemptedSelection = id;
   if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; status(connectionStatus); resumeRefresh(); }, 1000);
@@ -123,12 +151,17 @@ async function select(id) {
     }
     if (!leavesPage) {
       selected = id; renderNav();
+      if (needsSnapshot(id) && !snapshot) snapshotLoading = true;
       const synchronization = synchronizeNavigation(id).then(() => {
         if (revision === navigationRevision) { attemptedSelection = ''; navigationCancelled = false; navigationUncertain = false; navigationError = ''; status(connectionStatus); }
       }, error => {
         if (revision === navigationRevision) { navigationError = error.message; status(connectionStatus); }
       });
       navigationPending = false;
+      // Polling skips the snapshot on non-repository views, so entering one asks
+      // for a current snapshot now instead of waiting for the next poll. A failed
+      // earlier snapshot is retried the same way.
+      if (needsSnapshot(id)) requestRefresh();
       await renderView();
       await synchronization;
       return;
@@ -150,7 +183,7 @@ async function select(id) {
 }
 const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
 async function refresh(force = false) {
-  if (refreshPaused || busy) { if (force) refreshRequested = true; return; } busy = true;
+  if (refreshPaused || tabHidden || busy) { if (force) refreshRequested = true; return; } busy = true;
   const navigationAtStart = navigationRevision, navigationPendingAtStart = pendingOwnerNavigation > 0;
   let pauseRevision;
   try {
@@ -175,17 +208,23 @@ async function refresh(force = false) {
       selected = oldSelected;
       leavePage(new URL(selectedDoc.sibling, location.href).href, selectedDoc.id); return;
     }
-    snapshotLoading = true;
-    const request = ++snapshotRequest;
-    const snapshotResult = action('snapshot', { force }).then(value => ({ value }), error => ({ error }));
+    // Ask for the snapshot only on the views that render it, and only for the
+    // selection the owner settled on above.
+    const requestSnapshot = needsSnapshot(selected);
+    snapshotLoading = requestSnapshot;
+    const request = requestSnapshot ? ++snapshotRequest : 0;
+    const snapshotResult = requestSnapshot ? action('snapshot', { force }).then(value => ({ value }), error => ({ error })) : null;
     const initialRender = !rendered;
     if (initialRender) { renderNav(); oldSelected = selected; oldDocuments = JSON.stringify(documents); await renderView(); }
     const result = await snapshotResult;
     if (navigationAtStart !== navigationRevision) oldSelected = selected;
     snapshotLoading = false;
     if (refreshPaused) return;
-    if (result.error) { snapshot = undefined; status(result.error.message); }
-    else { snapshot = result.value; snapshotApplied = request; status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable'); }
+    if (result?.error) { snapshot = undefined; status(result.error.message); }
+    else {
+      if (result) { snapshot = result.value; snapshotApplied = request; }
+      status(remoteLeavesPage && hasUnsavedDrafts() ? 'Navigation paused: unsaved drafts remain on this page.' : state.available ? 'Connected' : 'Workspace unavailable');
+    }
     let documentChanged = false;
     const documentNavigation = navigationRevision;
     const cached = drafts.get(`doc:${selected}`);
@@ -231,7 +270,8 @@ async function refresh(force = false) {
   } catch (error) { status(error.message); if (refreshPaused && pauseRevision === refreshPauseRevision && !navigationPending && !leavingConfirmed) resumeRefresh(); }
   finally {
     busy = false; snapshotLoading = false; clearTimeout(refreshTimer);
-    if (refreshPaused) return;
+    // A hidden tab drops its timer; becoming visible catches up immediately.
+    if (refreshPaused || tabHidden) return;
     if (refreshRequested) { refreshRequested = false; refresh(true); }
     else refreshTimer = setTimeout(refresh, 2000);
   }

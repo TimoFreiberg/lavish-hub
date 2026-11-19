@@ -222,7 +222,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await page.close();
   }
   {
-    await request('navigate', { id: 'tasks' });
+    // A repository view, so a snapshot failure is polled and shown on the page.
+    await request('navigate', { id: 'commits' });
     const page = await browser.newPage();
     await page.addInitScript(() => { Object.defineProperty(window, 'navigation', { value: undefined }); });
     await page.goto(`${browserBase}/hub.html`);
