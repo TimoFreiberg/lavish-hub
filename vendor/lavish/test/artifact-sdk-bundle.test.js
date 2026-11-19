@@ -159,6 +159,9 @@ function bootSdk({
   htmlAnnotate = null,
   platform = "Linux",
   structuralQueries = false,
+  // Mermaid diagrams the page will report to `findMermaidSvgs`. A diagram's `.mermaid` container
+  // is recovered through `closest`, so the query for one answers the other.
+  mermaidSvgs = [],
   sdkOptions = undefined,
   origin = "http://127.0.0.1",
 } = {}) {
@@ -167,6 +170,8 @@ function bootSdk({
   // Deferred work the SDK schedules, run only when a test asks for it: the draft-anchor settle
   // re-query is a real timer, and asserting on it means running it rather than assuming it.
   const timers = [];
+  const resizeObservers = [];
+  const mutationObservers = [];
   const scheduleTimer = (fn, ms) => timers.push({ fn, ms }) && timers.length;
   const cancelTimer = (id) => {
     if (timers[id - 1]) timers[id - 1].cancelled = true;
@@ -191,12 +196,31 @@ function bootSdk({
     Event: class Event { constructor(type) { this.type = type; } },
     CustomEvent: class CustomEvent { constructor(type, options) { this.type = type; this.detail = options?.detail; } },
     MutationObserver: class MutationObserver {
-      observe() {}
+      constructor(callback) {
+        this.callback = callback;
+        mutationObservers.push(this);
+      }
+
+      observe(target, options) {
+        this.target = target;
+        this.options = options;
+      }
       disconnect() {}
     },
     ResizeObserver: class ResizeObserver {
-      observe() {}
-      disconnect() {}
+      constructor(callback) {
+        this.callback = callback;
+        this.observed = [];
+        resizeObservers.push(this);
+      }
+
+      observe(target) {
+        this.observed.push(target);
+      }
+
+      disconnect() {
+        this.observed = [];
+      }
     },
     URL: class extends URL {
       static createObjectURL() {
@@ -204,6 +228,7 @@ function bootSdk({
       }
       static revokeObjectURL() {}
     },
+    URLSearchParams,
     getComputedStyle: () => ({}),
     setTimeout: scheduleTimer,
     clearTimeout: cancelTimer,
@@ -223,11 +248,15 @@ function bootSdk({
       querySelector: (selector) =>
         selector === "script[data-lavish-revisions]" ? revisionsScript : documentQuery(selector),
       querySelectorAll: (selector) =>
-        selector === "[data-lavish-revision]"
-          ? revisionMarkElements
-          : structuralQueries
-            ? queryChildChain(documentElement, selector)
-            : [],
+        selector === "svg"
+          ? mermaidSvgs
+          : selector === ".mermaid"
+            ? mermaidSvgs.map((svg) => svg.closest(".mermaid")).filter(Boolean)
+            : selector === "[data-lavish-revision]"
+              ? revisionMarkElements
+              : structuralQueries
+                ? queryChildChain(documentElement, selector)
+                : [],
       getSelection: () => selection,
     },
   };
@@ -261,6 +290,11 @@ function bootSdk({
     Element: sandbox.Element,
     posted,
     body,
+    // The deferred work the SDK queued, and the size observers it armed, so a test can ask what
+    // the client will still do rather than infer it from its messages.
+    timers,
+    resizeObservers,
+    mutationObservers,
     get api() { return sandbox.window.lavish; },
     // The SDK checks `instanceof Element`, so a stub that must pass that check takes this prototype.
     asElement(stub) {
@@ -1998,4 +2032,297 @@ test("the protocol-1 SDK accepts the chrome origin in an opaque artifact and rej
   const seen = await attempt(sdk, "http://127.0.0.1");
   assert.equal(seen.length, 1);
   assert.equal(seen[0].type, "lavish:challengeResponse");
+});
+
+// A diagram can sit behind a closed disclosure or an inactive tab for the whole session. Its box
+// never reaches the embedding height, so asking again on a timer would keep asking for as long as
+// the page is open.
+function mermaidDiagram(box) {
+  const container = createElement("div");
+  const created = [];
+  // Inserting a child connects it on a real page, and `embedWhiteboard` reads `isConnected` to
+  // decide whether an existing editor is still there.
+  container.insertAdjacentElement = (_position, element) => {
+    element.isConnected = true;
+    created.push(element);
+  };
+  const svg = createElement("svg");
+  svg.id = "mermaid-1";
+  svg.closest = (selector) => (String(selector).includes(".mermaid") ? container : null);
+  svg.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    right: box.width,
+    bottom: box.height,
+    width: box.width,
+    height: box.height,
+  });
+  return { container, svg, box, created };
+}
+
+// Must match `WHITEBOARD_LAYOUT_RETRY_DELAY_MS` in src/artifact-sdk.js; a mismatch here fails these
+// tests rather than silently passing them.
+const LAYOUT_RETRY_MS = 150;
+
+function pendingLayoutRetries(sdk) {
+  return sdk.timers.filter((timer) => timer.ms === LAYOUT_RETRY_MS && !timer.ran && !timer.cancelled);
+}
+
+function exhaustLayoutRetries(sdk) {
+  let rounds = 0;
+  while (pendingLayoutRetries(sdk).length > 0 && rounds < 500) {
+    sdk.runTimersOf(LAYOUT_RETRY_MS);
+    sdk.runFrames();
+    rounds += 1;
+  }
+  return rounds;
+}
+
+function watchersOf(sdk, svg) {
+  return sdk.resizeObservers.filter((observer) => observer.observed.includes(svg));
+}
+
+// The page-change observer the SDK uses for Mermaid. It is the only one that also reports attribute
+// changes, which keeps it distinct from the layout audit's observers.
+function pageChangeObserver(sdk) {
+  const observer = sdk.mutationObservers.find((entry) => entry.options?.attributes === true);
+  assert.ok(observer, "the SDK observes page changes it needs for Mermaid");
+  return observer;
+}
+
+test("a diagram that is never laid out stops retrying", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+
+  const rounds = exhaustLayoutRetries(sdk);
+
+  assert.ok(rounds > 0, "a diagram that has not been laid out is retried at least once");
+  assert.ok(rounds < 500, "the retries stop on their own instead of polling for the session");
+  assert.equal(pendingLayoutRetries(sdk).length, 0, "nothing is left polling for layout");
+  assert.equal(diagram.container.style.display, undefined, "a diagram without a box is never embedded");
+});
+
+test("a diagram revealed after the retries ran out still gets its whiteboard", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+  assert.equal(diagram.container.style.display, undefined, "still hidden while it has no box");
+
+  diagram.box.height = 300;
+  const [watcher] = watchersOf(sdk, diagram.svg);
+  assert.ok(watcher, "a diagram that gave up polling is watched for the size that would embed it");
+  watcher.callback();
+  sdk.runFrames();
+
+  assert.equal(diagram.container.style.display, "none", "the revealed diagram becomes a whiteboard");
+});
+
+// A tab panel or drawer usually animates `transform` or `zoom`, and a ResizeObserver never reports
+// that, so a class or style change is the only evidence of the reveal. Without this the retries the
+// diagram spent are the last thing it ever does.
+test("a class-only reveal is enough for a diagram that gave up polling", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+
+  // The page has to report the attributes a reveal is made of, or nothing will ever ask again: a
+  // transform or zoom reveal leaves no child-list change behind.
+  const observer = pageChangeObserver(sdk);
+  assert.equal(observer.options.attributes, true, "the page reports attribute changes");
+  assert.equal(
+    observer.options.attributeFilter,
+    undefined,
+    "every attribute is reported, so a data-* or aria-* reveal is not filtered away",
+  );
+  assert.equal(observer.options.childList, true, "and still reports the diagrams it adds");
+
+  // The panel's class flips; the painted rect grows, the layout box a ResizeObserver reports does
+  // not have to change, and the browser fires no resize notification for it.
+  diagram.box.height = 300;
+  observer.callback([{ type: "attributes", target: diagram.container }]);
+  sdk.runFrames();
+
+  assert.equal(diagram.container.style.display, "none", "the class change is enough to embed it");
+});
+
+test("only a reveal tall enough to embed earns the retries back", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+  const [watcher] = watchersOf(sdk, diagram.svg);
+  assert.ok(watcher);
+
+  // The observer reports the box that made this diagram skip first.
+  watcher.callback();
+  assert.equal(pendingLayoutRetries(sdk).length, 0, "its own notification is not a reveal");
+
+  // A width-only change says nothing about whether the diagram can be embedded, and a collapsed
+  // panel whose width tracks its parent would otherwise restart the whole ladder per resize frame.
+  diagram.box.width = 900;
+  watcher.callback();
+  assert.equal(pendingLayoutRetries(sdk).length, 0, "a width-only change does not restart the retries");
+
+  // A height that is still short of the embed threshold is not a reveal either.
+  diagram.box.height = 20;
+  watcher.callback();
+  assert.equal(pendingLayoutRetries(sdk).length, 0, "a diagram that is still too short is left waiting");
+  assert.equal(diagram.container.style.display, undefined);
+});
+
+// A live ResizeObserver is retained with the subtree it watches, so a container that leaves the page
+// must not leave its watcher running for the life of the document.
+test("a diagram that leaves the page stops being watched", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+  const [watcher] = watchersOf(sdk, diagram.svg);
+  assert.ok(watcher, "the diagram is watched while it is on the page");
+  assert.deepEqual(watcher.observed, [diagram.svg]);
+
+  diagram.container.isConnected = false;
+  pageChangeObserver(sdk).callback([{ type: "attributes", target: diagram.container }]);
+  sdk.runFrames();
+
+  assert.deepEqual(watcher.observed, [], "the watcher is disconnected once its container is gone");
+});
+
+// The embed hides the Mermaid source behind its own `display: none`. If the editor is removed and the
+// container stays hidden, the diagram becomes an invisible gap that only a reload clears.
+test("a removed whiteboard editor leaves the diagram visible again", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 300 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  assert.equal(diagram.container.style.display, "none", "the diagram is embedded while it has a box");
+  assert.equal(diagram.created.length, 1);
+
+  // The container re-renders: the editor is gone and the layout it was filling is gone with it.
+  diagram.created[0].isConnected = false;
+  diagram.box.height = 0;
+  pageChangeObserver(sdk).callback([{ type: "childList" }]);
+  sdk.runFrames();
+
+  assert.equal(diagram.container.style.display, "", "the plain Mermaid diagram is shown again");
+});
+
+// A theme change or a re-render replaces the svg inside the same container. The diagram is still
+// hidden, but the element whose box the watch was waiting on is gone, so the watch moves with it.
+test("a re-rendered diagram inside a hidden container is watched again", () => {
+  const first = mermaidDiagram({ width: 600, height: 0 });
+  const svgs = [first.svg];
+  const sdk = bootSdk({ mermaidSvgs: svgs, runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+
+  const [firstWatcher] = watchersOf(sdk, first.svg);
+  assert.ok(firstWatcher, "the first svg is watched once it runs out of retries");
+
+  const rerendered = mermaidDiagram({ width: 600, height: 0 });
+  rerendered.svg.closest = () => first.container;
+  svgs.splice(0, svgs.length, rerendered.svg);
+  pageChangeObserver(sdk).callback([{ type: "childList" }]);
+  sdk.runFrames();
+
+  assert.equal(watchersOf(sdk, rerendered.svg).length, 1, "the watch follows the svg the page holds");
+  assert.deepEqual(firstWatcher.observed, [], "the retired svg's watcher is disconnected");
+  assert.equal(first.container.style.display, undefined, "the hidden container is left alone");
+});
+
+test("a watcher that was already released cannot wake anything", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+  const [watcher] = watchersOf(sdk, diagram.svg);
+  assert.ok(watcher);
+
+  // A queued notification can still arrive after the reveal that released this watcher.
+  diagram.box.height = 300;
+  watcher.callback();
+  sdk.runFrames();
+  const embedded = diagram.created.length;
+  assert.equal(embedded, 1);
+
+  watcher.callback();
+  sdk.runFrames();
+  assert.equal(diagram.created.length, embedded, "the released watcher embeds nothing further");
+  assert.equal(
+    sdk.timers.filter((timer) => timer.ms === LAYOUT_RETRY_MS && !timer.ran).length,
+    0,
+    "and schedules no retries",
+  );
+});
+
+// The attribute channel exists to notice a reveal, not to be a general page-change trigger: a
+// scroll-linked class toggle or a progress bar's `style.width` would otherwise buy a full-document
+// query per frame for as long as one diagram sits behind a disclosure nobody opened.
+test("a restyle elsewhere on the page is not a reason to scan for diagrams", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+  const scheduled = sdk.timers.length;
+
+  const widget = createElement("div");
+  const progressBar = createElement("div");
+  pageChangeObserver(sdk).callback([
+    { type: "attributes", target: widget, attributeName: "class" },
+    { type: "attributes", target: progressBar, attributeName: "style" },
+  ]);
+
+  assert.equal(sdk.timers.length, scheduled, "a restyle a waiting diagram cannot see buys no scan");
+  assert.equal(pendingLayoutRetries(sdk).length, 0, "and restarts no retries");
+});
+
+// A panel opening is a class change on an ancestor, not on the diagram's own container.
+test("a class change above a waiting diagram is what wakes it", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+
+  const panel = createElement("div");
+  panel.contains = (node) => node === diagram.container;
+  diagram.box.height = 300;
+  pageChangeObserver(sdk).callback([{ type: "attributes", target: panel, attributeName: "class" }]);
+  sdk.runFrames();
+
+  assert.equal(diagram.container.style.display, "none", "the panel opening embeds the diagram");
+});
+
+// Embedding hides the container, and that is itself an attribute change on it. The watch is released
+// first, so the client cannot answer its own write.
+test("the embed's own style write schedules no further pass", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 0 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+
+  diagram.box.height = 300;
+  watchersOf(sdk, diagram.svg)[0].callback();
+  sdk.runFrames();
+  assert.equal(diagram.container.style.display, "none", "the diagram is embedded");
+
+  const afterEmbed = sdk.timers.length;
+  pageChangeObserver(sdk).callback([{ type: "attributes", target: diagram.container }]);
+  assert.equal(sdk.timers.length, afterEmbed, "nothing is waiting, so the write wakes nothing");
+});
+
+test("an added node still asks for a pass with nothing waiting", () => {
+  const diagram = mermaidDiagram({ width: 600, height: 300 });
+  const sdk = bootSdk({ mermaidSvgs: [diagram.svg], runAnimationFrames: true });
+  const scheduled = sdk.timers.length;
+
+  pageChangeObserver(sdk).callback([{ type: "childList" }]);
+  assert.ok(sdk.timers.length > scheduled, "an added node asks for a pass");
+});
+
+test("two hidden diagrams spend their retries separately", () => {
+  const first = mermaidDiagram({ width: 600, height: 0 });
+  const second = mermaidDiagram({ width: 600, height: 0 });
+  second.svg.id = "mermaid-2";
+  const sdk = bootSdk({ mermaidSvgs: [first.svg, second.svg], runAnimationFrames: true });
+  exhaustLayoutRetries(sdk);
+  assert.equal(watchersOf(sdk, first.svg).length, 1);
+  assert.equal(watchersOf(sdk, second.svg).length, 1);
+
+  second.box.height = 300;
+  watchersOf(sdk, second.svg)[0].callback();
+  sdk.runFrames();
+
+  assert.equal(second.container.style.display, "none", "the revealed diagram embeds");
+  assert.equal(first.container.style.display, undefined, "the diagram still hidden is untouched");
 });

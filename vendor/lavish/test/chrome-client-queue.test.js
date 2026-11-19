@@ -5326,6 +5326,64 @@ test("a health check that never answers hands the outdated banner's button back"
   assert.equal(chrome.reloadCount(), 1);
 });
 
+// Only the status of a health answer is read, and the restart wait can make hundreds of probes,
+// so each one hands its body back instead of leaving a stream nobody will ever read.
+test("a health probe releases the body it never reads", async () => {
+  let released = 0;
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url) => {
+      if (String(url) === "/health") {
+        return {
+          ok: true,
+          body: {
+            async cancel() {
+              released += 1;
+            },
+          },
+          json: async () => ({}),
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+
+  sendChromeOutdated(chrome, "stop");
+  await chrome.element("outdatedReload").click();
+  await flushPromises();
+
+  assert.equal(chrome.reloadCount(), 1);
+  assert.equal(released, 1, "the probe released the health body it never read");
+});
+
+// Releasing is cleanup, and cleanup that throws must not rewrite an answer the probe already
+// got: a server that said it is running is still running.
+test("a failed health body release still lets the probe's answer through", async () => {
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/index.html",
+    fetchImpl: async (url) => {
+      if (String(url) === "/health") {
+        return {
+          ok: true,
+          body: {
+            cancel() {
+              throw new Error("body already locked");
+            },
+          },
+          json: async () => ({}),
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+
+  sendChromeOutdated(chrome, "stop");
+  await chrome.element("outdatedReload").click();
+  await flushPromises();
+
+  assert.equal(chrome.reloadCount(), 1, "a healthy answer still reloads");
+});
+
 // The wait loop probes the same way, so a wedged port must not hold one iteration open past the
 // deadline - that would leave the page running the pre-upgrade client with no card and no notice.
 test("a restart wait whose port never answers still reaches the not-running card", async () => {

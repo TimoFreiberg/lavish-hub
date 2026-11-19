@@ -3840,11 +3840,11 @@ function abortArtifactAvailabilityProbe() {
   controller?.abort();
 }
 
-// Only the status is read here, and an unread body keeps its connection busy for as long as the
-// response stream lives. Failing to release it is a cleanup problem, so it gets its own scope: a
-// cancel that throws or rejects must not reach the caller's failure report, which the status alone
-// already proved.
-function releaseArtifactProbeBody(response) {
+// Only the status is read by either probe, and an unread body keeps its connection busy for as long
+// as the response stream lives. Failing to release it is a cleanup problem, so it gets its own
+// scope: a cancel that throws or rejects must not reach the caller's failure report, which the
+// status alone already proved.
+function releaseProbeBody(response) {
   try {
     Promise.resolve(response.body?.cancel?.()).catch(() => {});
   } catch {
@@ -3871,7 +3871,7 @@ async function probeArtifactAvailability(context) {
       cache: "no-store",
       signal: controller.signal,
     });
-    releaseArtifactProbeBody(response);
+    releaseProbeBody(response);
     if (
       loadToken !== artifactLoadToken ||
       revision !== artifactLoadRevision ||
@@ -5900,6 +5900,9 @@ async function probeChromeHealth() {
   const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
   try {
     const res = await fetch("/health", { cache: "no-store", signal: controller.signal });
+    // Only the status is read, and the restart wait can make hundreds of these probes, so each one
+    // hands its body back rather than leaving a stream nobody will ever read.
+    releaseProbeBody(res);
     return res.ok ? "running" : "not-running";
   } catch {
     return controller.signal.aborted ? "no-answer" : "not-running";

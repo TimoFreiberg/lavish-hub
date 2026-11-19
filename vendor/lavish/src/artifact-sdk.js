@@ -1317,6 +1317,17 @@ export function createArtifactSdk(
   // deduplication aid; never let a bare index select an entry.
   const whiteboardEmbeds = new Map(); // identityKey -> { container, iframe, index, page, identityKey }
 
+  // Mermaid renders asynchronously, and a diagram can stay hidden behind a closed disclosure or an
+  // inactive tab for the whole session. A retry that only asks again would never stop asking, so a
+  // skipped diagram spends a bounded number of retries and waits on its own box afterwards.
+  const WHITEBOARD_MIN_EMBED_HEIGHT_PX = 40;
+  const WHITEBOARD_LAYOUT_RETRY_DELAY_MS = 150;
+  const WHITEBOARD_LAYOUT_RETRY_LIMIT = 40;
+  const whiteboardLayoutAttempts = new WeakMap(); // container -> retries spent
+  // A Map rather than a WeakMap: a watch is swept when its container leaves the page, and a WeakMap
+  // cannot be iterated to find it.
+  const whiteboardLayoutWatches = new Map(); // container -> { observer, svg }
+
   function whiteboardIdentityKey(page, index) {
     return JSON.stringify([page === null || page === undefined ? null : String(page), Number(index)]);
   }
@@ -1332,6 +1343,71 @@ export function createArtifactSdk(
     return Math.max(min, Math.min(Math.round(svgRect.height) + headerPx, max));
   }
 
+  // Layout completion need not mutate the DOM, so the mutation observer's child list is not a
+  // guaranteed wake-up for a diagram that had no box when it was first seen. Its own box is, and it
+  // is also the only thing that can tell us the diagram is now worth embedding.
+  function releaseWhiteboardLayoutWatch(container) {
+    const watch = whiteboardLayoutWatches.get(container);
+    if (!watch) return;
+    whiteboardLayoutWatches.delete(container);
+    try {
+      watch.observer.disconnect();
+    } catch {
+      // Disconnected is the state this wanted.
+    }
+  }
+
+  // A live ResizeObserver is retained along with the subtree it observes, and a container that left
+  // the page never reaches the code that would release it. Sweeping here is what keeps a page that
+  // rebuilds its diagrams from accumulating observers for as long as it is open.
+  function sweepWhiteboardLayoutWatches() {
+    for (const container of whiteboardLayoutWatches.keys()) {
+      if (container.isConnected !== false) continue;
+      releaseWhiteboardLayoutWatch(container);
+    }
+  }
+
+  // One watch and one retry budget per container, not per svg: two Mermaid diagrams inside a single
+  // `.mermaid` container share them, which at worst costs a re-arm, never a poll.
+  function watchWhiteboardLayout(container, svg) {
+    const existing = whiteboardLayoutWatches.get(container);
+    // Still waiting on the same diagram's box: nothing to re-arm.
+    if (existing && existing.svg === svg) return;
+    // A re-render replaced the svg inside the container, so the box worth watching is the new one.
+    if (existing) releaseWhiteboardLayoutWatch(container);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (whiteboardLayoutWatches.get(container)?.observer !== observer) return;
+      let current;
+      try {
+        current = svg.getBoundingClientRect();
+      } catch {
+        return;
+      }
+      // Only the reveal this diagram is waiting for earns the retries back. A width-only change or a
+      // shrink says nothing about whether it can be embedded, and resetting on those would restart
+      // the whole ladder on every resize frame for a collapsed panel whose width still tracks its
+      // parent - the busywork this bound exists to remove. It also keeps the observer's first
+      // notification, which reports the box that caused the skip, from counting as a reveal.
+      if (current.height < WHITEBOARD_MIN_EMBED_HEIGHT_PX) return;
+      releaseWhiteboardLayoutWatch(container);
+      whiteboardLayoutAttempts.delete(container);
+      scheduleMermaidEnhance();
+    });
+    whiteboardLayoutWatches.set(container, { observer, svg });
+    try {
+      // `getBoundingClientRect` reports the border box, so measure the same box the embed decision
+      // reads; the default content box would miss a reveal that only adds padding or a border.
+      observer.observe(svg, { box: "border-box" });
+    } catch {
+      try {
+        observer.observe(svg);
+      } catch {
+        releaseWhiteboardLayoutWatch(container);
+      }
+    }
+  }
+
   function embedWhiteboard(svg) {
     const container = svg.closest(".mermaid");
     if (!container) return;
@@ -1344,17 +1420,31 @@ export function createArtifactSdk(
       whiteboardEmbeds.set(existing.identityKey, existing);
       return;
     }
+    if (existing) {
+      // The editor was removed from the page (a container re-render) while its entry and the
+      // container's own `display: none` stayed behind, so the Mermaid source is hidden with nothing
+      // to show for it. Drop the entry and put the diagram back before measuring it.
+      whiteboardEmbeds.delete(existing.identityKey);
+      container.style.display = "";
+    }
     const index = mermaidContainerIndex(container);
     if (index < 0) return;
+    // Mermaid renders asynchronously; a zero-ish rect means this svg has not been laid out yet.
+    // Ask again shortly, but only so many times: a diagram that stays hidden for the session would
+    // otherwise re-query every diagram on the page on every tick for as long as the tab lives.
     const rect = svg.getBoundingClientRect();
-    // Mermaid renders asynchronously; a zero-ish rect means this svg has not
-    // been laid out yet. Skip it and retry shortly - layout completion does
-    // not necessarily mutate the DOM again, so the observer alone is not a
-    // guaranteed wake-up.
-    if (rect.height < 40) {
-      window.setTimeout(scheduleMermaidEnhance, 150);
+    if (rect.height < WHITEBOARD_MIN_EMBED_HEIGHT_PX) {
+      const spent = whiteboardLayoutAttempts.get(container) || 0;
+      if (spent >= WHITEBOARD_LAYOUT_RETRY_LIMIT) {
+        watchWhiteboardLayout(container, svg);
+        return;
+      }
+      whiteboardLayoutAttempts.set(container, spent + 1);
+      window.setTimeout(scheduleMermaidEnhance, WHITEBOARD_LAYOUT_RETRY_DELAY_MS);
       return;
     }
+    whiteboardLayoutAttempts.delete(container);
+    releaseWhiteboardLayoutWatch(container);
     const iframe = document.createElement("iframe");
     iframe.setAttribute("data-lavish-ui", "whiteboard-inline");
     iframe.setAttribute("title", "Excalidraw whiteboard");
@@ -1428,6 +1518,7 @@ export function createArtifactSdk(
   });
 
   function enhanceMermaid() {
+    sweepWhiteboardLayoutWatches();
     for (const svg of findMermaidSvgs()) {
       embedWhiteboard(svg);
       if (mermaidViewports.has(svg)) continue;
@@ -3194,8 +3285,35 @@ export function createArtifactSdk(
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", enhanceMermaid, { once: true });
   }
-  const mermaidObserver = new MutationObserver(() => scheduleMermaidEnhance());
-  mermaidObserver.observe(document.documentElement, { childList: true, subtree: true });
+  // A reveal is not always a layout change: an inactive tab panel or a drawer usually animates
+  // `transform` or `zoom`, which a ResizeObserver never sees, and the class, style, or state
+  // attribute that drives it is the only record left on the page. That is why every attribute is
+  // reported rather than a whitelist - `data-state="open"` and `aria-expanded` drive the same
+  // reveals as `class` - but a record only earns a scan when it lands on, or above, a diagram that
+  // is actually waiting. Without that filter a scroll-linked class toggle or a progress bar's
+  // `style.width` buys a full-document query per frame for as long as one diagram sits behind a
+  // disclosure nobody opened.
+  const mermaidObserver = new MutationObserver((records) => {
+    const changes = records || [];
+    let relevant = changes.some((record) => record?.type === "childList");
+    if (!relevant && whiteboardLayoutWatches.size > 0) {
+      relevant = changes.some((record) => {
+        const target = record?.target;
+        if (!target) return false;
+        for (const container of whiteboardLayoutWatches.keys()) {
+          if (target === container || target.contains?.(container) === true) return true;
+        }
+        return false;
+      });
+    }
+    if (!relevant) return;
+    scheduleMermaidEnhance();
+  });
+  mermaidObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+  });
 
   // Report the agent-declared revision registry so the chrome can offer its
   // legend. Read-only: the SDK never marks up the page for it, because a
