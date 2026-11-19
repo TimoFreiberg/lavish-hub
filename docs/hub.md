@@ -120,8 +120,9 @@ while the same render reads the document. A loaded renderer stays for the page.
 The hub page runs in Lavish's opaque-origin artifact frame and fetches each bundle
 from the owner, which grants that read only for a bundle its registration verified.
 A server started from a build without that grant cannot serve them, so lavish-kit
-refuses to use it rather than let every render fail. The error names
-`lavish-axi stop`, which shuts the server down so the next command starts the
+refuses to use it rather than let every render fail. The error prints the packaged
+CLI's shutdown for the state directory and port this process uses, quoted so it can
+be pasted as is; running it shuts that server down, and the next command starts the
 current build. Stopping the hub owner does not replace it: the Lavish server it
 started keeps running, and the next owner adopts it. A load still incomplete after
 ten seconds is cancelled and the view reports the failure with Retry, which asks

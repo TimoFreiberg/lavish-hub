@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { canonicalPath } from './hub-workspace.mjs';
+import { quote } from './quote.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
 
 export const supportedLavishVersion = '0.1.97';
@@ -16,6 +17,14 @@ const requiredPatches = [
 ];
 const keyFor = file => createHash('sha256').update(file).digest('hex').slice(0, 16);
 const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
+
+// A server that only predates a patch keeps running on this process's port and state
+// directory, so the shutdown that replaces it has to name both. The package puts no
+// `lavish-axi` on PATH: the only CLI is the vendored one, reachable by path. Paths and
+// directories can hold spaces or quotes, so they are shell-quoted to be pasted as is.
+export function stopCommand({ cli = lavishCli, directory, port }) {
+  return `LAVISH_AXI_STATE_DIR=${quote(directory)} LAVISH_AXI_PORT=${port} node ${quote(cli)} stop`;
+}
 
 // Opening a page still uses the CLI, which owns server startup and networking.
 export function createLavishClient({ env = process.env, fetch: request = globalThis.fetch, signal } = {}) {
@@ -46,7 +55,7 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
       // only ending the process makes the next command start this build. An operator
       // reaches that through the CLI that owns server shutdown, with the state
       // directory and port this process uses.
-      throw failure('UNSUPPORTED_LAVISH', `The running lavish-axi ${version} server predates this build and lacks ${missing.join(' and ')}; stop it with \`lavish-axi stop\` (LAVISH_AXI_STATE_DIR=${directory} LAVISH_AXI_PORT=${port} node ${lavishCli} stop; see \`lavish-axi --help\`) and retry`);
+      throw failure('UNSUPPORTED_LAVISH', `The running lavish-axi ${version} server predates this build and lacks ${missing.join(' and ')}; shut that server down with the packaged CLI and retry: ${stopCommand({ directory, port })}`);
     }
     const canonicalDirectory = await canonicalPath(directory);
     const stateId = keyFor(path.join(canonicalDirectory, 'state.json'));

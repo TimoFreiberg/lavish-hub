@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { encode, decode } from '@toon-format/toon';
-import { createLavishClient, lavishHttpRun, supportedLavishVersion } from '../src/lavish-http.mjs';
+import { createLavishClient, lavishHttpRun, stopCommand, supportedLavishVersion } from '../src/lavish-http.mjs';
 
 const keyFor = text => createHash('sha256').update(text).digest('hex').slice(0, 16);
 async function fixture(t) {
@@ -42,7 +42,14 @@ test('hub HTTP requires the patched version and matching state before polling', 
     polls++; return Response.json({ status: 'waiting' });
   } });
   delete x.health.lavish_kit_page_reviews;
-  await assert.rejects(client.poll(x.file, 'test'), /UNSUPPORTED_LAVISH/);
+  // The server is this process's own, so the remedy has to address its state
+  // directory and port through the packaged CLI: `lavish-axi` is not on PATH, and a
+  // command without those two would reach a different server or none.
+  await assert.rejects(client.poll(x.file, 'test'), error => error.code === 'UNSUPPORTED_LAVISH'
+    && /the page review routes/.test(error.message)
+    && error.message.includes(`LAVISH_AXI_STATE_DIR='${x.state}'`)
+    && /LAVISH_AXI_PORT=\d+ node '[^']*vendor\/lavish\/dist\/cli\.mjs' stop$/.test(error.message)
+    && !/`lavish-axi stop`/.test(error.message));
   x.health.lavish_kit_page_reviews = 1; x.health.state_id = 'other';
   await assert.rejects(client.poll(x.file, 'test'), /STATE_MISMATCH/);
   assert.equal(polls, 0);
@@ -63,15 +70,32 @@ test('a same-version server built without the hub asset grant is refused with th
   delete x.health.lavish_kit_hub_assets;
   await assert.rejects(client.poll(x.file, 'test'), error => error.code === 'UNSUPPORTED_LAVISH'
     && /hub asset origin grant/.test(error.message)
-    // A hub restart keeps the server, so the remedy is the CLI's own shutdown, run
-    // against the state directory and port this process uses.
-    && /`lavish-axi stop`/.test(error.message)
-    && error.message.includes(`LAVISH_AXI_STATE_DIR=${x.state}`)
-    && /LAVISH_AXI_PORT=\d+/.test(error.message));
+    // A hub restart keeps the server, so the remedy is the packaged CLI's own
+    // shutdown, run against the state directory and port this process uses.
+    && error.message.includes(`LAVISH_AXI_STATE_DIR='${x.state}'`)
+    && /LAVISH_AXI_PORT=\d+ node '[^']*vendor\/lavish\/dist\/cli\.mjs' stop$/.test(error.message)
+    && !/`lavish-axi stop`/.test(error.message));
   assert.equal(polls, 0, 'nothing is consumed from a server that cannot serve the page');
   x.health.lavish_kit_hub_assets = 1;
   assert.equal((await client.poll(x.file, 'test')).session.status, 'waiting');
   assert.equal(polls, 1);
+});
+
+test('the printed shutdown runs verbatim from a state directory and CLI path with spaces and quotes', async t => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'stop-quote-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const state = path.join(dir, "state dir with space and 'quote'"); await mkdir(state);
+  // A stub stands in for the packaged CLI so the test reads back what a pasted run
+  // delivers: the argument vector, and the state directory and port the shutdown has
+  // to carry to reach this process's server rather than a default one.
+  const cli = path.join(dir, "cli with space and 'quote'.mjs");
+  await writeFile(cli, 'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), state: process.env.LAVISH_AXI_STATE_DIR, port: process.env.LAVISH_AXI_PORT }));\n');
+  const child = spawn('sh', ['-c', stopCommand({ cli, directory: state, port: 4399 })], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.setEncoding('utf8'); child.stderr.on('data', chunk => { stderr += chunk; });
+  assert.equal(await new Promise(resolve => child.on('exit', resolve)), 0, stderr);
+  assert.deepEqual(JSON.parse(stdout), { args: ['stop'], state, port: '4399' });
 });
 
 test('hub registration recognizes only the specific ended-session response', async t => {

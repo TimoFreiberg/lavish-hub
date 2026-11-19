@@ -48,9 +48,10 @@ test('a server built without the hub asset grant is named with the shutdown that
   assert.notEqual(code, 0);
   assert.match(stderr, /UNSUPPORTED_LAVISH/);
   assert.match(stderr, /hub asset origin grant/);
-  // The remedy is the CLI that owns server shutdown: a hub restart only replaces the
-  // owner and keeps adopting this server.
-  assert.match(stderr, /`lavish-axi stop`/);
-  assert.match(stderr, new RegExp(`LAVISH_AXI_PORT=${port}`));
+  // The remedy is the packaged CLI's shutdown, run against this process's port: a hub
+  // restart only replaces the owner and keeps adopting this server, and `lavish-axi`
+  // is not on PATH, so a bare stop would reach the default state directory instead.
+  assert.match(stderr, /LAVISH_AXI_PORT=\d+ node '[^']*vendor\/lavish\/dist\/cli\.mjs' stop/);
+  assert.doesNotMatch(stderr, /`lavish-axi stop`/);
   assert.deepEqual(calls, ['GET /health']);
 });

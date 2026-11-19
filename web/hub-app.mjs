@@ -45,7 +45,9 @@ function attemptBundle(name, globalName) {
     // An exported page inlines its renderer as a data URL, and a page opened
     // straight from disk loads it through the file scheme. Neither can be fetched,
     // so those two keep the plain script load that works offline; any other scheme
-    // is refused rather than executed.
+    // is refused rather than executed. Spell the schemes out only in code: export
+    // reads the file scheme in this inlined script, comments included, as a local
+    // reference and rewrites it.
     if (!/^https?:$/.test(source.protocol)) {
       if (!/^(?:data|file):$/.test(source.protocol)) return finish(new Error(`Could not load ${name} renderer`));
       execute(href);
