@@ -4,26 +4,53 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { supportedLavishVersion } from '../src/lavish-http.mjs';
 
-test('vendored opening refuses an incompatible occupied port before registration', async t => {
-  const calls = [];
+async function fakeServer(t, health, calls) {
   const server = createServer((request, response) => {
     calls.push(`${request.method} ${request.url}`);
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.96' }));
+    response.end(JSON.stringify({ ok: true, app: 'lavish-axi', ...health }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
+  return server.address().port;
+}
+
+async function prepareReview(port) {
   const module = pathToFileURL(path.resolve('src/lavish.mjs')).href;
   const script = `import { prepareReview } from ${JSON.stringify(module)}; await prepareReview('page.html', { vendored: true });`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
-    env: { ...process.env, LAVISH_AXI_PORT: String(server.address().port) }, stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, LAVISH_AXI_PORT: String(port) }, stdio: ['ignore', 'ignore', 'pipe'],
   });
   let stderr = '';
   child.stderr.setEncoding('utf8'); child.stderr.on('data', chunk => { stderr += chunk; });
   const code = await new Promise(resolve => child.on('exit', resolve));
+  return { code, stderr };
+}
+
+test('vendored opening refuses an incompatible occupied port before registration', async t => {
+  const calls = [];
+  const port = await fakeServer(t, { version: '0.1.96' }, calls);
+  const { code, stderr } = await prepareReview(port);
   assert.notEqual(code, 0);
   assert.match(stderr, /UNSUPPORTED_LAVISH/);
   assert.deepEqual(calls, ['GET /health']);
 });
 
+test('a server built without the hub asset grant is named with the shutdown that replaces it', async t => {
+  const calls = [];
+  // The supported version and the older patch both match, so nothing but the missing
+  // grant marks this server as one started before the hub page could fetch its
+  // renderer bundles.
+  const port = await fakeServer(t, { version: supportedLavishVersion, lavish_kit_page_reviews: 1 }, calls);
+  const { code, stderr } = await prepareReview(port);
+  assert.notEqual(code, 0);
+  assert.match(stderr, /UNSUPPORTED_LAVISH/);
+  assert.match(stderr, /hub asset origin grant/);
+  // The remedy is the CLI that owns server shutdown: a hub restart only replaces the
+  // owner and keeps adopting this server.
+  assert.match(stderr, /`lavish-axi stop`/);
+  assert.match(stderr, new RegExp(`LAVISH_AXI_PORT=${port}`));
+  assert.deepEqual(calls, ['GET /health']);
+});

@@ -77,6 +77,7 @@ try {
   assert.equal(status.status, 0, logs + status.stderr);
   const health = await fetch(`http://127.0.0.1:${port}/health`).then(r => r.json());
   assert.equal(health.lavish_kit_page_reviews, 1);
+  assert.equal(health.lavish_kit_hub_assets, 1);
   const file = path.join(temp, 'example.html');
   await writeFile(file, '<title>Example</title><link rel="stylesheet" href="example.css"><script src="example.js"></script><p>Hello</p>');
   await writeFile(path.join(temp, 'example.css'), 'p { color: red }');

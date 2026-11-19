@@ -33,7 +33,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   app.use((req, res, next) => generatedDirectory ? express.static(generatedDirectory)(req, res, next) : next());
   app.use((req, res) => {
     res.setHeader('content-type', 'application/json');
-    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.97', lavish_kit_page_reviews: 1, state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
+    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.97', lavish_kit_page_reviews: 1, lavish_kit_hub_assets: 1, state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
     else {
       polls++;
       if (pollMode === 'feedback') { pollMode = 'waiting'; res.end(JSON.stringify({ status: 'feedback', prompts: ['Review this'], dom_snapshot: 'quoted context' })); }

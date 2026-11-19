@@ -2,9 +2,18 @@ import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { canonicalPath } from './hub-workspace.mjs';
-import { runtimeEnv } from './runtime.mjs';
+import { lavishCli, runtimeEnv } from './runtime.mjs';
 
 export const supportedLavishVersion = '0.1.97';
+// Local vendor patches this client cannot work without, named by the /health field
+// that reports each one. The vendored server keeps its upstream release number, so
+// a process started from an earlier build of it reports the supported version and
+// every older field: only a field it predates separates that process from a
+// supported one.
+const requiredPatches = [
+  ['lavish_kit_page_reviews', 'the page review routes'],
+  ['lavish_kit_hub_assets', 'the hub asset origin grant'],
+];
 const keyFor = file => createHash('sha256').update(file).digest('hex').slice(0, 16);
 const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
 
@@ -28,8 +37,16 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
   }
   async function verify() {
     const health = await json(`${base}/health`, { signal: boundedSignal() });
-    if (!health.ok || health.app !== 'lavish-axi' || health.version !== version || health.lavish_kit_page_reviews !== 1) {
+    if (!health.ok || health.app !== 'lavish-axi' || health.version !== version) {
       throw failure('UNSUPPORTED_LAVISH', `Direct HTTP requires patched lavish-axi ${version}; server reports ${health.version || 'unknown'}`);
+    }
+    const missing = requiredPatches.filter(([field]) => health[field] !== 1).map(([, patch]) => patch);
+    if (missing.length) {
+      // The version matches, so the CLI adopts this server rather than replacing it:
+      // only ending the process makes the next command start this build. An operator
+      // reaches that through the CLI that owns server shutdown, with the state
+      // directory and port this process uses.
+      throw failure('UNSUPPORTED_LAVISH', `The running lavish-axi ${version} server predates this build and lacks ${missing.join(' and ')}; stop it with \`lavish-axi stop\` (LAVISH_AXI_STATE_DIR=${directory} LAVISH_AXI_PORT=${port} node ${lavishCli} stop; see \`lavish-axi --help\`) and retry`);
     }
     const canonicalDirectory = await canonicalPath(directory);
     const stateId = keyFor(path.join(canonicalDirectory, 'state.json'));

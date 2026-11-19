@@ -80,8 +80,11 @@ The hub uses these on view transitions. The `Access-Control-Allow-Origin: null`
 grant on a verified `hub-asset-<hash>.js` representation in the vendored artifact
 route is a local difference of the same kind: the hub page fetches its renderer
 bundles from the opaque-origin artifact frame, so a candidate that drops the grant
-breaks every hub render and nothing else reports it. Its `Vary: Origin` belongs
-with it.
+serves a hub whose renderers cannot load. Keep its `Vary: Origin` and the
+`lavish_kit_hub_assets` field its `/health` reports. The release number stays
+upstream's, so only that field lets a lavish-kit process recognize a server built
+without the grant, including one still running from an earlier build of the same
+release, and refuse it.
 Retain or adapt any differences still needed here. Only retire code after establishing an
 upstream equivalent and passing the applicable regression tests and full repository
 QA, including visual inspection, on the proposed replacement. Review and document

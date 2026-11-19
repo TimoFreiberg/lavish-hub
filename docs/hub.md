@@ -117,9 +117,13 @@ data.
 
 The diff and Markdown views fetch their renderer the first time they need it,
 while the same render reads the document. A loaded renderer stays for the page.
-The page reads each bundle from the sandboxed frame's own origin, so the owner has
-to grant that read: an owner process started before an upgrade does not, and every
-renderer fails until it is stopped and started again. A load still incomplete after
+The hub page runs in Lavish's opaque-origin artifact frame and fetches each bundle
+from the owner, which grants that read only for a bundle its registration verified.
+A server started from a build without that grant cannot serve them, so lavish-kit
+refuses to use it rather than let every render fail. The error names
+`lavish-axi stop`, which shuts the server down so the next command starts the
+current build. Stopping the hub owner does not replace it: the Lavish server it
+started keeps running, and the next owner adopts it. A load still incomplete after
 ten seconds is cancelled and the view reports the failure with Retry, which asks
 for the same bundle again. A partly received bundle never runs.
 Export inlines the renderers, so an exported page needs no request for them.

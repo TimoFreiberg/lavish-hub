@@ -1375,6 +1375,12 @@ export async function serve({
       app: "lavish-axi",
       version,
       lavish_kit_page_reviews: 1,
+      // The hub page fetches its renderer bundles from the opaque-origin artifact
+      // frame, which needs the origin grant on this route. A server of the same
+      // release started from an earlier build cannot serve them, and its version
+      // alone cannot say so, so the grant is reported here and a lavish-kit process
+      // refuses that server by name instead of failing every render.
+      lavish_kit_hub_assets: 1,
       state_id: serverStateId,
       state_dir: path.dirname(stateFile),
       // Where this process is listening and every address it was asked to serve (bound or still

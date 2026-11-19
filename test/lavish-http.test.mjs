@@ -16,7 +16,7 @@ async function fixture(t) {
   const state = path.join(dir, 'state'); await mkdir(state);
   const file = path.join(dir, 'review.html'); await writeFile(file, '<!doctype html><html lang="en"><title>HTTP probe</title><p>Review</p></html>');
   const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_AXI_STATE_DIR: state };
-  const health = { ok: true, app: 'lavish-axi', version: supportedLavishVersion, lavish_kit_page_reviews: 1, state_id: keyFor(path.join(await realpath(state), 'state.json')) };
+  const health = { ok: true, app: 'lavish-axi', version: supportedLavishVersion, lavish_kit_page_reviews: 1, lavish_kit_hub_assets: 1, state_id: keyFor(path.join(await realpath(state), 'state.json')) };
   return { dir, state, file, env, health };
 }
 
@@ -47,6 +47,29 @@ test('hub HTTP requires the patched version and matching state before polling', 
   await assert.rejects(client.poll(x.file, 'test'), /STATE_MISMATCH/);
   assert.equal(polls, 0);
   x.health.state_id = keyFor(path.join(await realpath(x.state), 'state.json'));
+  assert.equal((await client.poll(x.file, 'test')).session.status, 'waiting');
+  assert.equal(polls, 1);
+});
+
+test('a same-version server built without the hub asset grant is refused with the shutdown that replaces it', async t => {
+  const x = await fixture(t); let polls = 0;
+  const client = createLavishClient({ env: x.env, vendored: true, fetch: async url => {
+    if (new URL(url).pathname === '/health') return Response.json(x.health);
+    polls++; return Response.json({ status: 'waiting' });
+  } });
+  // An owner that started from an earlier build of the vendored server answers the
+  // supported version and the older patch, so the missing grant is the only sign it
+  // cannot serve hub renderers.
+  delete x.health.lavish_kit_hub_assets;
+  await assert.rejects(client.poll(x.file, 'test'), error => error.code === 'UNSUPPORTED_LAVISH'
+    && /hub asset origin grant/.test(error.message)
+    // A hub restart keeps the server, so the remedy is the CLI's own shutdown, run
+    // against the state directory and port this process uses.
+    && /`lavish-axi stop`/.test(error.message)
+    && error.message.includes(`LAVISH_AXI_STATE_DIR=${x.state}`)
+    && /LAVISH_AXI_PORT=\d+/.test(error.message));
+  assert.equal(polls, 0, 'nothing is consumed from a server that cannot serve the page');
+  x.health.lavish_kit_hub_assets = 1;
   assert.equal((await client.poll(x.file, 'test')).session.status, 'waiting');
   assert.equal(polls, 1);
 });
