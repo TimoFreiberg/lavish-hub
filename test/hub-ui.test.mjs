@@ -88,6 +88,30 @@ test('hub bounds a hung diff file read, keeps the patch, and retries the expansi
   assert.equal(await page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.').count(), 0);
 });
 
+test('hub gives up on a navigation the owner never answers and lets the next one through', { timeout: 40000 }, async t => {
+  const navigations = [];
+  const transport = await createHubTransport({
+    status: () => ({ available: true }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '', patch: '', commits: [] }),
+    // A request lost in transit looks like this to the page: it is never answered.
+    navigate: ({ id }) => { navigations.push(id); return navigations.length === 1 ? new Promise(() => {}) : { selected: id }; },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_KIT_LANGUAGES: '[]' } })).outputFiles[0].text;
+  const markdown = await markdownBundle();
+  const page = await browser.newPage(); page.setDefaultTimeout(5000);
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  await page.getByText('Hub actions are unreachable.', { exact: false }).waitFor({ timeout: 20000 });
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  for (const deadline = Date.now() + 5000; navigations.length < 2 && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 25));
+  assert.deepEqual(navigations, ['changes', 'commits']);
+  await page.locator('#navigation [aria-current="page"]', { hasText: 'Commits' }).waitFor();
+  await page.getByText('Hub actions are unreachable.', { exact: false }).waitFor({ state: 'detached' });
+});
+
 test('hub keeps an unavailable file expansion notice until that file expands', { timeout: 40000 }, async t => {
   const reads = [];
   let bUnavailable = true;
