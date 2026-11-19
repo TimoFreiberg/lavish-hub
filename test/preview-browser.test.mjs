@@ -75,6 +75,16 @@ test('hub previews work without external requests or changing fixtures', async (
       assert.ok(geometry.sidebar <= 282 && geometry.document <= geometry.width + 1, JSON.stringify(geometry));
       if (width === 2200) assert.ok(geometry.diff > 1700 && geometry.viewport > 1400, JSON.stringify(geometry));
     }
+    await page.setViewportSize({ width: 1000, height: 900 });
+    await page.locator('.hub-diff').evaluate(node => { node.style.width = '580px'; });
+    const headerGeometry = await page.locator('.hub-diff .file-header').first().evaluate(header => {
+      const rect = node => node.getBoundingClientRect();
+      const outer = rect(header), path = rect(header.querySelector('.path')), viewed = rect(header.querySelector('.viewed'));
+      return { outer: { left: outer.left, right: outer.right }, path: { left: path.left, right: path.right, width: path.width }, viewed: { left: viewed.left, right: viewed.right, width: viewed.width } };
+    });
+    assert.ok(headerGeometry.path.width > 20 && headerGeometry.path.left >= headerGeometry.outer.left && headerGeometry.path.right <= headerGeometry.outer.right, JSON.stringify(headerGeometry));
+    assert.ok(headerGeometry.viewed.width > 50 && headerGeometry.viewed.left >= headerGeometry.outer.left && headerGeometry.viewed.right <= headerGeometry.outer.right, JSON.stringify(headerGeometry));
+    await page.locator('.hub-diff').evaluate(node => { node.style.width = ''; });
     const links = sidebar.locator('.file-link');
     assert.ok(await links.count() > 2);
     await links.nth(1).click();
@@ -95,7 +105,7 @@ test('hub previews work without external requests or changing fixtures', async (
     await page.getByRole('button', { name: 'Save description' }).click();
     await page.getByText(/Conflict: changed on disk/).waitFor();
     const lines = Array.from({ length: 120 }, (_, i) => `+const line${i} = '${'x'.repeat(76)}';\n`).join('');
-    const patch = Array.from({ length: 500 }, (_, i) => `diff --git a/file${i}.js b/file${i}.js\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/file${i}.js\n@@ -0,0 +1,120 @@\n${lines}`).join('');
+    const patch = Array.from({ length: 500 }, (_, i) => `diff --git a/folder/file${i}.js b/folder/file${i}.js\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/folder/file${i}.js\n@@ -0,0 +1,120 @@\n${lines}`).join('');
     assert.ok(Buffer.byteLength(patch) > 5_000_000);
     const dist = path.join(dir, 'build'); await mkdir(dist);
     execFileSync(process.execPath, ['build.mjs', process.cwd(), dist]);
@@ -110,8 +120,30 @@ test('hub previews work without external requests or changing fixtures', async (
     await page.waitForFunction(() => [...document.querySelectorAll('.hub-diff *')].some(node => node.shadowRoot?.innerHTML.includes('#F3A762')), null, { timeout: 30000 });
     assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ob-bg').trim()), '#262120');
     assert.ok(await page.locator('.hub-diff [data-content] [data-line]').count() < 6000);
+    const folder = page.locator('.hub-diff .dir-row').first();
+    await folder.focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await folder.getAttribute('aria-expanded'), 'false');
+    assert.equal(await folder.evaluate(node => document.activeElement === node), true);
+    await page.keyboard.press('Enter');
+    assert.equal(await folder.getAttribute('aria-expanded'), 'true');
+    assert.equal(await folder.evaluate(node => document.activeElement === node), true);
+    const filter = page.locator('.hub-diff .file-filter');
+    await filter.evaluate(node => { window.originalFilter = node; });
+    await filter.fill('file25');
+    assert.equal(await filter.evaluate(node => node === window.originalFilter && document.activeElement === node), true);
+    await filter.fill('');
     await page.locator('.hub-diff .file-link').nth(250).click();
-    await page.locator('.hub-diff [data-file="file250.js"]').waitFor();
+    await page.locator('.hub-diff [data-file="folder/file250.js"]').waitFor();
+    await page.keyboard.press('j');
+    await page.keyboard.press('j');
+    await page.waitForFunction(() => document.querySelector('.hub-diff .file-link[aria-current]')?.dataset.index === '252');
+    await page.keyboard.press('k');
+    await page.keyboard.press('n');
+    await page.keyboard.press('n');
+    await page.waitForFunction(() => document.querySelector('.hub-diff .file-link[aria-current]')?.dataset.index === '252');
+    await page.locator('.hub-diff .file-link').nth(250).click();
+    await page.locator('.hub-diff [data-file="folder/file250.js"]').waitFor();
     await page.keyboard.press('v');
     assert.match(await page.locator('.hub-diff .file-link').nth(250).innerText(), /✓/);
     assert.deepEqual(forbidden, []);

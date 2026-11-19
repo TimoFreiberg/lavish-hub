@@ -41,7 +41,7 @@ h1 { font-size: 15px; margin: 0; flex: none; }
 .notice { flex: none; }
 .notice:not(:empty) { padding: 6px 14px; background: var(--ob-raised); border-bottom: 1px solid var(--ob-yellow); font-size: 13px; }
 .layout { display: flex; flex: 1; min-height: 0; }
-.viewport { flex: 1; min-width: 0; height: 100%; overflow: auto; overscroll-behavior: contain; background: var(--ob-surface); padding: 0 12px; }
+.viewport { container-type: inline-size; flex: 1; min-width: 0; height: 100%; overflow: auto; overscroll-behavior: contain; background: var(--ob-surface); padding: 0 12px; }
 .viewport diffs-container { border: 1px solid var(--ob-border); border-radius: 8px; background: var(--ob-bg); }
 
 /* Sidebar file tree */
@@ -141,6 +141,13 @@ h1 { font-size: 15px; margin: 0; flex: none; }
 :root[data-theme="light"] .notice:not(:empty) { background: #fff8c5; }
 :root[data-theme="light"] .draft textarea, :root[data-theme="light"] .help { background: #fff; color: #1f2328; border-color: #d0d7de; }
 :root[data-theme="light"] .draft-actions button:first-child { background: #1f883d; color: #fff; }
+
+@container (max-width: 480px) {
+  .file-header { gap: 4px; padding: 0 6px; }
+  .file-main, .file-meta { gap: 4px; }
+  .file-badge { display: none; }
+  .zed-links { max-width: 80px; }
+}
 
 @media (max-width: 700px) {
   .sidebar { flex-basis: 120px; }

@@ -306,8 +306,7 @@ function toggleViewed(index) {
 function toggleCollapsed(file, index) {
   state.collapsed.has(file.newPath) ? state.collapsed.delete(file.newPath) : state.collapsed.add(file.newPath);
   state.version++;
-  if (view && index != null) view.updateItem(itemFor(file, index));
-  else setItems();
+  if (view) view.updateItem(itemFor(file, index));
   renderToolbar();
 }
 function toggleCollapseAll() {
@@ -406,28 +405,29 @@ function itemFor(file, index) {
 }
 function setItems() { state.version = (state.version || 0) + 1; if (view) view.setItems(state.files.map(itemFor)); }
 function renderSidebar() {
-  const prevFilter = sidebar.querySelector('.file-filter');
-  const filterFocused = prevFilter && document.activeElement === prevFilter;
-  const selStart = filterFocused ? prevFilter.selectionStart : null;
-  const selEnd = filterFocused ? prevFilter.selectionEnd : null;
-  const focusedPath = document.activeElement?.classList?.contains('file-link') ? document.activeElement.dataset.path : null;
+  const focused = sidebar.contains(document.activeElement) && document.activeElement.matches('.file-link, .dir-row')
+    ? { selector: document.activeElement.classList.contains('dir-row') ? '.dir-row' : '.file-link', path: document.activeElement.dataset.path } : null;
   const prevTreeScroll = sidebar.querySelector('.file-tree')?.scrollTop || 0;
-
   const viewed = state.files.filter(file => state.viewed.has(file.viewedKey)).length;
-  const head = el('div', null, 'sidebar-head');
-  const titleRow = el('div', null, 'sidebar-title');
-  titleRow.append(el('h2', `Files (${state.files.length})`));
-  head.append(titleRow);
+  let head = sidebar.querySelector('.sidebar-head');
+  if (!head) {
+    head = el('div', null, 'sidebar-head');
+    const titleRow = el('div', null, 'sidebar-title');
+    titleRow.append(el('h2'));
+    head.append(titleRow);
 
-  const filterWrap = el('div', null, 'filter-wrap');
-  const filterInput = el('input', null, 'file-filter');
-  filterInput.type = 'search';
-  filterInput.placeholder = 'Filter files…';
-  filterInput.value = state.filter;
-  filterInput.setAttribute('aria-label', 'Filter files');
-  filterInput.addEventListener('input', () => { state.filter = filterInput.value; renderSidebar(); });
-  filterWrap.append(searchIcon(), filterInput);
-  head.append(filterWrap);
+    const filterWrap = el('div', null, 'filter-wrap');
+    const filterInput = el('input', null, 'file-filter');
+    filterInput.type = 'search';
+    filterInput.placeholder = 'Filter files…';
+    filterInput.value = state.filter;
+    filterInput.setAttribute('aria-label', 'Filter files');
+    filterInput.addEventListener('input', () => { state.filter = filterInput.value; renderSidebar(); });
+    filterWrap.append(searchIcon(), filterInput);
+    head.append(filterWrap);
+    sidebar.append(head);
+  }
+  head.querySelector('h2').textContent = `Files (${state.files.length})`;
 
   const treeEl = el('div', null, 'file-tree');
   treeEl.setAttribute('role', 'region');
@@ -446,6 +446,7 @@ function renderSidebar() {
       dirBtn.style.setProperty('--depth', String(depth));
       dirBtn.setAttribute('aria-expanded', String(!collapsed));
       dirBtn.title = dir.path;
+      dirBtn.dataset.path = dir.path;
       const dirLabel = el('span', dir.name, 'dir-name');
       dirBtn.append(chevronIcon('chevron'), folderIcon(), dirLabel);
       treeEl.append(dirBtn);
@@ -491,14 +492,11 @@ function renderSidebar() {
   bar.append(fill);
   stats.append(progressRow, bar);
 
-  sidebar.replaceChildren(head, treeEl, stats);
+  sidebar.querySelector('.file-tree')?.remove();
+  sidebar.querySelector('.sidebar-stats')?.remove();
+  sidebar.append(treeEl, stats);
   treeEl.scrollTop = prevTreeScroll;
-  if (filterFocused) {
-    filterInput.focus({ preventScroll: true });
-    if (selStart != null && selEnd != null) filterInput.setSelectionRange(selStart, selEnd);
-  } else if (focusedPath) {
-    sidebar.querySelector(`.file-link[data-path="${CSS.escape(focusedPath)}"]`)?.focus({ preventScroll: true });
-  }
+  if (focused) treeEl.querySelector(`${focused.selector}[data-path="${CSS.escape(focused.path)}"]`)?.focus({ preventScroll: true });
   markCurrent();
 }
 function renderToolbar() {
@@ -548,7 +546,7 @@ function goFile(index) {
   state.current = Math.max(0, Math.min(index, state.files.length - 1));
   state.hunk = -1;
   markCurrent();
-  view.scrollTo({ type: 'item', id: String(state.current), align: 'start', behavior: 'smooth-auto' });
+  view.scrollTo({ type: 'item', id: String(state.current), align: 'start', behavior: 'instant' });
 }
 function goHunk(delta) {
   const hunks = []; state.files.forEach((file, i) => file.parsed?.hunks?.forEach(h => hunks.push({ i, line: Math.max(1, h.additionStart || h.deletionStart), side: h.additionCount ? 'additions' : 'deletions' })));
@@ -559,7 +557,7 @@ function goHunk(delta) {
     if (at < 0) at = delta > 0 ? hunks.length - 1 : 0;
   }
   state.hunk = Math.max(0, Math.min(at, hunks.length - 1)); const h = hunks[state.hunk]; state.current = h.i; markCurrent();
-  view.scrollTo({ type: 'line', id: String(h.i), lineNumber: h.line, side: h.side, align: 'start', behavior: 'smooth-auto' });
+  view.scrollTo({ type: 'line', id: String(h.i), lineNumber: h.line, side: h.side, align: 'start', behavior: 'instant' });
 }
 document.addEventListener('keydown', event => {
   if (embedded && !app.isConnected) return;
