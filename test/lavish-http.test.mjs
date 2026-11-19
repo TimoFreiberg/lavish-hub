@@ -76,6 +76,13 @@ test('a same-version server built without the hub asset grant is refused with th
     && /LAVISH_AXI_PORT=\d+ node '[^']*vendor\/lavish\/dist\/cli\.mjs' stop$/.test(error.message)
     && !/`lavish-axi stop`/.test(error.message));
   assert.equal(polls, 0, 'nothing is consumed from a server that cannot serve the page');
+  // Both markers missing names both, so the refusal says everything the adopted
+  // server lacks and still sends it nothing.
+  delete x.health.lavish_kit_page_reviews;
+  await assert.rejects(client.poll(x.file, 'test'), error => error.code === 'UNSUPPORTED_LAVISH'
+    && /lacks the page review routes and the hub asset origin grant/.test(error.message));
+  assert.equal(polls, 0, 'a server missing either marker is never asked for work');
+  x.health.lavish_kit_page_reviews = 1;
   x.health.lavish_kit_hub_assets = 1;
   assert.equal((await client.poll(x.file, 'test')).session.status, 'waiting');
   assert.equal(polls, 1);
