@@ -29,17 +29,26 @@ async function hubDirectory(root, env) {
 }
 
 // Record filesystem identity as well as paths: a new repository at the same
-// checkout path must not receive actions intended for its predecessor.
-export async function resolveWorkspace(directory = process.cwd(), env = process.env) {
-  const { stdout } = await exec('jj', ['root'], { cwd: directory });
-  const root = await realpath(stdout.trim());
+// checkout path must not receive actions intended for its predecessor. The guard
+// re-reads these facts from the known root, so it proves the same two directories
+// are still linked without paying for a jj process spawn, and it keeps working in
+// the recorded-identity mode used when jj is unavailable, where spawning jj would
+// have disabled repository actions. A path that is no longer a workspace, or
+// metadata laid out differently, fails closed.
+async function identityAt(root) {
   const jj = path.join(root, '.jj');
   const repoEntry = path.join(jj, 'repo');
   const entry = await lstat(repoEntry);
   const repo = await realpath(entry.isFile()
     ? path.resolve(jj, (await readFile(repoEntry, 'utf8')).trim()) : repoEntry);
   const [workspaceStat, repoStat] = await Promise.all([stat(jj), stat(repo)]);
-  const identity = { root, repo, workspaceDevice: workspaceStat.dev, workspaceInode: workspaceStat.ino, repoDevice: repoStat.dev, repoInode: repoStat.ino };
+  return { root, repo, workspaceDevice: workspaceStat.dev, workspaceInode: workspaceStat.ino, repoDevice: repoStat.dev, repoInode: repoStat.ino };
+}
+
+export async function resolveWorkspace(directory = process.cwd(), env = process.env) {
+  const { stdout } = await exec('jj', ['root'], { cwd: directory });
+  const root = await realpath(stdout.trim());
+  const identity = await identityAt(root);
   return { ...identity, directory: await hubDirectory(root, env) };
 }
 
@@ -65,7 +74,7 @@ export async function recordWorkspace(identity) {
 
 export async function workspaceMatches(identity) {
   try {
-    const current = await resolveWorkspace(identity.root);
+    const current = await identityAt(await realpath(identity.root));
     return ['root', 'repo', 'workspaceDevice', 'workspaceInode', 'repoDevice', 'repoInode'].every(key => current[key] === identity[key]);
   } catch { return false; }
 }

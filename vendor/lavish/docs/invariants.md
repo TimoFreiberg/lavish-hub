@@ -50,8 +50,21 @@ Proxied resources carry the artifact sandbox CSP, nosniff and no-referrer even
 when opened outside an iframe. Browser addresses resolve from the actual loaded
 URL, not the server's configured address or the opaque iframe's `location.origin`.
 Only required headers cross the proxy, actions retain the 64 KiB body limit, and
-each upstream request has a bounded lifetime. A failed acknowledgement does not
-prove a mutating action failed, so the proxy does not retry it.
+every upstream request has a bounded lifetime in per-phase deadlines. The identity
+challenge is bounded on its own, before anything is forwarded, so tightening a
+later phase never budgets an extra round trip into it. A mutation keeps one
+ceiling from receipt, because abandoning it early hides whether it was delivered.
+A resource read arms its deadline when the proxy forwards and must reach response
+headers within it, since a longer wait means a wedged owner; once headers arrive
+the transfer relaxes to the mutation ceiling rather than cutting off a slow
+client. A deadline that fires before headers answers 504 under the
+`upstream-timeout` diagnostic, but only after a verified identity: an unanswered
+challenge answers 502, and a mutation deadline keeps its socket teardown and 502
+so its observable outcome is unchanged. A browser that disconnects before the
+session lookup completes causes no owner work, and an upstream message that ends
+early fails the request instead of reaching the browser as a short but complete
+response. A failed acknowledgement does not prove a mutating action failed, so
+the proxy does not retry it.
 
 ### Request flow
 

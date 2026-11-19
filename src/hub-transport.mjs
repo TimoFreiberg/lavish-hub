@@ -13,7 +13,7 @@ export async function createHubTransport(operations, { resource, guardSource = a
   const identityKey = randomBytes(32).toString('hex');
   let diagnosticId = 0;
   const server = http.createServer(async (req, res) => {
-    if (process.env.LAVISH_HUB_DIAGNOSTICS === '1' && (req.method === 'POST' || req.method === 'OPTIONS')) {
+    if (process.env.LAVISH_HUB_DIAGNOSTICS === '1') {
       const id = ++diagnosticId, start = Date.now(), method = req.method;
       const log = (event, status) => {
         try { console.error(JSON.stringify({ diagnostic: 'hub', side: 'owner', id, method, event, time: new Date().toISOString(), elapsedMs: Date.now() - start, ...(status === undefined ? {} : { status }) })); } catch {}

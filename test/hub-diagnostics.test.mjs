@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { createHmac } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import express from 'express';
 import { createHubTransport } from '../src/hub-transport.mjs';
 import { createHubProxy } from '../vendor/lavish/src/hub-proxy.js';
@@ -49,4 +53,73 @@ test('opt-in diagnostics trace action lifecycle without request data', async t =
   const text = lines.join('\n');
   for (const expected of ['proxy', 'owner', 'OPTIONS', 'POST', 'forward', 'finish']) assert.ok(text.includes(expected), expected);
   for (const forbidden of [key, transport.capability, transport.resourceKey, transport.identityKey, 'body-sensitive', '/action']) assert.ok(!text.includes(forbidden), forbidden);
+});
+
+test('opt-in diagnostics trace resource reads too, without paths or keys', async t => {
+  const lines = [];
+  const previous = process.env.LAVISH_HUB_DIAGNOSTICS;
+  process.env.LAVISH_HUB_DIAGNOSTICS = '1';
+  const original = console.error;
+  console.error = line => lines.push(line);
+  t.after(() => { console.error = original; if (previous === undefined) delete process.env.LAVISH_HUB_DIAGNOSTICS; else process.env.LAVISH_HUB_DIAGNOSTICS = previous; });
+  const dir = await mkdtemp(path.join(tmpdir(), 'hub-diag-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'review.html');
+  await writeFile(source, '<p>source</p>');
+  await writeFile(path.join(dir, 'asset.svg'), '<svg/>');
+  const transport = await createHubTransport({ save: () => 'ok' }, { resource: id => id === 'doc' ? source : null });
+  t.after(() => transport.close());
+  const key = 'a'.repeat(16);
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json() });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: Number(new URL(transport.url).port), capability: transport.capability, resourceKey: transport.resourceKey, identityKey: transport.identityKey }) });
+  const resource = `${base}/hub-proxy/${key}/resources/${transport.resourceKey}/doc/asset.svg`;
+  assert.equal((await fetch(resource, { headers: { origin: 'null' } })).status, 200);
+  const records = lines.map(line => JSON.parse(line));
+  const proxyRecords = records.filter(record => record.side === 'proxy');
+  assert.deepEqual(proxyRecords.map(record => record.event), ['arrive', 'forward', 'upstream-response', 'finish', 'close']);
+  assert.ok(proxyRecords.every(record => record.method === 'GET'));
+  assert.ok(records.some(record => record.side === 'owner' && record.event === 'finish'));
+  const text = lines.join('\n');
+  for (const forbidden of [key, transport.resourceKey, transport.capability, transport.identityKey, '/resources/', 'asset.svg']) assert.ok(!text.includes(forbidden), forbidden);
+});
+
+test('a resource deadline answers 504 and is named in diagnostics', { timeout: 10000 }, async t => {
+  const lines = [];
+  const previous = process.env.LAVISH_HUB_DIAGNOSTICS;
+  process.env.LAVISH_HUB_DIAGNOSTICS = '1';
+  const original = console.error;
+  console.error = line => lines.push(line);
+  t.after(() => { console.error = original; if (previous === undefined) delete process.env.LAVISH_HUB_DIAGNOSTICS; else process.env.LAVISH_HUB_DIAGNOSTICS = previous; });
+  const identityKey = 'c'.repeat(64), resourceKey = 'b'.repeat(64), capability = 'a'.repeat(64), key = 'a'.repeat(16);
+  const target = http.createServer((req, res) => {
+    if (req.url.startsWith('/identity/')) {
+      const challenge = req.url.split('/').at(-1);
+      res.end(JSON.stringify({ proof: createHmac('sha256', identityKey).update(challenge).digest('hex') }));
+      return;
+    }
+    // A wedged owner: the resource read never starts answering.
+  });
+  await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { target.close(resolve); target.closeAllConnections(); }));
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json(), limits: { resourceMs: 50 } });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: target.address().port, capability, resourceKey, identityKey }) });
+  const response = await fetch(`${base}/hub-proxy/${key}/resources/${resourceKey}/doc/asset.svg`, { signal: AbortSignal.timeout(3000) });
+  assert.equal(response.status, 504);
+  assert.equal((await response.json()).error, 'Hub timeout');
+  const parsed = lines.map(line => JSON.parse(line));
+  assert.deepEqual(parsed.filter(record => record.side === 'proxy').map(record => record.event), ['arrive', 'forward', 'upstream-timeout', 'finish', 'close']);
+  const text = lines.join('\n');
+  for (const forbidden of [key, resourceKey, capability, identityKey, '/resources/', 'asset.svg']) assert.ok(!text.includes(forbidden), forbidden);
 });

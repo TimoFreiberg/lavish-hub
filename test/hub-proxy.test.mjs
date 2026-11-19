@@ -6,6 +6,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import express from 'express';
 import { createHubTransport } from '../src/hub-transport.mjs';
 import { createHubProxy } from '../vendor/lavish/src/hub-proxy.js';
@@ -247,4 +248,270 @@ test('hub proxy refuses an unrelated process at a registered port', async t => {
   await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: targetPort, capability: secret('a'), resourceKey: secret('b'), identityKey: secret('c') }) });
   const result = await fetch(`${base}/hub-proxy/${key}/action`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json', 'x-lavish-capability': secret('a') }, body: '{"operation":"save"}' });
   assert.equal(result.status, 502); assert.equal(captured, false);
+});
+
+// A browser that leaves while the session lookup is still pending must not
+// cause owner work for a response nobody will read.
+async function heldProxy(t) {
+  let entered, release, armed = false;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  let observed;
+  const disconnected = new Promise(resolve => { observed = resolve; });
+  const seen = [];
+  const identityKey = secret('c');
+  const target = http.createServer((req, res) => {
+    seen.push(req.url);
+    const challenge = req.url.split('/').at(-1);
+    res.end(JSON.stringify({ proof: createHmac('sha256', identityKey).update(challenge).digest('hex') }));
+  });
+  const targetPort = await listen(target); t.after(() => close(target));
+  const app = express();
+  const proxy = createHubProxy({
+    store: { findByKey: async () => { if (!armed) return { status: 'open' }; armed = false; entered(); await held; return { status: 'open' }; } },
+    events: new EventEmitter(),
+    jsonParser: express.json(),
+  });
+  app.use('/hub-proxy', (req, res, next) => { res.once('close', observed); next(); });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  const registration = { key, port: targetPort, capability: secret('a'), resourceKey: secret('b'), identityKey };
+  assert.equal((await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(registration) })).status, 200);
+  return {
+    base, seen, started, disconnected, release,
+    resourcePath: `/resources/${registration.resourceKey}/doc/asset.svg`,
+    arm: () => { armed = true; },
+  };
+}
+
+test('a client disconnect during session lookup never reaches the owner', { timeout: 10000 }, async t => {
+  const hub = await heldProxy(t);
+  hub.arm();
+  const controller = new AbortController();
+  const abandoned = fetch(`${hub.base}/hub-proxy/${key}${hub.resourcePath}`, { signal: controller.signal }).catch(() => 'aborted');
+  await hub.started;
+  controller.abort();
+  assert.equal(await abandoned, 'aborted');
+  await hub.disconnected;
+  hub.release();
+  await delay(200);
+  assert.deepEqual(hub.seen, []);
+});
+
+test('a client disconnect during session lookup never forwards an action', { timeout: 10000 }, async t => {
+  const hub = await heldProxy(t);
+  hub.arm();
+  const controller = new AbortController();
+  const abandoned = fetch(`${hub.base}/hub-proxy/${key}/action`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json', 'x-lavish-capability': secret('a') }, body: '{"operation":"save"}', signal: controller.signal }).catch(() => 'aborted');
+  await hub.started;
+  controller.abort();
+  assert.equal(await abandoned, 'aborted');
+  await hub.disconnected;
+  hub.release();
+  await delay(200);
+  assert.deepEqual(hub.seen, []);
+});
+
+test('a resource request is bounded more tightly than an action', { timeout: 10000 }, async t => {
+  const identityKey = secret('c'), capability = secret('a'), resourceKey = secret('b');
+  const dispatched = [];
+  const target = http.createServer(async (req, res) => {
+    if (req.url.startsWith('/identity/')) {
+      const challenge = req.url.split('/').at(-1);
+      res.end(JSON.stringify({ proof: createHmac('sha256', identityKey).update(challenge).digest('hex') }));
+      return;
+    }
+    dispatched.push(req.url);
+    if (req.url.startsWith('/resources/')) return;
+    await delay(300);
+    res.end('{"result":"saved"}');
+  });
+  const targetPort = await listen(target); t.after(() => close(target));
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json(), limits: { resourceMs: 100, actionMs: 4000, identityMs: 1000 } });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: targetPort, capability, resourceKey, identityKey }) });
+  const start = Date.now();
+  const budget = AbortSignal.timeout(3000);
+  const outcome = await fetch(`${base}/hub-proxy/${key}/resources/${resourceKey}/doc/asset.svg`, { signal: budget })
+    .then(async response => ({ status: response.status, body: await response.json() }), () => ({ failure: true }));
+  const elapsed = Date.now() - start;
+  assert.equal(budget.aborted, false, 'the proxy must bound the resource request itself');
+  assert.equal(outcome.status, 504, `a wedged resource read answers 504, got ${JSON.stringify(outcome)}`);
+  assert.equal(outcome.body.error, 'Hub timeout');
+  assert.ok(elapsed < 2500, `resource request failed after ${elapsed} ms`);
+  const action = await fetch(`${base}/hub-proxy/${key}/action`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json', 'x-lavish-capability': capability }, body: '{"operation":"save"}' });
+  assert.equal(action.status, 200); assert.equal((await action.json()).result, 'saved');
+  assert.equal(dispatched.filter(url => url === '/action').length, 1);
+  assert.ok(dispatched[0].startsWith('/resources/'), 'the wedged resource request was forwarded before its bound expired');
+});
+
+test('a slow identity round trip does not consume the resource deadline', { timeout: 10000 }, async t => {
+  const identityKey = secret('c'), resourceKey = secret('b');
+  const target = http.createServer(async (req, res) => {
+    if (req.url.startsWith('/identity/')) {
+      // Slower than the resource deadline below, so a shared budget would fail.
+      await delay(150);
+      const challenge = req.url.split('/').at(-1);
+      res.end(JSON.stringify({ proof: createHmac('sha256', identityKey).update(challenge).digest('hex') }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/css' });
+    res.write('.a{}');
+    await delay(150);
+    res.write('.b{}');
+    await delay(150);
+    res.end('.c{}');
+  });
+  const targetPort = await listen(target); t.after(() => close(target));
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json(), limits: { resourceMs: 100, actionMs: 4000 } });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: targetPort, capability: secret('a'), resourceKey, identityKey }) });
+  const response = await fetch(`${base}/hub-proxy/${key}/resources/${resourceKey}/doc/hub.css`, { signal: AbortSignal.timeout(3000) });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '.a{}.b{}.c{}');
+});
+
+test('an owner that never proves its identity is bounded before dispatch', { timeout: 10000 }, async t => {
+  const identityKey = secret('c'), capability = secret('a');
+  let dispatched = false;
+  const target = http.createServer((req, res) => {
+    if (req.url.startsWith('/identity/')) return;
+    dispatched = true;
+    res.end('{"result":"saved"}');
+  });
+  const targetPort = await listen(target); t.after(() => close(target));
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json(), limits: { identityMs: 100 } });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: targetPort, capability, resourceKey: secret('b'), identityKey }) });
+  const start = Date.now();
+  const budget = AbortSignal.timeout(3000);
+  const outcome = await fetch(`${base}/hub-proxy/${key}/action`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json', 'x-lavish-capability': capability }, body: '{"operation":"save"}', signal: budget }).then(response => ({ status: response.status }), () => ({ failure: true }));
+  const elapsed = Date.now() - start;
+  assert.equal(budget.aborted, false, 'the proxy must bound the identity challenge itself');
+  assert.equal(outcome.status, 502, `an unanswered identity challenge answers 502, got ${JSON.stringify(outcome)}`);
+  assert.ok(elapsed < 2500, `identity challenge failed after ${elapsed} ms`);
+  assert.equal(dispatched, false);
+});
+
+test('a truncated upstream response never completes as a usable resource', { timeout: 10000 }, async t => {
+  const identityKey = secret('c'), resourceKey = secret('b');
+  const target = http.createServer((req, res) => {
+    if (req.url.startsWith('/identity/')) {
+      const challenge = req.url.split('/').at(-1);
+      res.end(JSON.stringify({ proof: createHmac('sha256', identityKey).update(challenge).digest('hex') }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/css', 'content-length': '100' });
+    res.write('.hub {');
+    setTimeout(() => res.socket.destroy(), 20);
+  });
+  const targetPort = await listen(target); t.after(() => close(target));
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json() });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: targetPort, capability: secret('a'), resourceKey, identityKey }) });
+  const start = Date.now();
+  const budget = AbortSignal.timeout(3000);
+  const outcome = await fetch(`${base}/hub-proxy/${key}/resources/${resourceKey}/doc/hub.css`, { signal: budget })
+    .then(async response => ({ status: response.status, body: await response.text().catch(() => null) }), () => ({ failure: true }));
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 2500, `truncated response settled after ${elapsed} ms`);
+  assert.ok(outcome.failure || outcome.status !== 200 || outcome.body === null, `a short upstream body must not complete as ${JSON.stringify(outcome)}`);
+});
+
+// A GET with a body is unusual but valid, and the resource route never reads it.
+// The deadline must still answer, and Node dumps the unread bytes so the
+// connection is not left occupied.
+test('a resource deadline answers when the request body was never read', { timeout: 10000 }, async t => {
+  const identityKey = secret('c'), capability = secret('a'), resourceKey = secret('b');
+  const target = http.createServer((req, res) => {
+    if (!req.url.startsWith('/identity/')) return;
+    const challenge = req.url.split('/').at(-1);
+    res.end(JSON.stringify({ proof: createHmac('sha256', identityKey).update(challenge).digest('hex') }));
+  });
+  const targetPort = await listen(target); t.after(() => close(target));
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json(), limits: { resourceMs: 100 } });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: targetPort, capability, resourceKey, identityKey }) });
+  const outcome = await new Promise(resolve => {
+    const request = http.request(`${base}/hub-proxy/${key}/resources/${resourceKey}/doc/asset.svg`, { method: 'GET', headers: { 'content-length': 4096 } }, response => {
+      let text = '';
+      response.on('data', chunk => { text += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, text }));
+      response.on('error', error => resolve({ failure: error.code }));
+    });
+    request.on('error', error => resolve({ failure: error.code }));
+    // Only part of the declared body arrives before the deadline fires.
+    request.write(Buffer.alloc(1024, 97));
+  });
+  assert.equal(outcome.status, 504, `an unread body must not cost the deadline its answer, got ${JSON.stringify(outcome)}`);
+  assert.equal(JSON.parse(outcome.text).error, 'Hub timeout');
+});
+
+test('an action that never answers is torn down rather than answered', { timeout: 10000 }, async t => {
+  const identityKey = secret('c'), capability = secret('a');
+  const target = http.createServer((req, res) => {
+    if (!req.url.startsWith('/identity/')) return;
+    const challenge = req.url.split('/').at(-1);
+    res.end(JSON.stringify({ proof: createHmac('sha256', identityKey).update(challenge).digest('hex') }));
+  });
+  const targetPort = await listen(target); t.after(() => close(target));
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json(), limits: { actionMs: 150, resourceMs: 1000 } });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: targetPort, capability, resourceKey: secret('b'), identityKey }) });
+  const start = Date.now();
+  const budget = AbortSignal.timeout(3000);
+  const outcome = await fetch(`${base}/hub-proxy/${key}/action`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json', 'x-lavish-capability': capability }, body: '{"operation":"save"}', signal: budget })
+    .then(response => ({ status: response.status }), () => ({ failure: true }));
+  const elapsed = Date.now() - start;
+  assert.equal(budget.aborted, false, 'the proxy must bound the action');
+  assert.equal(outcome.failure, true, `a mutation deadline keeps the socket teardown, got ${JSON.stringify(outcome)}`);
+  assert.ok(elapsed < 2500, `action failed after ${elapsed} ms`);
+});
+
+test('a resource transfer that stalls after headers is bounded by the ceiling', { timeout: 10000 }, async t => {
+  const identityKey = secret('c'), capability = secret('a'), resourceKey = secret('b');
+  const target = http.createServer((req, res) => {
+    if (!req.url.startsWith('/identity/')) {
+      res.writeHead(200, { 'content-type': 'text/css' });
+      res.write('.a{}');
+      return;
+    }
+    const challenge = req.url.split('/').at(-1);
+    res.end(JSON.stringify({ proof: createHmac('sha256', identityKey).update(challenge).digest('hex') }));
+  });
+  const targetPort = await listen(target); t.after(() => close(target));
+  const app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json(), limits: { resourceMs: 40, actionMs: 400 } });
+  app.post('/register', proxy.control, proxy.register); app.use('/hub-proxy', proxy.handle);
+  const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, port: targetPort, capability, resourceKey, identityKey }) });
+  const start = Date.now();
+  const budget = AbortSignal.timeout(4000);
+  const outcome = await fetch(`${base}/hub-proxy/${key}/resources/${resourceKey}/doc/hub.css`, { signal: budget })
+    .then(async response => ({ status: response.status, body: await response.text().catch(() => null) }), () => ({ failure: true }));
+  const elapsed = Date.now() - start;
+  assert.equal(budget.aborted, false, 'the ceiling must bound the stalled transfer');
+  assert.equal(outcome.status, 200, `headers arrive before the stall, got ${JSON.stringify(outcome)}`);
+  assert.equal(outcome.body, null, 'a stalled transfer must not complete its body');
+  assert.ok(elapsed >= 300, `the resource deadline must not govern a started transfer, failed after ${elapsed} ms`);
 });
