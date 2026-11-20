@@ -142,7 +142,9 @@ changes its source directory. Published HTML does not currently receive a hub
 action SDK.
 
 Run `lavish-kit hub url [--workspace DIR]` to print the workspace review URL
-before or while the owner runs. Run `lavish-kit hub [--workspace DIR]` to check
+before or while the owner runs. Before startup, the URL reflects the current port
+selection; another process can take that port before the owner starts, so check
+again after startup if the URL no longer works. Run `lavish-kit hub [--workspace DIR]` to check
 the owner, add `--view VIEW` to select a built-in view or published document ID,
 or run `lavish-kit hub stop [--workspace DIR]` to request shutdown. Add `--open`
 to the short hub or `hub publish` command to open the existing review (or list

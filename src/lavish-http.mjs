@@ -4,6 +4,7 @@ import path from 'node:path';
 import { canonicalPath } from './hub-workspace.mjs';
 import { quote } from './quote.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
+import { resolveLavishPort } from './lavish-port.mjs';
 
 export const supportedLavishVersion = '0.1.97';
 // Local vendor patches this client cannot work without, named by the /health field
@@ -27,17 +28,21 @@ export function stopCommand({ cli = lavishCli, directory, port }) {
 }
 
 // Opening a page still uses the CLI, which owns server startup and networking.
-export function createLavishClient({ env = process.env, fetch: request = globalThis.fetch, signal } = {}) {
+export function createLavishClient({ env = process.env, fetch: request = globalThis.fetch, signal, portResolved = false } = {}) {
+  const inputEnv = env;
   env = runtimeEnv(env);
   const version = supportedLavishVersion;
-  const port = Number(env.LAVISH_AXI_PORT);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid LAVISH_AXI_PORT');
-  const base = `http://127.0.0.1:${port}`;
+  let port, base;
   const directory = path.resolve(env.LAVISH_AXI_STATE_DIR);
   const stateFile = path.join(directory, 'state.json');
   const boundedSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000);
   async function json(url, options = {}) {
-    const response = await request(url, { redirect: 'error', ...options });
+    let response;
+    try { response = await request(url, { redirect: 'error', ...options }); }
+    catch (error) {
+      if (!error.cause?.code) throw error;
+      throw Object.assign(failure('LAVISH_CONNECTION_ERROR', `Cannot connect to Lavish at ${base} (${error.cause.code}). Check that the server is running and that LAVISH_AXI_PORT is correct.`), { cause: error.cause });
+    }
     const data = await response.json();
     if (!response.ok || data.code === 'LISTENER_REPLACED') {
       throw Object.assign(failure(data.code || (response.status === 404 ? 'NOT_FOUND' : 'LAVISH_HTTP_ERROR'), data.error || data.status || `HTTP ${response.status}`), { status: response.status });
@@ -45,7 +50,13 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
     return data;
   }
   async function verify() {
-    const health = await json(`${base}/health`, { signal: boundedSignal() });
+    if (port === undefined) {
+      port = portResolved ? Number(env.LAVISH_AXI_PORT) : await resolveLavishPort(inputEnv);
+      base = `http://127.0.0.1:${port}`;
+    }
+    let health;
+    try { health = await json(`${base}/health`, { signal: boundedSignal() }); }
+    catch (error) { if (error.cause?.code === 'ECONNREFUSED') { port = undefined; base = undefined; } throw error; }
     if (!health.ok || health.app !== 'lavish-axi' || health.version !== version) {
       throw failure('UNSUPPORTED_LAVISH', `Direct HTTP requires patched lavish-axi ${version}; server reports ${health.version || 'unknown'}`);
     }
@@ -70,7 +81,7 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
     async verifyIfRunning() {
       try { return await verify(); }
       catch (error) {
-        if (error.cause?.code === 'ECONNREFUSED') return null;
+        if (error.cause?.code === 'ECONNREFUSED') { port = undefined; base = undefined; return null; }
         throw error;
       }
     },

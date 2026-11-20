@@ -4,6 +4,7 @@ import { callHub, hubUrl, runHubOwner } from './hub-runtime.mjs';
 import { readMetadata } from './hub-documents.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
 import { createLavishClient } from './lavish-http.mjs';
+import { resolveLavishPort } from './lavish-port.mjs';
 import { themeCss, syntaxTheme, diffThemeCss } from './orangebox.mjs';
 
 const usage = `usage: lavish-kit hub [listen|stop|status|url] [--workspace DIR] [--open] [--reopen]
@@ -75,9 +76,10 @@ export function parseArgs(args) {
 }
 
 async function reply(page, text) {
-  await createLavishClient().verifyIfRunning();
+  const env = { ...runtimeEnv(), LAVISH_AXI_PORT: String(await resolveLavishPort()) };
+  await createLavishClient({ env }).verifyIfRunning();
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [lavishCli, 'reply', page, '--agent-reply', text], { env: runtimeEnv(), stdio: 'inherit' });
+    const child = spawn(process.execPath, [lavishCli, 'reply', page, '--agent-reply', text], { env, stdio: 'inherit' });
     child.once('error', reject);
     child.once('exit', (code, signal) => {
       if (signal) { process.kill(process.pid, signal); return; }

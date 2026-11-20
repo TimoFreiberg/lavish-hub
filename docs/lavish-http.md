@@ -1,6 +1,12 @@
 # Lavish HTTP boundary
 
-The foreground hub uses the packaged, patched Lavish 0.1.97 runtime. Before use it checks the server health response, version, the page-review and hub-asset capabilities, and canonical state identity. A responding incompatible server on the selected port is rejected rather than replaced. The default is port 4388 and `${XDG_STATE_HOME:-$HOME/.local/state}/lavish-kit/lavish`; `LAVISH_AXI_PORT` and `LAVISH_AXI_STATE_DIR` override them.
+The foreground hub uses the packaged, patched Lavish 0.1.97 runtime. Before use it checks the server health response, version, the page-review and hub-asset capabilities, and canonical state identity. The default state directory is `${XDG_STATE_HOME:-$HOME/.local/state}/lavish-kit/lavish`; `LAVISH_AXI_STATE_DIR` overrides it.
+
+Without `LAVISH_AXI_PORT`, commands find an existing Lavish server for that state directory on ports 4388–4407, or choose the first available port in that range. Unidentified listeners on unrecorded ports are skipped. If the recorded port is occupied but its listener cannot identify itself, startup is refused rather than risking a second server writing the same state. A matching but incompatible server is rejected rather than replaced. An explicit `LAVISH_AXI_PORT` selects exactly that port, with no fallback, and is rejected if another known port uses the same state.
+
+Startup and discovery are serialized by `port-start.lock` in the state directory. `port.json` records the selected port before startup so later commands can find even an explicit port. If a startup process is killed, the lock can remain; after confirming no Lavish Kit startup is in progress, remove the lock directory and retry. If another listener takes the selected port during launch, the recorded port can remain ambiguous. Stop that listener and confirm no Lavish server is starting or running for the state directory before removing `port.json` and retrying. Servers started independently outside the default range and without a port record cannot be discovered. An unrecorded server that cannot report its state identity is also indistinguishable from an unrelated listener, so stop older or independently started servers before using the same state directory.
+
+HTTP connection failures with a network error code report the loopback address and suggest checking the server and `LAVISH_AXI_PORT`.
 
 The owner is the sole consumer of its page's feedback. A failed consuming poll is not retried because the server may have consumed the batch. See [feedback and actions](feedback-routing.md) and [hub](hub.md) for the observable behavior and delivery guarantees. The package does not provide a general Lavish CLI passthrough.
 

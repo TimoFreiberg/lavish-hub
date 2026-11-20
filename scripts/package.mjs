@@ -26,7 +26,7 @@ try {
   run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], temp);
   const pkg = JSON.parse(await readFile(path.join(temp, 'package.json'), 'utf8'));
   pkg.bundledDependencies = Object.keys(pkg.dependencies);
-  pkg.files = ['bin', 'src/cli.mjs', 'src/deps.mjs', 'src/orangebox.mjs', 'src/diff/model.mjs', 'src/hub-*.mjs', 'src/lavish.mjs', 'src/lavish-http.mjs', 'src/quote.mjs', 'src/runtime.mjs', 'src/save.mjs', 'src/save-message.mjs', 'web/hub-app.mjs', 'web/hub.css', 'web/confirm-navigation.js', 'dist/diff-app.js', 'dist/diff.css', 'dist/hub-markdown.js', 'dist/document.css', 'vendor/lavish/package.json', 'vendor/lavish/dist', 'vendor/lavish/LICENSE', 'vendor/lavish/THIRD-PARTY-NOTICES.md', 'LICENSE', 'docs', 'provenance.json'];
+  pkg.files = ['bin', 'src/cli.mjs', 'src/deps.mjs', 'src/orangebox.mjs', 'src/diff/model.mjs', 'src/hub-*.mjs', 'src/lavish.mjs', 'src/lavish-http.mjs', 'src/lavish-port.mjs', 'src/quote.mjs', 'src/runtime.mjs', 'src/save.mjs', 'src/save-message.mjs', 'web/hub-app.mjs', 'web/hub.css', 'web/confirm-navigation.js', 'dist/diff-app.js', 'dist/diff.css', 'dist/hub-markdown.js', 'dist/document.css', 'vendor/lavish/package.json', 'vendor/lavish/dist', 'vendor/lavish/LICENSE', 'vendor/lavish/THIRD-PARTY-NOTICES.md', 'LICENSE', 'docs', 'provenance.json'];
   await writeFile(path.join(temp, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
   await writeFile(path.join(temp, 'provenance.json'), JSON.stringify({ source, lavishVersion: '0.1.97', lavishKitPageReviews: 1 }, null, 2) + '\n');
   await mkdir(output, { recursive: true });

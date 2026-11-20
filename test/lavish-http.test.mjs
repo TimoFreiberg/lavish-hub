@@ -133,6 +133,10 @@ test('vendored preflight only permits refusal or a compatible server', async t =
     throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
   } });
   assert.equal(await refused.verifyIfRunning(), null);
+  await assert.rejects(refused.poll(x.file, 'test'), error => error.code === 'LAVISH_CONNECTION_ERROR'
+    && error.cause.code === 'ECONNREFUSED'
+    && /Cannot connect to Lavish at http:\/\/127\.0\.0\.1:\d+/.test(error.message)
+    && /LAVISH_AXI_PORT/.test(error.message));
   const client = createLavishClient({ env: x.env, vendored: true, fetch: async (url, options) => {
     calls++;
     assert.equal(new URL(url).pathname, '/health');

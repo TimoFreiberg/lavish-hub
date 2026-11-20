@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { canonicalPath } from './hub-workspace.mjs';
 import { createLavishClient } from './lavish-http.mjs';
 import { runtimeEnv } from './runtime.mjs';
+import { resolveLavishPort } from './lavish-port.mjs';
 
 const exec = promisify(execFile);
 
@@ -66,9 +67,9 @@ export async function detectTailscale(env = process.env, { run = exec, platform 
 }
 
 export async function computeHubUrl(identity, { env = process.env, detect = detectTailscale, client = createLavishClient } = {}) {
-  env = runtimeEnv(env);
+  const port = await resolveLavishPort(env);
+  env = { ...runtimeEnv(env), LAVISH_AXI_PORT: String(port) };
   const health = await client({ env }).verifyIfRunning();
-  const port = Number(env.LAVISH_AXI_PORT);
   const page = await canonicalPath(path.join(identity.directory, 'hub.html'));
   const key = createHash('sha256').update(page).digest('hex').slice(0, 16);
   const envHost = env.LAVISH_AXI_HOST?.trim() || '';
