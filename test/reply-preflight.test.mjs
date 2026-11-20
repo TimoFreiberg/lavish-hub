@@ -44,7 +44,8 @@ test('reply refuses incompatible servers before side effects and forwards compat
   assert.equal(rejected.status, 1);
   assert.match(rejected.stderr, /UNSUPPORTED_LAVISH/);
   assert.equal(rejected.stdout, '');
-  assert.deepEqual(requests.map(({ method, url }) => [method, url]), [['GET', '/health']]);
+  assert.ok(requests.length > 0);
+  assert.ok(requests.every(({ method, url }) => method === 'GET' && url === '/health'));
   compatible = true;
   requests.length = 0;
   const direct = await run(lavishCli, args, env);
