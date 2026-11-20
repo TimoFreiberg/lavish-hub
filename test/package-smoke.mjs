@@ -60,6 +60,11 @@ try {
   const env = { ...process.env, HOME: home, XDG_STATE_HOME: path.join(home, 'state'), XDG_DATA_HOME: path.join(home, 'data'), LAVISH_AXI_STATE_DIR: path.join(home, 'state/lavish-kit/lavish'), LAVISH_AXI_PORT: String(port), PATH: `${trap}${path.delimiter}${process.env.PATH}` };
   const run = args => spawnSync(process.execPath, [cli, ...args], { cwd: repo, env, encoding: 'utf8', timeout: 15000 });
   assert.equal(run(['--help']).status, 0);
+  for (const format of ['css', 'syntax', 'diff-css']) {
+    const theme = run(['theme', format]);
+    assert.equal(theme.status, 0, theme.stderr);
+    assert.ok(theme.stdout.length > 0);
+  }
   assert.equal(run(['diff']).status, 2);
   const init = spawnSync('jj', ['git', 'init'], { cwd: repo, env, encoding: 'utf8' });
   assert.equal(init.status, 0, init.stderr);
