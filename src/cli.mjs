@@ -8,7 +8,7 @@ import { resolveLavishPort } from './lavish-port.mjs';
 import { themeCss, syntaxTheme, diffThemeCss } from './orangebox.mjs';
 
 const usage = `usage: lavish-kit hub [listen|stop|status|url] [--workspace DIR] [--open] [--reopen]
-       lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--open]
+       lavish-kit hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--attention] [--open]
        lavish-kit hub tasks --file FILE [--workspace DIR]
        lavish-kit reply PAGE --agent-reply TEXT
        lavish-kit theme [css|syntax|diff-css]`;
@@ -64,7 +64,7 @@ export function parseArgs(args) {
     } else if (command === 'status' && arg === '--view') {
       if (result.view !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--view requires one value');
       result.view = args[++i];
-    } else if ((arg === '--open' && ['listen', 'status', 'publish'].includes(command)) || (arg === '--reopen' && command === 'listen')) {
+    } else if ((arg === '--open' && ['listen', 'status', 'publish'].includes(command)) || (arg === '--reopen' && command === 'listen') || (arg === '--attention' && command === 'publish')) {
       const key = arg.slice(2);
       if (result[key]) throw new UsageError(`${arg} given twice`);
       result[key] = true;
@@ -107,16 +107,19 @@ export async function main(args = process.argv.slice(2)) {
     if (options.hub === 'url') { console.log(await hubUrl(options)); return 0; }
     if (['publish', 'tasks'].includes(options.hub)) {
       const body = options.hub === 'publish'
-        ? { id: options.id, title: options.title, file: path.resolve(options.file), ...(options.metadataFile ? { metadata: await readMetadata(options.metadataFile) } : {}) }
+        ? { id: options.id, title: options.title, file: path.resolve(options.file), ...(options.metadataFile ? { metadata: await readMetadata(options.metadataFile) } : {}), ...(options.attention ? { attention: true } : {}) }
         : { kind: options.hub, file: path.resolve(options.file) };
-      await callHub(options.hub === 'publish' ? 'publish' : 'attach', { ...options, body });
-      if (options.open) await callHub('open', options);
-      console.log(options.hub === 'publish' ? `Registered document ${options.id}.` : `Configured ${options.hub}.`);
+      const result = await callHub(options.hub === 'publish' ? 'publish' : 'attach', { ...options, body });
+      console.log(options.hub === 'publish' ? (result?.url ? `Registered document ${options.id}: ${result.url}` : `Registered document ${options.id}.`) : `Configured ${options.hub}.`);
+      if (options.open) {
+        if (options.hub === 'publish') await callHub('navigate', { ...options, body: { id: options.id } });
+        await callHub('open', { ...options, ...(options.hub === 'publish' ? { body: { view: options.id } } : {}) });
+      }
       return 0;
     }
     if (options.hub === 'status' && options.view) await callHub('navigate', { ...options, body: { id: options.view } });
     const result = await callHub(options.hub, options);
-    if (options.open) await callHub('open', options);
+    if (options.open) await callHub('open', { ...options, ...(options.view ? { body: { view: options.view } } : {}) });
     console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}.`);
     return 0;
   } catch (error) {

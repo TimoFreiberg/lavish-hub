@@ -57,8 +57,12 @@ lavish-kit hub stop
 
 The source must already exist and end in `.html`, `.md`, or `.markdown`. IDs
 are 1–64 ASCII letters, digits, underscores or hyphens, starting with a letter
-or digit; built-in view IDs are reserved. Publishing an existing ID replaces its
-registration and selects it. `--metadata-file` accepts a JSON object of at most
+or digit; built-in view IDs are reserved. Publishing registers or replaces the
+document without changing the active browser view and prints its direct
+`?view=ID` link. Pass `--attention` to mark the document in the sidebar for
+review without taking over the page; opening it clears the flag. New or updated publications show a `New` badge in the sidebar until opened. Pass `--open` to `hub publish`, or run
+`lavish-kit hub --view ID [--open]`, to select and open the artifact explicitly.
+`--metadata-file` accepts a JSON object of at most
 16 KiB with optional `reviewedRepository` (nonempty display name), `baseCommit`
 and `headCommit` (full 40- or 64-digit hex IDs), and `sourceUrl` (HTTP(S) URL).
 Unknown fields are rejected. Each publication replaces all previous metadata;
@@ -101,7 +105,7 @@ and diff views use the Orangebox dark palette. Published HTML without a root `da
 `data-theme="orangebox"` and a dark background and foreground fallback. Authored
 CSS can override the fallback, and an existing root `data-theme` is retained. The
 fallback does not load DaisyUI for pages that do not already include it.
-Explicit view and publish commands also switch an open published HTML page to the
+Explicit view commands (`lavish-kit hub --view ID` or `hub publish --open`) also switch an open published HTML page to the
 selected view, unless unsaved edits pause the switch. The hub asks before leaving
 for a published HTML page when a hub draft or an unqueued diff comment is
 unsaved. Published pages similarly ask after user input or changes outside the
@@ -148,7 +152,10 @@ again after startup if the URL no longer works. Run `lavish-kit hub [--workspace
 the owner, add `--view VIEW` to select a built-in view or published document ID,
 or run `lavish-kit hub stop [--workspace DIR]` to request shutdown. Add `--open`
 to the short hub or `hub publish` command to open the existing review (or list
-it under Artifacts when available). Publishing selects the document. Selection
+it under Artifacts when available); on `hub publish`, `--open` also selects the
+published document. Plain `hub publish` leaves the active view unchanged and
+prints a direct `?view=ID` link. The browser tab title follows the active view
+and workspace name (`<View> · <workspace>` via Lavish's `setDocumentMeta()`). Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. An open hub checks for selection, repository, and source changes about
 every two seconds after each completed check; slow or unavailable actions can delay

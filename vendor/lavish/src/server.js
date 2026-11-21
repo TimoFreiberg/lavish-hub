@@ -2130,11 +2130,14 @@ export async function serve({
       // frame-ancestors expression can name.
       res.setHeader("x-frame-options", "DENY");
       res.setHeader("content-security-policy", "frame-ancestors 'none'");
+      const rawView = typeof req.query?.view === "string" ? req.query.view : "";
+      const initialView = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(rawView) ? rawView : "";
       res.type("html").send(
         createChromeHtml(session, {
           layoutGateEnabled: shouldEnableLayoutGate(req.query || {}),
           faviconTag,
           title: title ? `${title} · Lavish` : "Lavish Editor",
+          initialView,
           artifactRevision: chromeLoad.artifact_revision,
           artifactLoadToken: chromeLoad.artifact_load_token,
           artifactLoadSequence: chromeLoad.artifact_load_sequence,
@@ -4448,6 +4451,7 @@ export function createChromeHtml(
     layoutGateEnabled = true,
     faviconTag = LAVISH_DEFAULT_FAVICON,
     title = "Lavish Editor",
+    initialView = "",
     artifactRevision = 0,
     artifactLoadToken = "",
     artifactLoadSequence = 0,
@@ -4489,6 +4493,7 @@ export function createChromeHtml(
     revisionPalette: artifactRevisions.revisionPalette(),
     pageProtocol: 1,
     entryPage: normalizeReviewPageIdentity(path.basename(session.file), session.file),
+    ...(initialView ? { initialView } : {}),
   });
   const { head: pathHead, tail: pathTail } = displayPathParts(session.file);
   const entryArtifactPath = artifactEntryUrl(session);

@@ -73,9 +73,12 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await writeFile(source, '<!doctype html><html><head><link rel="stylesheet" href="review.css?v=1"></head><body><h1 id="authored">Published review</h1><input aria-label="Authored draft"><script src="review.js?v=2"></script></body></html>');
   await writeFile(path.join(dir, 'review.css'), '#authored { color: rgb(1, 2, 3) }');
   await writeFile(path.join(dir, 'review.js'), 'document.querySelector("#authored").dataset.ran="yes"');
-  await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
+  const publishOut = await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
   const url = stderr.match(/ready: (https?:\/\/\S+)/)?.[1];
   assert.ok(url, stderr);
+  assert.ok(publishOut.stdout.includes(`${url}?view=review`), publishOut.stdout);
+  const initialStatus = await (await fetch(proxyAction, { method: 'POST', headers: actionHeaders, body: '{"operation":"status"}' })).json();
+  assert.equal(initialStatus.result.selected, 'commits');
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
   const forward = net.createServer(socket => {
@@ -99,9 +102,12 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   const page = await browser.newPage();
   await page.route(`http://127.0.0.1:${port}/**`, route => route.abort());
   await page.route(`${record.url}/**`, route => route.abort());
-  await page.goto(forwardedUrl.href);
+  const directReviewUrl = new URL(forwardedUrl.href);
+  directReviewUrl.searchParams.set('view', 'review');
+  await page.goto(directReviewUrl.href);
   const authored = page.frameLocator('#artifact').locator('#authored');
   await authored.waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => document.title === 'Review · repo · Lavish');
   const showAnyway = page.getByRole('button', { name: 'Show anyway' });
   if (await showAnyway.isVisible()) await showAnyway.click();
   assert.equal(await authored.getAttribute('data-ran'), 'yes');
@@ -374,8 +380,45 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   t.diagnostic(`Normal click to navigate response: ${(normalResponse - normalStart).toFixed(1)}ms; click to Commits heading: ${(performance.now() - normalStart).toFixed(1)}ms`);
   const markdown = path.join(dir, 'notes.md');
   await writeFile(markdown, '# Notes\nOriginal\n');
-  await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', markdown, '--id', 'notes', '--title', 'Notes', '--workspace', repo], { env });
+  await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', markdown, '--id', 'notes', '--title', 'Notes', '--attention', '--workspace', repo], { env });
+  const notesButton = frame.getByRole('button', { name: 'Notes', exact: true });
+  await notesButton.waitFor();
+  assert.equal(await notesButton.getAttribute('data-attention'), 'true');
+  assert.equal(await notesButton.getAttribute('aria-describedby'), 'hub-nav-desc-attention');
+  assert.equal(await page.title(), 'Commits · repo · Lavish');
+  // Opening a direct link in the same tab overrides any retained sibling destination in sessionStorage.
+  // Also verify a transient acknowledge failure retries on the next poll while the rendered view stays open.
+  let failedAck = false;
+  const ackRoute = async route => {
+    if (!failedAck && route.request().postDataJSON()?.operation === 'acknowledge') {
+      failedAck = true;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'transient' }) });
+      return;
+    }
+    await route.continue();
+  };
+  await page.route('**/action', ackRoute);
+  const directNotesUrl = new URL(forwardedUrl.href);
+  directNotesUrl.searchParams.set('view', 'notes');
+  await page.goto(directNotesUrl.href);
+  await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => document.title === 'Notes · repo · Lavish');
+  await frame.locator('button[data-hub-id="notes"]:not([data-attention]):not([data-unseen])').waitFor({ timeout: 10000 });
+  assert.equal(failedAck, true);
+  await page.unroute('**/action', ackRoute);
+  // Switching views after a direct link and reloading must stay on the manually chosen view.
+  await frame.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.waitForFunction(() => document.title === 'Tasks · repo · Lavish');
+  for (let i = 0; i < 40; i++) {
+    const s = await (await fetch(proxyAction, { method: 'POST', headers: actionHeaders, body: '{"operation":"status"}' })).json();
+    if (s.result?.selected === 'tasks') break;
+    await delay(50);
+  }
+  await page.reload();
+  await frame.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => document.title === 'Tasks · repo · Lavish');
   await frame.getByRole('button', { name: 'Notes', exact: true }).click();
+  await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor({ timeout: 20000 });
   await frame.getByRole('button', { name: 'Edit Document Markdown' }).click();
   const editor = frame.getByRole('textbox', { name: 'Document Markdown' });
   await editor.waitFor();

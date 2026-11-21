@@ -42,6 +42,9 @@ export async function createHubDocuments(directory, { guardSource = async () => 
   let state;
   try { state = JSON.parse(await readFile(stateFile, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; state = { documents: {}, attachments: {} }; }
+  for (const doc of Object.values(state.documents || {})) {
+    if (doc && typeof doc === 'object' && !Object.hasOwn(doc, 'viewedVersion')) doc.viewedVersion = doc.version ?? null;
+  }
   const file = path.join(directory, 'tasks.md');
   try { await writeFile(file, '', { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
   state.attachments = { tasks: state.attachments.tasks || { source: file, version: randomUUID() } };
@@ -71,10 +74,23 @@ export async function createHubDocuments(directory, { guardSource = async () => 
       const file = await source(body.file, ['.md', '.markdown', '.html']);
       const metadata = body.metadata === undefined ? {} : validateMetadata(body.metadata);
       if (Buffer.byteLength(JSON.stringify(metadata)) > maxMetadata) throw new Error('Metadata exceeds 16 KiB');
-      const document = { id: body.id, title: body.title || path.basename(file), source: file, metadata, version: randomUUID() };
+      const previous = Object.hasOwn(state.documents, body.id) ? state.documents[body.id] : null;
+      const attention = body.attention === true ? true : Boolean(previous?.attention);
+      const viewedVersion = previous && Object.hasOwn(previous, 'viewedVersion') ? previous.viewedVersion : null;
+      const document = { id: body.id, title: body.title || path.basename(file), source: file, metadata, version: randomUUID(), publishedAt: new Date().toISOString(), attention, viewedVersion };
       const next = { ...state, documents: { ...state.documents, [body.id]: document } };
       await generate(Object.values(next.documents), () => persist(next));
       return document;
+    }),
+    acknowledge: body => locked(async () => {
+      const id = body?.id, version = body?.version;
+      if (typeof id !== 'string' || typeof version !== 'string' || !version || !Object.hasOwn(state.documents, id)) return false;
+      const current = state.documents[id];
+      if (current.version !== version) return false;
+      if (current.viewedVersion === version && !current.attention) return false;
+      const next = { ...state, documents: { ...state.documents, [id]: { ...current, viewedVersion: version, attention: false } } };
+      await persist(next);
+      return true;
     }),
     attach: body => locked(async () => {
       if (body.kind !== 'tasks') throw new Error('Invalid attachment');

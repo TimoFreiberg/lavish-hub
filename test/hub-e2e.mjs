@@ -38,9 +38,10 @@ try {
   const record = await until(async () => { try { return JSON.parse(await readFile(runtime, 'utf8')); } catch { return null; } });
   const source = path.join(dir, 'review.html');
   await writeFile(source, '<!doctype html><title>Review</title><h1>Published hub review</h1>');
-  await run(process.execPath, [cli, 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo]);
+  const publishOut = await run(process.execPath, [cli, 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo]);
   const screen = await until(async () => { const text = await run('hc', ['read', result.address]); return text.match(/ready: (https?:\/\/\S+)/) ? text : null; });
   const url = screen.match(/ready: (https?:\/\/\S+)/)[1];
+  assert.ok(publishOut.includes(`${url}?view=review`), publishOut);
   browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
   const page = await browser.newPage();
   const assets = [];
@@ -59,7 +60,7 @@ try {
       }
     };
   });
-  await page.goto(url);
+  await page.goto(`${url}?view=review`);
   const heading = page.frameLocator('#artifact').getByRole('heading', { name: 'Published hub review' });
   await heading.waitFor({ timeout: 20000 });
   const show = page.getByRole('button', { name: 'Show anyway' }); if (await show.isVisible()) await show.click();

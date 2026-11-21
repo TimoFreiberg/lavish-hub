@@ -78,6 +78,9 @@ async function requireBundle(name, globalName, view, generation) {
   return generation === renderGeneration;
 }
 let selected = 'commits', snapshot, documents = [], busy = false;
+const initialParams = new URLSearchParams(location.search);
+let initialView = initialParams.get('__lavish_hub_view') || initialParams.get('view') || '';
+const workspaceName = config.workspaceName || config.workspace?.split(/[\\/]/).filter(Boolean).pop() || '';
 const frames = new Map();
 let refreshTimer, rendered = false, warmed = false, refreshRequested = false, snapshotForce = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false, snapshotPreflightFailed = false, snapshotUnrendered = false;
 // Loading is an intent that belongs to a snapshot request, not to whichever refresh
@@ -94,8 +97,46 @@ const startsInExplore = id => id === 'commits' || id === 'changes';
 // runs per request, so only those views ask for one. Status and documents keep
 // polling on every view.
 const needsSnapshot = startsInExplore;
-window.addEventListener('lavish:ready', () => { if (startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(false); });
+window.addEventListener('lavish:ready', () => { if (startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(false); updateTabTitle(); });
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks' };
+const labelFor = id => Object.hasOwn(labels, id) ? labels[id] : undefined;
+function truncateCodeUnits(text, limit) {
+  let out = '';
+  for (const ch of text) {
+    if (out.length + ch.length > limit) break;
+    out += ch;
+  }
+  return out;
+}
+function formatTabTitle(viewLabel, workspace) {
+  const shortWorkspace = workspace ? truncateCodeUnits(workspace, 60) : '';
+  if (!shortWorkspace) return truncateCodeUnits(viewLabel, 120);
+  const suffix = ` · ${shortWorkspace}`;
+  const maxView = 120 - suffix.length;
+  const shortView = viewLabel.length > maxView ? `${truncateCodeUnits(viewLabel, Math.max(1, maxView - 1)).trimEnd()}…` : viewLabel;
+  return `${shortView}${suffix}`;
+}
+function updateTabTitle() {
+  const viewLabel = labelFor(selected) || documents.find(doc => doc.id === selected)?.title || selected;
+  const title = formatTabTitle(viewLabel, workspaceName);
+  document.title = title;
+  globalThis.lavish?.setDocumentMeta?.({ title });
+}
+let displayedDoc = null, ackInFlight = '';
+function acknowledgeDisplayed(id, version) {
+  if (!id || !version) return;
+  const doc = documents.find(item => item.id === id);
+  if (!doc || doc.version !== version) return;
+  if (!doc.attention && (!Object.hasOwn(doc, 'viewedVersion') || doc.viewedVersion === version)) return;
+  const key = `${id}\0${version}`;
+  if (ackInFlight === key) return;
+  ackInFlight = key;
+  action('acknowledge', { id, version }).then(cleared => {
+    if (!cleared) return;
+    const current = documents.find(item => item.id === id);
+    if (current && current.version === version) { current.attention = false; current.viewedVersion = version; renderNav(); }
+  }).catch(() => {}).finally(() => { if (ackInFlight === key) ackInFlight = ''; });
+}
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
 const button = (text, action) => { const node = el('button', text, { type: 'button' }); node.addEventListener('click', action); return node; };
 function editButton(label, action) {
@@ -106,7 +147,7 @@ function editButton(label, action) {
 }
 async function action(operation, body = {}) {
   let response;
-  try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument', 'diffFiles', 'navigate'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
+  try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument', 'diffFiles', 'navigate', 'acknowledge'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
   catch { throw new Error('Hub actions are unreachable. Your edits remain on this page. Local actions require the running hub owner.'); }
   const data = await response.json();
   if (response.status === 403 && data.error === 'Unauthorized') reconnectAfterOwnerRestart();
@@ -131,12 +172,50 @@ function status(text) {
   document.querySelector('#connection').textContent = [navigationError, connection, notice].filter(Boolean).join(' · ');
 }
 function renderNav() {
-  const nav = document.querySelector('#navigation'); nav.replaceChildren();
-  for (const [id, label] of [...Object.entries(labels), ...documents.map(doc => [doc.id, doc.title])]) {
-    const b = button(label, () => select(id)); if (id === selected) b.setAttribute('aria-current', 'page'); nav.append(b);
+  const nav = document.querySelector('#navigation');
+  const focused = nav.contains(document.activeElement) ? document.activeElement : null;
+  const existing = new Map([...nav.querySelectorAll('button[data-hub-id]')].map(b => [b.dataset.hubId, b]));
+  const items = [
+    ...Object.entries(labels).map(([id, label]) => ({ id, label, attention: false, unseen: false })),
+    ...documents.map(doc => ({ id: doc.id, label: doc.title, attention: Boolean(doc.attention), unseen: Object.hasOwn(doc, 'viewedVersion') && doc.viewedVersion !== doc.version })),
+  ];
+  let next = nav.firstElementChild;
+  for (const item of items) {
+    let b = existing.get(item.id);
+    if (!b) {
+      b = button('', () => select(item.id));
+      b.dataset.hubId = item.id;
+    } else existing.delete(item.id);
+    let label = b.querySelector('.nav-label');
+    if (!label) { label = el('span', item.label, { class: 'nav-label' }); b.replaceChildren(label); }
+    else if (label.textContent !== item.label) label.textContent = item.label;
+    const badgeKind = item.attention ? 'attention' : item.unseen ? 'new' : '';
+    let badge = b.querySelector('.nav-badge');
+    if (badgeKind) {
+      if (!badge) { badge = el('span', '', { 'aria-hidden': 'true' }); b.append(badge); }
+      badge.className = `nav-badge nav-badge-${badgeKind}`;
+      badge.textContent = badgeKind === 'attention' ? 'Attention' : 'New';
+      b.title = badgeKind === 'attention' ? 'Needs attention' : 'New publication';
+      b.setAttribute('aria-describedby', `hub-nav-desc-${badgeKind}`);
+      if (badgeKind === 'attention') { b.dataset.attention = 'true'; delete b.dataset.unseen; }
+      else { b.dataset.unseen = 'true'; delete b.dataset.attention; }
+    } else {
+      badge?.remove();
+      b.removeAttribute('title');
+      b.removeAttribute('aria-describedby');
+      delete b.dataset.attention;
+      delete b.dataset.unseen;
+    }
+    if (item.id === selected) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+    if (b !== next) nav.insertBefore(b, next);
+    next = b.nextElementSibling;
   }
+  for (const b of existing.values()) b.remove();
+  if (focused?.isConnected && document.activeElement !== focused) focused.focus();
 }
 let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
+let lastSelectionRevision = null;
 let ownerNavigation = Promise.resolve(), refreshPaused = false, refreshPauseRevision = 0, attemptedSelection = '', navigationCancelled = false, navigationUncertain = false, leaveTimer;
 // A hidden tab keeps no poll timer. This is scheduler state only: page-leaving
 // pauses (refreshPaused), drafts, and annotation mode keep their own guards.
@@ -286,20 +365,33 @@ async function refresh(force = false) {
     // several jj runs, so only the warm attempt asked for in the background keeps going;
     // a refresh that is no longer being watched leaves it to the visibility catch-up.
     if (tabHidden && !warm) return;
-    let oldSelected = selected, oldDocuments = JSON.stringify(documents);
+    let oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSelectedDoc = JSON.stringify(documents.find(item => item.id === selected) || null);
     const oldSnapshot = snapshot, snapshotWasLoading = snapshotLoading();
     documents = list.documents;
-    const remoteDoc = documents.find(item => item.id === state.selected);
-    const remoteLeavesPage = remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html');
-    if (attemptedSelection && state.selected && state.selected !== attemptedSelection && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision) {
+    let requestedInitialView = '';
+    if (initialView) {
+      const candidate = initialView;
+      initialView = '';
+      if (Object.hasOwn(labels, candidate) || documents.some(doc => doc.id === candidate)) requestedInitialView = candidate;
+    }
+    const targetSelection = requestedInitialView || state.selected;
+    const ownerSelectionChanged = !rendered || Boolean(requestedInitialView) || (state.selectionRevision !== undefined ? state.selectionRevision !== lastSelectionRevision : targetSelection !== selected);
+    const remoteDoc = documents.find(item => item.id === targetSelection);
+    const remoteLeavesPage = Boolean(remoteDoc?.sibling && remoteDoc.source?.toLowerCase().endsWith('.html'));
+    if (attemptedSelection && targetSelection && targetSelection !== attemptedSelection && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision) {
       attemptedSelection = '';
       if (navigationCancelled) { navigationCancelled = false; navigationError = ''; status(connectionStatus); }
     }
-    if (state.selected && state.selected !== attemptedSelection && !navigationError && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && (navigationUncertain || hasUnsavedDrafts()))) selected = state.selected;
+    if (targetSelection && targetSelection !== attemptedSelection && !navigationError && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision && !(remoteLeavesPage && (navigationUncertain || hasUnsavedDrafts()))) {
+      selected = targetSelection;
+      if (state.selectionRevision !== undefined) lastSelectionRevision = state.selectionRevision;
+      if (requestedInitialView && !remoteLeavesPage && requestedInitialView !== state.selected) synchronizeNavigation(requestedInitialView).catch(() => {});
+    }
     else if (remoteLeavesPage && hasUnsavedDrafts()) status('Navigation paused: unsaved drafts remain on this page.');
     const selectedDoc = documents.find(item => item.id === selected);
-    if (!navigationError && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
+    if (ownerSelectionChanged && !navigationError && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
       pauseRevision = pauseRefresh();
+      if (requestedInitialView && requestedInitialView !== state.selected) await action('navigate', { id: requestedInitialView }).catch(() => {});
       if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true);
       if (navigationAtStart !== navigationRevision || navigationPending || pendingOwnerNavigation || hasUnsavedDrafts()) { selected = navigationAtStart === navigationRevision ? oldSelected : selected; if (pauseRevision === refreshPauseRevision) resumeRefresh(); return; }
       selected = oldSelected;
@@ -373,12 +465,14 @@ async function refresh(force = false) {
       } catch (error) { status(error.message); }
     }
     if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents)) renderNav();
+    if (displayedDoc && displayedDoc.id === selected) acknowledgeDisplayed(displayedDoc.id, displayedDoc.version);
+    const currentSelectedDoc = JSON.stringify(documents.find(item => item.id === selected) || null);
     // The loading flag is part of the comparison: a snapshot request that fails
     // before any snapshot exists must still replace the loading notice, and one
     // that settles back onto unchanged content must drop the refreshing notice. A
     // snapshot kept across a pause compares equal to its own content, so the flag it
     // left behind is what tells the resumed view to render it.
-    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents) || documentChanged || (snapshotUnrendered && needsSnapshot(selected)) || (needsSnapshot(selected) && ((oldSnapshot !== snapshot && snapshotContent(oldSnapshot) !== snapshotContent(snapshot)) || snapshotWasLoading !== snapshotLoading()))) {
+    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldSelectedDoc !== currentSelectedDoc || documentChanged || (snapshotUnrendered && needsSnapshot(selected)) || (needsSnapshot(selected) && ((oldSnapshot !== snapshot && snapshotContent(oldSnapshot) !== snapshotContent(snapshot)) || snapshotWasLoading !== snapshotLoading()))) {
       const generation = await renderViewKeepingFocus();
       snapshotUnrendered = false;
       if (generation === null || documentNavigation !== navigationRevision) return;
@@ -412,8 +506,10 @@ function notice(text) { return el('p', text, { role: 'status', class: 'notice' }
 let renderGeneration = 0;
 async function renderView(focusChangeId) {
   const generation = ++renderGeneration;
+  displayedDoc = null;
   const view = document.querySelector('#view'); diffView?.hide(); view.replaceChildren(); rendered = true;
   const id = selected;
+  updateTabTitle();
   if (modeView !== id) {
     if (startsInExplore(id) || startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(!startsInExplore(id));
     modeView = id;
@@ -434,7 +530,7 @@ async function renderView(focusChangeId) {
     diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, kind: 'jj', to: snapshot.head });
     return;
   }
-  view.append(el('h1', labels[id] || documents.find(doc => doc.id === id)?.title || id));
+  view.append(el('h1', labelFor(id) || documents.find(doc => doc.id === id)?.title || id));
   if (id === 'commits') {
     if (!snapshot) { view.append(notice(snapshotLoading() ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
@@ -499,11 +595,16 @@ async function renderView(focusChangeId) {
     if (!frame) {
       const node = el('iframe', null, { title: doc.title, sandbox: 'allow-scripts allow-forms allow-popups allow-downloads', referrerpolicy: 'no-referrer', src: url });
       node.className = 'published-document'; document.querySelector('#frames').append(node);
-      frame = { node, url, version: doc.version, hash: undefined }; frames.set(id, frame);
+      frame = { node, url, version: doc.version, hash: undefined, loaded: false }; frames.set(id, frame);
+      node.addEventListener('load', () => {
+        frame.loaded = true;
+        if (selected === id) { displayedDoc = { id, version: frame.version }; acknowledgeDisplayed(id, frame.version); }
+      });
     } else {
       frame.node.title = doc.title;
-      if (frame.url !== url) { frame.url = url; frame.node.src = url; frame.version = doc.version; frame.hash = undefined; }
+      if (frame.url !== url) { frame.url = url; frame.loaded = false; frame.node.src = url; frame.version = doc.version; frame.hash = undefined; }
       frame.node.hidden = false;
+      if (frame.loaded) { displayedDoc = { id, version: frame.version }; acknowledgeDisplayed(id, frame.version); }
     }
     return;
   }
@@ -560,6 +661,10 @@ async function renderView(focusChangeId) {
           const value = node.getAttribute(attr);
           if (value && !value.startsWith('#') && !value.startsWith('/') && !/^[a-z][a-z\d+.-]*:/i.test(value)) node.setAttribute(attr, new URL(value, base).href);
         }
+        if (doc && generation === renderGeneration && selected === id) {
+          displayedDoc = { id, version: state.version };
+          acknowledgeDisplayed(id, state.version);
+        }
       },
       onError: error => { info.textContent = `Syntax highlighting unavailable: ${error.message}`; },
     });
@@ -567,12 +672,17 @@ async function renderView(focusChangeId) {
     edit.disabled = !!state.saving;
     const wrap = el('div', null, { class: 'commit-description-wrap' }); wrap.append(preview, edit);
     const controls = el('div', null, { class: 'commit-controls' }); controls.append(save, cancel);
-    const toggle = () => { area.hidden = !state.editing; wrap.hidden = !!state.editing; controls.hidden = !state.editing; if (state.editing && id === 'tasks') { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; } if (!state.editing) render(); };
+    const toggle = () => {
+      area.hidden = !state.editing; wrap.hidden = !!state.editing; controls.hidden = !state.editing;
+      if (state.editing && id === 'tasks') { area.style.height = 'auto'; area.style.height = `${area.scrollHeight}px`; }
+      if (state.editing) { if (doc && generation === renderGeneration && selected === id) { displayedDoc = { id, version: state.version }; acknowledgeDisplayed(id, state.version); } }
+      else render();
+    };
     view.append(wrap, area, controls); toggle();
   } else view.append(area, save);
   view.append(info);
 }
-app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><nav id="navigation" aria-label="Workspace views"></nav><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
+app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><span id="hub-nav-desc-attention" hidden>Needs attention</span><span id="hub-nav-desc-new" hidden>New publication</span><nav id="navigation" aria-label="Workspace views"></nav><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
 document.querySelector('#workspace').textContent = config.workspace;
 document.querySelector('#refresh').addEventListener('click', () => refresh(true));
 refresh();

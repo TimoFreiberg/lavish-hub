@@ -218,6 +218,7 @@ const whiteboardFrame = /** @type {HTMLIFrameElement} */ (document.getElementByI
 const whiteboardCloseButton = /** @type {HTMLButtonElement} */ (document.getElementById("whiteboardClose"));
 const whiteboardError = /** @type {HTMLDivElement} */ (document.getElementById("whiteboardError"));
 const artifactSrc = frame.dataset.artifactSrc || frame.getAttribute?.("data-artifact-src") || frame.src || "";
+let pendingInitialView = typeof sessionData.initialView === "string" ? sessionData.initialView : "";
 // Protocol 1 keeps the generation in the injected SDK context rather than in
 // the document URL.  In particular, a real user-authored `index.html` must not
 // acquire the legacy revision/token query pair: that pair intentionally selects
@@ -644,7 +645,7 @@ function bindingDestination(binding) {
   if (!binding) return "";
   const routeDestination = destinationForServedRoute(binding.route);
   const observed = binding.destination || binding.authoredDestination || frameLocationDestination() || routeDestination;
-  return normalizeArtifactDestination(observed, binding.route) || String(observed || "");
+  return stripOneShotViewParameter(normalizeArtifactDestination(observed, binding.route) || String(observed || ""));
 }
 
 function destinationRecord(bindingOrDestination) {
@@ -664,9 +665,26 @@ function destinationRecord(bindingOrDestination) {
   };
 }
 
+function stripOneShotViewParameter(value) {
+  const candidate = String(value || "");
+  if (!candidate || !candidate.includes("__lavish_hub_view=")) return candidate;
+  try {
+    const parsed = new URL(candidate, location.href);
+    if (!parsed.searchParams.has("__lavish_hub_view")) return candidate;
+    parsed.searchParams.delete("__lavish_hub_view");
+    return parsed.pathname + parsed.search + parsed.hash;
+  } catch {
+    return candidate;
+  }
+}
+
 function persistDestinationRecord(record) {
   if (!modernArtifactProtocol) return;
-  saveJsonState(destinationStorageKey, record);
+  const cleaned =
+    record && typeof record.destination === "string"
+      ? { ...record, destination: stripOneShotViewParameter(record.destination) }
+      : record;
+  saveJsonState(destinationStorageKey, cleaned);
 }
 
 function markDestinationUnavailable() {
@@ -4829,7 +4847,8 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   if (!recoveryRetry) artifactLoadRecoveryAttempt = 0;
   clearTimeout(artifactSilenceTimer);
   pendingArtifactFailureBinding = null;
-  const destinationCandidate = historicalPage ? null : currentDestinationCandidate();
+  const useInitialView = Boolean(pendingInitialView && !historicalPage);
+  const destinationCandidate = historicalPage || useInitialView ? null : currentDestinationCandidate();
   const requestedDestination = destinationPayload(destinationCandidate);
   // The iframe is sandboxed, so reload by resetting the iframe URL from chrome.
   if (!artifactSrc) {
@@ -5010,7 +5029,18 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   }
   const selectedDestination = responseDestination ? validatedResponseDestination : validatedCandidateDestination;
   if (!selectedDestination) return recoverLater();
-  artifactLoadDestination = selectedDestination;
+  let frameDestination = selectedDestination;
+  if (useInitialView && pendingInitialView) {
+    const sep = selectedDestination.includes("?") ? "&" : "?";
+    frameDestination = `${selectedDestination}${sep}__lavish_hub_view=${encodeURIComponent(pendingInitialView)}`;
+    pendingInitialView = "";
+    try {
+      const cleaned = new URL(location.href);
+      cleaned.searchParams.delete("view");
+      history.replaceState(null, "", cleaned.pathname + cleaned.search + cleaned.hash);
+    } catch { /* ignore */ }
+  }
+  artifactLoadDestination = stripOneShotViewParameter(selectedDestination);
   if (modernArtifactProtocol && load?.page && load?.page_proof && load?.served_route) {
     pendingArtifactFailureBinding = {
       page: load.page,
@@ -5027,7 +5057,7 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   // This reset stays adjacent to the navigation that actually replaces the
   // document, after every preserve/fail-closed return above.
   resetRevisionLegend();
-  navigateArtifactFrame(artifactFrameSrcForLoad({ revision, token, destination: artifactLoadDestination }));
+  navigateArtifactFrame(artifactFrameSrcForLoad({ revision, token, destination: frameDestination }));
   return true;
 }
 
@@ -6463,7 +6493,7 @@ function challengeArtifactDocument(expectedDocumentId = "", chromeAuth = "") {
       destinationPayload(destinationRecord(binding)),
       validated.receipt,
     );
-    artifactLoadDestination = destination;
+    artifactLoadDestination = stripOneShotViewParameter(destination);
     persistDestinationRecord(destinationRecord(binding));
     channel.port1.addEventListener("message", (boundEvent) => handleArtifactMessage(boundEvent, binding));
     channel.port1.start?.();
