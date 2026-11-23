@@ -66,16 +66,17 @@ try {
     assert.ok(theme.stdout.length > 0);
   }
   assert.equal(run(['diff']).status, 2);
+  assert.equal(run(['hub']).status, 2);
   const init = spawnSync('jj', ['git', 'init'], { cwd: repo, env, encoding: 'utf8' });
   assert.equal(init.status, 0, init.stderr);
-  const predicted = run(['hub', 'url']);
+  const predicted = run(['url']);
   assert.equal(predicted.status, 0, predicted.stderr);
   owner = spawn(process.execPath, [cli, 'listen'], { cwd: repo, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; owner.stderr.on('data', chunk => { logs += chunk; });
   let status;
   for (let i = 0; i < 100; i++) {
     if (owner.exitCode !== null) throw new Error(`owner exited: ${logs}`);
-    status = run(['hub', 'status']);
+    status = run(['status']);
     if (status.status === 0) break;
     await delay(100);
   }
@@ -87,7 +88,7 @@ try {
   await writeFile(file, '<title>Example</title><link rel="stylesheet" href="example.css"><script src="example.js"></script><p>Hello</p>');
   await writeFile(path.join(temp, 'example.css'), 'p { color: red }');
   await writeFile(path.join(temp, 'example.js'), 'window.example = true;');
-  const publish = run(['hub', 'publish', file, '--id', 'example']);
+  const publish = run(['publish', file, '--id', 'example']);
   assert.equal(publish.status, 0, publish.stderr);
   const { resolveWorkspace } = await import(pathToFileURL(path.join(root, 'src/hub-workspace.mjs')).href);
   const identity = await resolveWorkspace(repo, env);
@@ -95,7 +96,7 @@ try {
   const url = logs.match(/ready: (https?:\/\/\S+)/)?.[1];
   assert.ok(url, logs);
   assert.equal(predicted.stdout.trim(), url);
-  assert.equal(run(['hub', 'url']).stdout.trim(), url);
+  assert.equal(run(['url']).stdout.trim(), url);
   const page = await fetch(url);
   assert.equal(page.status, 200);
   assert.match(await page.text(), /<html/i);
@@ -109,7 +110,7 @@ try {
   }
   const reply = run(['reply', runtime.page, '--agent-reply', 'Package smoke reply']);
   assert.equal(reply.status, 0, reply.stderr);
-  assert.equal(run(['hub', 'stop']).status, 0);
+  assert.equal(run(['stop']).status, 0);
   await new Promise((resolve, reject) => { if (owner.exitCode !== null) return resolve(); owner.once('exit', resolve); owner.once('error', reject); });
   assert.equal(owner.exitCode, 0);
   await assert.rejects(readFile(path.join(identity.directory, 'owner/runtime.json')), { code: 'ENOENT' });
