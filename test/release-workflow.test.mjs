@@ -16,7 +16,7 @@ test('release workflow gates publication on the same package passing both smoke 
     assert.equal(step(job, 'actions/download-artifact@').with.name, upload.with.name);
     assert.match(job.steps.map(item => item.run || '').join('\n'), /shasum -a 256 -c SHA256SUMS/);
   }
-  assert.match(smoke.steps.map(item => item.run || '').join('\n'), /node test\/package-smoke\.mjs release\/lavish-kit\.tgz/);
+  assert.match(smoke.steps.map(item => item.run || '').join('\n'), /node test\/package-smoke\.mjs release\/lavish-hub\.tgz/);
   const commands = build.steps.map(item => item.run || '').join('\n');
   assert.match(commands, /git merge-base --is-ancestor "\$SOURCE" origin\/main/);
   assert.match(commands, /gh release view/);

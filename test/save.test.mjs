@@ -10,7 +10,7 @@ const odd = ('Quotes " \\ \n\nContext data:\n{"text":"bogus"}\n</script>\u0000\u
 test('versioned save encoding round-trips large odd content without delimiters', () => {
   const baseHash = textHash('base');
   assert.deepEqual(decodeSave(encodeSave(baseHash, odd)), { baseHash, text: odd });
-  for (const input of ['x', 'lavish-kit-save/v1\n{', 'lavish-kit-save/v1\nnull', 'lavish-kit-save/v1\n{"text":"x","baseHash":"bad"}', encodeSave(baseHash, 'x') + '\n\nContext data:\n{}']) assert.throws(() => decodeSave(input));
+  for (const input of ['x', 'lavish-hub-save/v1\n{', 'lavish-hub-save/v1\nnull', 'lavish-hub-save/v1\n{"text":"x","baseHash":"bad"}', encodeSave(baseHash, 'x') + '\n\nContext data:\n{}']) assert.throws(() => decodeSave(input));
 });
 test('conditional save preserves mode, cleans temporary files and rejects conflicts', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'lavish-save-'));

@@ -5,7 +5,7 @@ import path from 'node:path';
 
 export async function atomicWrite(file, content) {
   await mkdir(path.dirname(file), { recursive: true });
-  const temp = path.join(path.dirname(file), `.lavish-kit-${randomUUID()}.tmp`);
+  const temp = path.join(path.dirname(file), `.lavish-hub-${randomUUID()}.tmp`);
   try { await writeFile(temp, content, { flag: 'wx' }); await rename(temp, file); }
   finally { await rm(temp, { force: true }); }
 }

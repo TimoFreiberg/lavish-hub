@@ -34,7 +34,7 @@ test('hub actions work from the real Lavish opaque-origin iframe', { timeout: 12
   const output = execFileSync('lavish-axi', [file, '--no-open'], { encoding: 'utf8' });
   const url = output.match(/url:\s*"?(https?:\/\/[^"\s]+)/)?.[1];
   assert.ok(url, output);
-  browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   const page = await browser.newPage();
   await page.route('**/*', route => ['localhost', '127.0.0.1', '[::1]'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
   await page.goto(url);

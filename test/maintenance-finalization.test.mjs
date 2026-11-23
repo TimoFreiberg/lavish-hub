@@ -13,7 +13,7 @@ test('issue finalization survives remote effects and rejects newer activity', ()
   const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-final-'));
   const bin = path.join(dir, 'bin'); mkdirSync(bin);
   const remote = path.join(dir, 'remote.json');
-  const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
+  const stateDir = path.join(dir, 'lavish-hub', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
   const stateFile = path.join(stateDir, 'state.json');
   const issue = { number: 1, state: 'open', title: 'Request', body: 'Details', user: { login: 'operator' } };
   const fingerprint = createHash('sha256').update(JSON.stringify([{ id: 'issue', title: issue.title, body: issue.body }])).digest('hex');

@@ -41,7 +41,7 @@ async function sidebarPage(browser, { hidden = false } = {}) {
 
 const statusCalls = page => page.evaluate(() => globalThis.__status);
 const setHidden = (page, hidden) => page.evaluate(value => { globalThis.__hidden = value; document.dispatchEvent(new Event('visibilitychange')); }, hidden);
-const launch = () => chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+const launch = () => chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
 
 test('published page sidebar stops polling while the tab is hidden', { timeout: 30000 }, async t => {
   const browser = await launch();

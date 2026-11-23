@@ -16,8 +16,8 @@ if (name === 'hc') {
  if (a[0] === 'get') console.log('{}');
  else if (a[0] === 'ls') console.log(JSON.stringify(read('terminals')));
  else if (a[0] === 'run') {
-  if (fs.existsSync(path.join(d,'lavish-kit/maintenance/owner--project/lock'))) process.exit(3);
-  const s = read('lavish-kit/maintenance/owner--project/state.json');
+  if (fs.existsSync(path.join(d,'lavish-hub/maintenance/owner--project/lock'))) process.exit(3);
+  const s = read('lavish-hub/maintenance/owner--project/state.json');
   if (!s.jobs.some(j => j.status === 'launching' && j.name === a[a.indexOf('--name')+1])) process.exit(4);
   fs.writeFileSync(path.join(d,'terminals'), JSON.stringify({terminals:[{name:a[a.indexOf('--name')+1],address:'worker',state:'live'}]}));
  }
@@ -39,7 +39,7 @@ function fixture(t) {
  const issue = {number:1,title:'First',body:'Body',state:'open',user:{login:'operator'}};
  put('github',{issue,comments:[]}); put('terminals',{terminals:[]}); put('main','main-a'); writeFileSync(path.join(dir,'calls'),'');
  const env = {...process.env, PATH:`${bin}:${process.env.PATH}`, XDG_STATE_HOME:dir, FIXTURE:dir, MAINTENANCE_REPO:'owner/project', MAINTENANCE_OPERATOR:'operator', HC_TERMINAL_ID:'watcher'};
- const file = path.join(dir,'lavish-kit/maintenance/owner--project/state.json');
+ const file = path.join(dir,'lavish-hub/maintenance/owner--project/state.json');
  const run = (...a) => spawnSync(process.execPath,[script,...a],{env,encoding:'utf8'});
  const state = () => JSON.parse(readFileSync(file));
  const calls = () => readFileSync(path.join(dir,'calls'),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);

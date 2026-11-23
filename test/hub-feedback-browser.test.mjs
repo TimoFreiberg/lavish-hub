@@ -11,7 +11,7 @@ test('hub views do not add a feedback form', { timeout: 30000 }, async t => {
     navigate: ({ id }) => ({ selected: id }), snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [], patch: '' }),
     readDocument: () => ({ text: '# Review\n', hash: 'hash', version: 'version' }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;

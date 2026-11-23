@@ -9,7 +9,7 @@ import { palette, themeCss } from '../src/orangebox.mjs';
 const require = createRequire(import.meta.url);
 
 test('published HTML defaults to Orangebox without overriding authored styles or themes', async t => {
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage();
   async function check(input) {

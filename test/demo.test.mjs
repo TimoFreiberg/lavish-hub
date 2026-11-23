@@ -8,7 +8,7 @@ import { demoEnv, generateDemo } from '../scripts/demo.mjs';
 import { readHubSnapshot } from '../src/hub-jj.mjs';
 
 test('demo data covers the commit and diff cases and regenerates in place', async t => {
-  const parent = await mkdtemp(path.join(os.tmpdir(), 'lavish-kit-demo-'));
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'lavish-hub-demo-'));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const dir = path.join(parent, 'demo');
   await generateDemo(dir);

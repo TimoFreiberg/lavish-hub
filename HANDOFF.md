@@ -20,7 +20,7 @@ original-size image review, physical-phone testing, or desktop-app testing.
   listener ownership, cancellation, and no ambiguous consuming-poll retry.
   Watch-only session checks read the same non-consuming store as the CLI.
   Opening reviews still uses the CLI. Explicit CLI compatibility remains via
-  `LAVISH_KIT_LAVISH_TRANSPORT=cli`. See `docs/lavish-http.md`.
+  `LAVISH_HUB_LAVISH_TRANSPORT=cli`. See `docs/lavish-http.md`.
 - Real-server transport tests cover feedback, competing listeners, reply, end,
   unsupported versions, wrong state, and truncated responses. Existing outbox,
   handler and receipt-target guarantees were retained at the time.

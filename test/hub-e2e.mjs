@@ -15,7 +15,7 @@ import { resolveWorkspace } from '../src/hub-workspace.mjs';
 import { cleanupTerminals } from './hub-e2e-cleanup.mjs';
 import { buildSelfContainedHtml } from '../vendor/lavish/src/export-bundle.js';
 
-const exec = promisify(execFile), cli = path.resolve('bin/lavish-kit');
+const exec = promisify(execFile), cli = path.resolve('bin/lavish-hub');
 const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-hc-e2e-'));
 const repo = path.join(dir, 'repo'), state = path.join(dir, 'state');
 const terminals = []; let browser, primaryError, port;
@@ -33,16 +33,16 @@ try {
   port = socket.address().port; await new Promise(resolve => socket.close(resolve)); env.LAVISH_AXI_PORT = String(port);
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const variables = ['LAVISH_AXI_STATE_DIR', 'LAVISH_AXI_PORT', 'XDG_DATA_HOME', 'XDG_STATE_HOME'].map(key => `${key}=${env[key]}`);
-  const result = JSON.parse(await run('hc', ['run', '--bg', '--no-parent', '--no-notify', '--json', '--cwd', repo, 'env', ...variables, process.execPath, cli, 'hub', 'listen', '--workspace', repo]));
+  const result = JSON.parse(await run('hc', ['run', '--bg', '--no-parent', '--no-notify', '--json', '--cwd', repo, 'env', ...variables, process.execPath, cli, 'listen', '--workspace', repo]));
   assert.ok(result.address); terminals.push(result.address);
   const record = await until(async () => { try { return JSON.parse(await readFile(runtime, 'utf8')); } catch { return null; } });
   const source = path.join(dir, 'review.html');
   await writeFile(source, '<!doctype html><title>Review</title><h1>Published hub review</h1>');
-  const publishOut = await run(process.execPath, [cli, 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo]);
+  const publishOut = await run(process.execPath, [cli, 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo]);
   const screen = await until(async () => { const text = await run('hc', ['read', result.address]); return text.match(/ready: (https?:\/\/\S+)/) ? text : null; });
   const url = screen.match(/ready: (https?:\/\/\S+)/)[1];
   assert.ok(publishOut.includes(`${url}?view=review`), publishOut);
-  browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   const page = await browser.newPage();
   const assets = [];
   page.on('requestfinished', async request => {
@@ -81,7 +81,7 @@ try {
   assert.equal(notification.snapshotDocument, canonicalSource);
   assert.ok(notification.snapshotPage);
   assert.ok(notification.prompts.some(prompt => prompt.document === canonicalSource && prompt.page === notification.snapshotPage));
-  assert.match(notification.reply, /^lavish-kit reply /);
+  assert.match(notification.reply, /^lavish-hub reply /);
   const command = notification.reply.replace("'...'", "'Hub hc reply'");
   assert.notEqual(command, notification.reply);
   await run('/bin/sh', ['-c', command], { env: { ...env, PATH: `${path.dirname(cli)}${path.delimiter}${env.PATH}` } });
@@ -233,7 +233,7 @@ try {
   await mocked.close();
   const markdown = path.join(dir, 'notes.md');
   await writeFile(markdown, '# Original\n');
-  await run(process.execPath, [cli, 'hub', 'publish', markdown, '--id', 'notes', '--workspace', repo]);
+  await run(process.execPath, [cli, 'publish', markdown, '--id', 'notes', '--workspace', repo]);
   await page.frameLocator('#artifact').getByRole('button', { name: 'notes.md', exact: true }).click({ timeout: 20000 });
   await page.frameLocator('#artifact').locator('.hub-markdown h1').filter({ hasText: 'Original' }).waitFor({ timeout: 20000 });
   await page.frameLocator('#artifact').getByRole('button', { name: 'Edit Document Markdown' }).click();
@@ -242,7 +242,7 @@ try {
   await editor.fill('# Edited in hc\n');
   await page.frameLocator('#artifact').getByRole('button', { name: 'Save', exact: true }).click();
   await until(async () => (await readFile(markdown, 'utf8')) === '# Edited in hc\n');
-  await run(process.execPath, [cli, 'hub', 'stop', '--workspace', repo]);
+  await run(process.execPath, [cli, 'stop', '--workspace', repo]);
   await until(async () => { try { await readFile(runtime); return false; } catch (error) { if (error.code === 'ENOENT') return true; throw error; } });
   console.log('PASS: hc owner received scoped annotation and browser displayed reply; owner stopped');
 } catch (error) { primaryError = error; }

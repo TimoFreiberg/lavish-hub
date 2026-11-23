@@ -1,6 +1,6 @@
 # Workspace hub
 
-`lavish-kit hub listen [--workspace DIR] [--open] [--reopen]` runs a foreground
+`lavish-hub listen [--workspace DIR] [--open] [--reopen]` runs a foreground
 owner for one jj workspace. It opens a stable Lavish page without starting the
 standalone feedback relay. The page shows commit descriptions and an annotated
 diff, and provides direct Markdown editors for tasks and
@@ -48,11 +48,11 @@ script that must continue. Wait for its running message before using short
 commands; they never start an owner themselves. For example:
 
 ```sh
-lavish-kit hub listen --workspace "$PWD" --open
+lavish-hub listen --workspace "$PWD" --open
 # In another terminal, after the owner is ready:
-lavish-kit hub publish "$HOME/reviews/review.html" --id review --title "Review" --metadata-file "$HOME/reviews/scope.json" --open
-lavish-kit hub --view review
-lavish-kit hub stop
+lavish-hub publish "$HOME/reviews/review.html" --id review --title "Review" --metadata-file "$HOME/reviews/scope.json" --open
+lavish-hub --view review
+lavish-hub stop
 ```
 
 The source must already exist and end in `.html`, `.md`, or `.markdown`. IDs
@@ -60,8 +60,8 @@ are 1–64 ASCII letters, digits, underscores or hyphens, starting with a letter
 or digit; built-in view IDs are reserved. Publishing registers or replaces the
 document without changing the active browser view and prints its direct
 `?view=ID` link. Pass `--attention` to mark the document in the sidebar for
-review without taking over the page; opening it clears the flag. New or updated publications show a `New` badge in the sidebar until opened. Pass `--open` to `hub publish`, or run
-`lavish-kit hub --view ID [--open]`, to select and open the artifact explicitly.
+review without taking over the page; opening it clears the flag. New or updated publications show a `New` badge in the sidebar until opened. Pass `--open` to `publish`, or run
+`lavish-hub --view ID [--open]`, to select and open the artifact explicitly.
 `--metadata-file` accepts a JSON object of at most
 16 KiB with optional `reviewedRepository` (nonempty display name), `baseCommit`
 and `headCommit` (full 40- or 64-digit hex IDs), and `sourceUrl` (HTTP(S) URL).
@@ -105,7 +105,7 @@ and diff views use the Orangebox dark palette. Published HTML without a root `da
 `data-theme="orangebox"` and a dark background and foreground fallback. Authored
 CSS can override the fallback, and an existing root `data-theme` is retained. The
 fallback does not load DaisyUI for pages that do not already include it.
-Explicit view commands (`lavish-kit hub --view ID` or `hub publish --open`) also switch an open published HTML page to the
+Explicit view commands (`lavish-hub --view ID` or `publish --open`) also switch an open published HTML page to the
 selected view, unless unsaved edits pause the switch. The hub asks before leaving
 for a published HTML page when a hub draft or an unqueued diff comment is
 unsaved. Published pages similarly ask after user input or changes outside the
@@ -123,7 +123,7 @@ The diff and Markdown views fetch their renderer the first time they need it,
 while the same render reads the document. A loaded renderer stays for the page.
 The hub page runs in Lavish's opaque-origin artifact frame and fetches each bundle
 from the owner, which grants that read only for a bundle its registration verified.
-A server started from a build without that grant cannot serve them, so lavish-kit
+A server started from a build without that grant cannot serve them, so lavish-hub
 refuses to use it rather than let every render fail. The error prints the packaged
 CLI's shutdown for the state directory and port this process uses, quoted so it can
 be pasted as is; running it shuts that server down, and the next command starts the
@@ -145,15 +145,15 @@ through the same forwarded UI address to remote browsers. Replacing a document
 changes its source directory. Published HTML does not currently receive a hub
 action SDK.
 
-Run `lavish-kit hub url [--workspace DIR]` to print the workspace review URL
+Run `lavish-hub url [--workspace DIR]` to print the workspace review URL
 before or while the owner runs. Before startup, the URL reflects the current port
 selection; another process can take that port before the owner starts, so check
-again after startup if the URL no longer works. Run `lavish-kit hub [--workspace DIR]` to check
+again after startup if the URL no longer works. Run `lavish-hub [--workspace DIR]` to check
 the owner, add `--view VIEW` to select a built-in view or published document ID,
-or run `lavish-kit hub stop [--workspace DIR]` to request shutdown. Add `--open`
-to the short hub or `hub publish` command to open the existing review (or list
-it under Artifacts when available); on `hub publish`, `--open` also selects the
-published document. Plain `hub publish` leaves the active view unchanged and
+or run `lavish-hub stop [--workspace DIR]` to request shutdown. Add `--open`
+to `lavish-hub` or `publish` to open the existing review (or list
+it under Artifacts when available); on `publish`, `--open` also selects the
+published document. Plain `publish` leaves the active view unchanged and
 prints a direct `?view=ID` link. The browser tab title follows the active view
 and workspace name (`<View> · <workspace>` via Lavish's `setDocumentMeta()`). Selection
 is shared by the running owner and is restored on page refresh; a new owner starts

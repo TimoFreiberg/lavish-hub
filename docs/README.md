@@ -1,4 +1,4 @@
-# lavish-kit docs
+# lavish-hub docs
 
 Start with the [README](../README.md) for installation and the [hub guide](hub.md) for the review workflow.
 

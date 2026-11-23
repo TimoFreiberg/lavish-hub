@@ -9,6 +9,6 @@ export function runtimeEnv(env = process.env) {
   return {
     ...env,
     LAVISH_AXI_PORT: env.LAVISH_AXI_PORT || '4388',
-    LAVISH_AXI_STATE_DIR: env.LAVISH_AXI_STATE_DIR || path.join(env.XDG_STATE_HOME || path.join(env.HOME || os.homedir(), '.local', 'state'), 'lavish-kit', 'lavish'),
+    LAVISH_AXI_STATE_DIR: env.LAVISH_AXI_STATE_DIR || path.join(env.XDG_STATE_HOME || path.join(env.HOME || os.homedir(), '.local', 'state'), 'lavish-hub', 'lavish'),
   };
 }

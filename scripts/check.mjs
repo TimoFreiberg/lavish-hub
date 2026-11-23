@@ -67,7 +67,7 @@ async function main() {
       const log = await open(path.join(directory, `${name}.log`), 'w');
       const args = name === 'install' ? ['ci'] : name === 'prepare' ? ['scripts/prepare-check.mjs'] : ['scripts/test-run.mjs', name];
       const env = { ...process.env };
-      if (mode === 'all') env.LAVISH_KIT_SHOTS_DIR = path.join(directory, 'shots');
+      if (mode === 'all') env.LAVISH_HUB_SHOTS_DIR = path.join(directory, 'shots');
       console.log(`Starting ${name}; log: ${directory}/${name}.log`);
       try {
         if (cancellation.signal.aborted) return 1;
@@ -84,7 +84,7 @@ async function main() {
         });
       } finally { await log.close(); }
     };
-    const shotsDirectory = process.env.LAVISH_KIT_SHOTS_DIR ? path.resolve(process.env.LAVISH_KIT_SHOTS_DIR) : '../../shots';
+    const shotsDirectory = process.env.LAVISH_HUB_SHOTS_DIR ? path.resolve(process.env.LAVISH_HUB_SHOTS_DIR) : '../../shots';
     const result = await runChecks({ mode, directory, execute, publish, signal: cancellation.signal, shotsDirectory });
     // Publication completes the result; later signals must not change only the exit code.
     finalized = true;

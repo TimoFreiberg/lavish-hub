@@ -35,7 +35,7 @@ export async function runSupervised(args, { env, timeout, signal, grace = 2000, 
   // the grace period for children created during shutdown.
   const stop = sig => {
     let pids = [];
-    try { pids = audit(env.LAVISH_KIT_TEST_RUN); } catch (error) { failures.push(error); }
+    try { pids = audit(env.LAVISH_HUB_TEST_RUN); } catch (error) { failures.push(error); }
     for (const pid of pids) send(pid, sig);
     if (child.pid) send(-child.pid, sig);
   };

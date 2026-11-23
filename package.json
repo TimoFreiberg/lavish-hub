@@ -1,5 +1,5 @@
 {
-  "name": "lavish-kit",
+  "name": "lavish-hub",
   "version": "0.1.5",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "bin": {
-    "lavish-kit": "bin/lavish-kit"
+    "lavish-hub": "bin/lavish-hub"
   },
   "dependencies": {
     "@pierre/diffs": "^1.6.4",

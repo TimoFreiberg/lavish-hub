@@ -1,6 +1,6 @@
 # Feedback and actions
 
-The foreground hub owner is the only polling consumer for its review. It prints each feedback batch as a JSON line on stdout, including the workspace, page, prompts, snapshot scope, failures, and a `lavish-kit reply` command. Diagnostics go to stderr. Run the printed reply command with your response; do not poll the same page from another process. See [hub](hub.md) for field and lifecycle details.
+The foreground hub owner is the only polling consumer for its review. It prints each feedback batch as a JSON line on stdout, including the workspace, page, prompts, snapshot scope, failures, and a `lavish-hub reply` command. Diagnostics go to stderr. Run the printed reply command with your response; do not poll the same page from another process. See [hub](hub.md) for field and lifecycle details.
 
 ## Delivery guarantees
 

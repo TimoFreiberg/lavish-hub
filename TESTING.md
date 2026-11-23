@@ -1,11 +1,11 @@
-# Testing lavish-kit
+# Testing lavish-hub
 
 This describes `just check`, the standalone test commands, their requirements,
 and known flaky tests.
 
 Besides the runtime requirements in the [README](README.md), the tests need
 `just`, fish, ripgrep, and Playwright's cached Chromium. Set
-`LAVISH_KIT_CHROMIUM` to use another Chromium executable.
+`LAVISH_HUB_CHROMIUM` to use another Chromium executable.
 
 ## Fixture preview
 
@@ -24,7 +24,7 @@ install dependencies in this checkout.
 
 Run `just demo` to see the real hub with realistic data. It rebuilds `dist/`,
 creates a jj repository and review documents in
-`${XDG_CACHE_HOME:-$HOME/.cache}/lavish-kit-demo`, and runs a hub on port 4399
+`${XDG_CACHE_HOME:-$HOME/.cache}/lavish-hub-demo`, and runs a hub on port 4399
 with its own XDG and Lavish state, so your normal hub is not affected. Each run
 deletes and recreates that directory. Restart it to pick up code changes. Stop
 it with Ctrl-C or `just demo-stop`. Use `--dir`, `--port` and `--no-open` to
@@ -34,7 +34,7 @@ To investigate action timeouts, rebuild the vendored server with
 `node scripts/prepare-check.mjs`, then start a fresh demo with
 `LAVISH_HUB_DIAGNOSTICS=1 just demo` and capture the terminal's stderr. The
 proxy writes its diagnostics to
-`${XDG_CACHE_HOME:-$HOME/.cache}/lavish-kit-demo/state/lavish/server.log`
+`${XDG_CACHE_HOME:-$HOME/.cache}/lavish-hub-demo/state/lavish/server.log`
 (or `state/lavish/server.log` under a custom demo directory). Collect lines
 containing `"diagnostic":"hub"` from both places after reproducing the issue;
 other output may contain private data. The flag must be present when both
@@ -111,7 +111,7 @@ runner is supported: each test group and e2e run has private Lavish/XDG state,
 a distinct port, and its own leak marker; each screenshot uses a separate
 browser context and output filename. Screenshot fixture preparation remains serial.
 Set
-`LAVISH_KIT_TEST_JOBS=1 LAVISH_KIT_SHOT_JOBS=1` for serial diagnosis; each accepts
+`LAVISH_HUB_TEST_JOBS=1 LAVISH_HUB_SHOT_JOBS=1` for serial diagnosis; each accepts
 1–8 (default 3). More workers may hurt latency-sensitive browser tests on busy
 machines. No test or screenshot cases are removed by scheduling.
 

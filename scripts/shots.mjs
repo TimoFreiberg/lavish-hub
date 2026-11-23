@@ -10,7 +10,7 @@ import { isolatedLavish, launchBrowser, offlineRoutes, readLayoutIssues, closeVi
 import { scanDocument, failedChecks, partitionAccessibility } from './visual/checks.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
-const out = process.env.LAVISH_KIT_SHOTS_DIR ? path.resolve(process.env.LAVISH_KIT_SHOTS_DIR) : path.join(root, 'shots');
+const out = process.env.LAVISH_HUB_SHOTS_DIR ? path.resolve(process.env.LAVISH_HUB_SHOTS_DIR) : path.join(root, 'shots');
 const escape = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
 
 async function ready(page, variant, artifact, source) {
@@ -115,8 +115,8 @@ try {
     if (!entry) throw new Error(`Preview manifest missing ${id}`);
     jobs.push({ source: 'static', variant, viewport, colorScheme, id: `static-${id}`, url: entry.url });
   }
-  const concurrency = Number(process.env.LAVISH_KIT_SHOT_JOBS || 3);
-  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('LAVISH_KIT_SHOT_JOBS must be an integer from 1 to 8');
+  const concurrency = Number(process.env.LAVISH_HUB_SHOT_JOBS || 3);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('LAVISH_HUB_SHOT_JOBS must be an integer from 1 to 8');
   timings.preparationSeconds = (performance.now() - started) / 1000 - timings.previewSeconds;
   const checksStarted = performance.now();
   async function capture({ source, variant, viewport, colorScheme, id, artifact, url }) {

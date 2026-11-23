@@ -14,7 +14,7 @@ import { ensureHubAssets } from './deps.mjs';
 import { composeHubHtml } from './hub-html.mjs';
 import { themeCss } from './orangebox.mjs';
 
-const startup = 'Start one with lavish-kit hub listen --workspace DIR';
+const startup = 'Start one with lavish-hub listen --workspace DIR';
 const readJson = async file => JSON.parse(await readFile(file, 'utf8'));
 async function atomicJson(file, value) {
   const temp = `${file}.${randomUUID()}.tmp`;
@@ -256,14 +256,14 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     registeredPage = page;
     await atomicJson(path.join(lock, 'runtime.json'), { pid: process.pid, instance, url: transport.url, capability: transport.capability, page });
     await presentReview(page, review.url, { title: 'Workspace hub', open: options.open, log: console.error });
-    console.error(`Hub owner running for ${identity.root}; stop with lavish-kit hub stop.`);
+    console.error(`Hub owner running for ${identity.root}; stop with lavish-hub stop.`);
     while (!stopping) {
       if (!(await register())) break;
       const batch = await client.poll(page, instance, { timeoutMs: 10000 });
       if (batch.session.status === 'feedback') {
         const sourceFor = sibling => siblingSources.get(sibling) ?? null;
         const prompts = batch.prompts.map(prompt => typeof prompt === 'object' && prompt !== null && sourceFor(prompt.page) ? { ...prompt, document: sourceFor(prompt.page) } : prompt);
-        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, snapshotDocument: sourceFor(batch.snapshot_page), failures: batch.artifact_failures || [], reply: `lavish-kit reply ${quote(page)} --agent-reply '...'` }));
+        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, snapshotDocument: sourceFor(batch.snapshot_page), failures: batch.artifact_failures || [], reply: `lavish-hub reply ${quote(page)} --agent-reply '...'` }));
       }
       if (batch.session.status === 'ended' || batch.session.session_ended) break;
     }

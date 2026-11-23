@@ -25,7 +25,7 @@ export async function canonicalPath(value) {
 async function hubDirectory(root, env) {
   const lavishState = await canonicalPath(runtimeEnv(env).LAVISH_AXI_STATE_DIR);
   const data = await canonicalPath(env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'));
-  return path.join(data, 'lavish-kit', 'hubs', digest(`${lavishState}\0${root}`));
+  return path.join(data, 'lavish-hub', 'hubs', digest(`${lavishState}\0${root}`));
 }
 
 // Record filesystem identity as well as paths: a new repository at the same

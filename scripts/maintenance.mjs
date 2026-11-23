@@ -17,7 +17,7 @@ const usage = 'Usage: maintenance.mjs once|watch|status|job ID|claim ID|check-ac
 if (action === '--help' || action === '-h' || action === 'help') { console.log(usage); process.exit(0); }
 const repo = process.env.MAINTENANCE_REPO || cmd('gh', ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']).trim();
 if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw Error('Invalid repository');
-const dir = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'lavish-kit', 'maintenance', repo.replace('/', '--'));
+const dir = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'lavish-hub', 'maintenance', repo.replace('/', '--'));
 const file = path.join(dir, 'state.json'), lock = path.join(dir, 'lock');
 mkdirSync(dir, { recursive: true, mode: 0o700 });
 function load() {

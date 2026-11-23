@@ -51,9 +51,9 @@ jobs:
       - run: node --test --test-concurrency=1 test/hub-commands.test.mjs test/hub-foundation.test.mjs test/hub-jj.test.mjs
       - name: Build package
         env:
-          LAVISH_KIT_SOURCE_COMMIT: ${{ inputs.commit }}
+          LAVISH_HUB_SOURCE_COMMIT: ${{ inputs.commit }}
         run: node scripts/package.mjs "$RUNNER_TEMP/release"
-      - run: node test/package-smoke.mjs "$RUNNER_TEMP/release/lavish-kit.tgz"
+      - run: node test/package-smoke.mjs "$RUNNER_TEMP/release/lavish-hub.tgz"
       - uses: actions/upload-artifact@v4
         with:
           name: release-package
@@ -89,7 +89,7 @@ jobs:
           shasum -a 256 -c SHA256SUMS
           cd ..
           node --version
-          node test/package-smoke.mjs release/lavish-kit.tgz
+          node test/package-smoke.mjs release/lavish-hub.tgz
 
   publish:
     needs: smoke
@@ -112,4 +112,4 @@ jobs:
           shasum -a 256 -c SHA256SUMS
           test "$(node -p 'require("./release-metadata.json").source')" = "$SOURCE"
           test "$(node -p 'require("./release-metadata.json").version')" = "$VERSION"
-          gh release create "v$VERSION" --target "$SOURCE" --title "v$VERSION" --notes "Release v$VERSION" lavish-kit.tgz SHA256SUMS release-metadata.json
+          gh release create "v$VERSION" --target "$SOURCE" --title "v$VERSION" --notes "Release v$VERSION" lavish-hub.tgz SHA256SUMS release-metadata.json

@@ -28,16 +28,16 @@ test('capture workers enforce the configured concurrency on actual jobs', async 
 
 test('browser launch and visual cleanup failures propagate through the pipeline', { timeout: 600000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'lavish-pipeline-failure-'));
-  const previousShots = process.env.LAVISH_KIT_SHOTS_DIR;
-  const previousBrowser = process.env.LAVISH_KIT_CHROMIUM;
+  const previousShots = process.env.LAVISH_HUB_SHOTS_DIR;
+  const previousBrowser = process.env.LAVISH_HUB_CHROMIUM;
   try {
-    process.env.LAVISH_KIT_SHOTS_DIR = path.join(root, 'shots');
-    process.env.LAVISH_KIT_CHROMIUM = path.join(root, 'missing-chromium');
+    process.env.LAVISH_HUB_SHOTS_DIR = path.join(root, 'shots');
+    process.env.LAVISH_HUB_CHROMIUM = path.join(root, 'missing-chromium');
     const { runShots } = await import('../scripts/shots.mjs');
     for (const scenario of ['launch-failure', 'skipped', 'cleanup-failure']) {
       if (scenario !== 'launch-failure') {
-        if (previousBrowser === undefined) delete process.env.LAVISH_KIT_CHROMIUM;
-        else process.env.LAVISH_KIT_CHROMIUM = previousBrowser;
+        if (previousBrowser === undefined) delete process.env.LAVISH_HUB_CHROMIUM;
+        else process.env.LAVISH_HUB_CHROMIUM = previousBrowser;
       }
       const snapshots = new Map();
       const result = await runChecks({
@@ -71,8 +71,8 @@ test('browser launch and visual cleanup failures propagate through the pipeline'
       assert.equal(snapshots.get('status.json').status, 'failed');
     }
   } finally {
-    if (previousShots === undefined) delete process.env.LAVISH_KIT_SHOTS_DIR; else process.env.LAVISH_KIT_SHOTS_DIR = previousShots;
-    if (previousBrowser === undefined) delete process.env.LAVISH_KIT_CHROMIUM; else process.env.LAVISH_KIT_CHROMIUM = previousBrowser;
+    if (previousShots === undefined) delete process.env.LAVISH_HUB_SHOTS_DIR; else process.env.LAVISH_HUB_SHOTS_DIR = previousShots;
+    if (previousBrowser === undefined) delete process.env.LAVISH_HUB_CHROMIUM; else process.env.LAVISH_HUB_CHROMIUM = previousBrowser;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -85,9 +85,9 @@ test('standalone readiness identifies the configured screenshot directory', asyn
 
 test('test worker count rejects invalid bounds before starting work', () => {
   for (const count of ['0', '9', '1.5', 'invalid']) {
-    const result = spawnSync(process.execPath, ['scripts/test-run.mjs', 'test'], { env: { ...process.env, LAVISH_KIT_TEST_JOBS: count }, encoding: 'utf8' });
+    const result = spawnSync(process.execPath, ['scripts/test-run.mjs', 'test'], { env: { ...process.env, LAVISH_HUB_TEST_JOBS: count }, encoding: 'utf8' });
     assert.notEqual(result.status, 0, count);
-    assert.match(result.stderr, /LAVISH_KIT_TEST_JOBS must be an integer from 1 to 8/);
+    assert.match(result.stderr, /LAVISH_HUB_TEST_JOBS must be an integer from 1 to 8/);
   }
 });
 

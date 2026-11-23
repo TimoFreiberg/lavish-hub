@@ -29,7 +29,7 @@ const cors = { 'access-control-allow-origin': 'null' };
 const send = (res, body) => { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', ...cors }); res.end(body); };
 
 async function openPage(t, transport, bundles) {
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage();
   const audio = Object.entries(bundles).map(([name, src]) => `<audio preload="none" data-hub-bundle="${name}" src="${src}"></audio>`).join('');
@@ -191,7 +191,7 @@ test('an exported page loads its inlined renderer without fetching it', { timeou
   const exported = await buildSelfContainedHtml(html, { baseDir: '/art', readLocalFile: async () => Buffer.from(markdown) });
   assert.deepEqual(exported.warnings, []);
   assert.ok(exported.html.includes('src="data:text/javascript;base64,'));
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage();
   const requested = [];

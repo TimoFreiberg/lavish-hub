@@ -38,7 +38,7 @@ test('hub previews work without external requests or changing fixtures', async (
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${server.address().port}/nested/`;
-    browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+    browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
     const context = await browser.newContext({ serviceWorkers: 'block' });
     const forbidden = [], missing = [];
     await context.route('**/*', route => {

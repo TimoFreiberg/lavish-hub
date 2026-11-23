@@ -35,7 +35,7 @@ test('provenance follows isolated jj and Git checkouts', async () => {
         run(repo, process.execPath, ['scripts/preview.mjs', out]);
         const manifest = JSON.parse(await readFile(path.join(out, 'manifest.json'), 'utf8'));
         assert.deepEqual(Object.keys(manifest).sort(), ['generator', 'version', 'fixtureVersion', 'revision', 'dirty', 'timestamp', 'pages'].sort());
-        assert.equal(manifest.generator, 'lavish-kit-preview');
+        assert.equal(manifest.generator, 'lavish-hub-preview');
         assert.equal(manifest.version, 1);
         assert.equal(manifest.revision, revision);
         const index = await readFile(path.join(out, 'index.html'), 'utf8');
@@ -68,7 +68,7 @@ test('legacy preview is preserved and unrelated output is refused', async () => 
     const backup = (await readdir(parent)).find(name => name.startsWith('preview-previous-'));
     assert.ok(backup);
     assert.equal(await readFile(path.join(parent, backup, 'preview', 'personal.txt'), 'utf8'), 'preserve me');
-    assert.equal(JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8')).generator, 'lavish-kit-preview');
+    assert.equal(JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8')).generator, 'lavish-hub-preview');
     await writeFile(path.join(dir, 'assets', 'personal.txt'), 'asset note');
     await writeFile(path.join(dir, 'hub-empty', 'page', 'personal.txt'), 'page note');
     execFileSync(process.execPath, ['scripts/preview.mjs', dir], { cwd: root, stdio: 'pipe' });

@@ -23,7 +23,7 @@ export async function saveDocument(data, target, { recovering = false } = {}) {
     if (diskHash === savedHash) return saved;
     if (diskHash !== baseHash) return mismatch();
     const { mode } = await stat(file);
-    temp = path.join(path.dirname(file), `.lavish-kit-${randomUUID()}.tmp`);
+    temp = path.join(path.dirname(file), `.lavish-hub-${randomUUID()}.tmp`);
     await writeFile(temp, text, { flag: 'wx', mode: mode & 0o777 });
     await chmod(temp, mode & 0o777); // creation mode alone is filtered by umask
     // Other writers do not share a lock; POSIX rename has no

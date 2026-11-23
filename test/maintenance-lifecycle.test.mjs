@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const script = fileURLToPath(new URL('../scripts/maintenance.mjs', import.meta.url));
 test('maintenance completion requires recorded dispositions and assigned sweep', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-results-'));
-  const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project'); mkdirSync(stateDir, {recursive:true});
+  const stateDir = path.join(dir, 'lavish-hub', 'maintenance', 'owner--project'); mkdirSync(stateDir, {recursive:true});
   const file = path.join(stateDir, 'state.json');
   const env = {...process.env, XDG_STATE_HOME:dir, MAINTENANCE_REPO:'owner/project', HC_TERMINAL_ID:'worker'};
   const run = (...args) => spawnSync(process.execPath,[script,...args],{env,encoding:'utf8'});
@@ -31,7 +31,7 @@ test('maintenance completion requires recorded dispositions and assigned sweep',
 });
 test('draft per-job finalization state fails with migration guidance', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-draft-'));
-  const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
+  const stateDir = path.join(dir, 'lavish-hub', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
   try {
     writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({ jobs: [{ finalization: { kind: 'evidence' } }] }));
     const r = spawnSync(process.execPath, [script, 'status'], { env: { ...process.env, XDG_STATE_HOME: dir, MAINTENANCE_REPO: 'owner/project' }, encoding: 'utf8' });
@@ -40,7 +40,7 @@ test('draft per-job finalization state fails with migration guidance', () => {
 });
 test('simultaneous subprocess claims reserve only one worker', async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'maintenance-race-'));
-  const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
+  const stateDir = path.join(dir, 'lavish-hub', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
   const file = path.join(stateDir, 'state.json');
   const env = { ...process.env, XDG_STATE_HOME: dir, MAINTENANCE_REPO: 'owner/project', HC_TERMINAL_ID: 'worker' };
   try {
@@ -57,7 +57,7 @@ test('claims serialize workers, blocked workers must reclaim, and launches recon
   const listing = path.join(dir, 'terminals.json');
   writeFileSync(path.join(bin, 'hc'), '#!/bin/sh\nif [ "$1" = ls ]; then cat "$FAKE_TERMINALS"; else exit 1; fi\n', { mode: 0o755 });
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: dir, MAINTENANCE_REPO: 'owner/project', FAKE_TERMINALS: listing };
-  const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
+  const stateDir = path.join(dir, 'lavish-hub', 'maintenance', 'owner--project'); mkdirSync(stateDir, { recursive: true });
   const file = path.join(stateDir, 'state.json');
   const state = () => JSON.parse(readFileSync(file));
   const run = (terminal, ...args) => spawnSync(process.execPath, [script, ...args], { env: { ...env, HC_TERMINAL_ID: terminal }, encoding: 'utf8' });

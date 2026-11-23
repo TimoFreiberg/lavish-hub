@@ -13,8 +13,8 @@ export const supportedLavishVersion = '0.1.97';
 // every older field: only a field it predates separates that process from a
 // supported one.
 const requiredPatches = [
-  ['lavish_kit_page_reviews', 'the page review routes'],
-  ['lavish_kit_hub_assets', 'the hub asset origin grant'],
+  ['lavish_hub_page_reviews', 'the page review routes'],
+  ['lavish_hub_assets', 'the hub asset origin grant'],
 ];
 const keyFor = file => createHash('sha256').update(file).digest('hex').slice(0, 16);
 const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
@@ -139,8 +139,8 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
 }
 
 export function lavishHttpRun({ run, encode, ...options }) {
-  const mode = (options.env || process.env).LAVISH_KIT_LAVISH_TRANSPORT || 'http';
-  if (!['http', 'cli'].includes(mode)) throw new Error('LAVISH_KIT_LAVISH_TRANSPORT must be http or cli');
+  const mode = (options.env || process.env).LAVISH_HUB_LAVISH_TRANSPORT || 'http';
+  if (!['http', 'cli'].includes(mode)) throw new Error('LAVISH_HUB_LAVISH_TRANSPORT must be http or cli');
   if (mode === 'cli') return run;
   const client = createLavishClient(options);
   return async (name, args) => {

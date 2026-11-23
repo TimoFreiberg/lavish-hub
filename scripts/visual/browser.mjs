@@ -117,7 +117,7 @@ export async function closeVisualResources(browser, lavish) {
 }
 
 export async function launchBrowser() {
-  return chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  return chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
 }
 
 export async function offlineRoutes(page) {

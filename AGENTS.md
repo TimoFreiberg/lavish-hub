@@ -1,4 +1,4 @@
-# Working on lavish-kit
+# Working on lavish-hub
 
 Last verified: 2026-11-14
 

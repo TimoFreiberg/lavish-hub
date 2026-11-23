@@ -49,7 +49,7 @@ test('a server built without the hub asset grant is named with the shutdown that
   // The supported version and the older patch both match, so nothing but the missing
   // grant marks this server as one started before the hub page could fetch its
   // renderer bundles.
-  const port = await fakeServer(t, { version: supportedLavishVersion, lavish_kit_page_reviews: 1 }, calls);
+  const port = await fakeServer(t, { version: supportedLavishVersion, lavish_hub_page_reviews: 1 }, calls);
   const { code, stderr } = await prepareReview(port);
   assert.notEqual(code, 0);
   assert.match(stderr, /UNSUPPORTED_LAVISH/);

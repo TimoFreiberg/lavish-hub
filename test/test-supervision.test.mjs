@@ -11,8 +11,8 @@ import { markedProcesses } from '../scripts/test-process-audit.mjs';
 async function fixture(source, run) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'test-supervision-'));
   const file = path.join(root, 'fixture.test.mjs');
-  const marker = [process.env.LAVISH_KIT_TEST_RUN, randomUUID()].filter(Boolean).join(',');
-  const env = { ...process.env, LAVISH_KIT_TEST_RUN: marker };
+  const marker = [process.env.LAVISH_HUB_TEST_RUN, randomUUID()].filter(Boolean).join(',');
+  const env = { ...process.env, LAVISH_HUB_TEST_RUN: marker };
   delete env.NODE_TEST_CONTEXT;
   try {
     await writeFile(file, source);
@@ -55,9 +55,9 @@ test('timeout stops detached marked descendants', { timeout: 10000 }, async () =
 test('outer cancellation reaches nested supervised detached descendants', { timeout: 10000 }, async () => {
   const supervisor = new URL('../scripts/test-supervision.mjs', import.meta.url).href;
   const source = `import { runSupervised } from ${JSON.stringify(supervisor)};
-const inner = process.env.LAVISH_KIT_TEST_RUN + ',inner';
+const inner = process.env.LAVISH_HUB_TEST_RUN + ',inner';
 const code = "const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'}).unref(); require('node:fs').writeFileSync(process.env.READY,'ready'); setInterval(()=>{},1000)";
-await runSupervised(['-e', code], { env: { ...process.env, LAVISH_KIT_TEST_RUN: inner }, timeout: 30000 });`;
+await runSupervised(['-e', code], { env: { ...process.env, LAVISH_HUB_TEST_RUN: inner }, timeout: 30000 });`;
   await fixture(source, async ({ root, file, marker, env }) => {
     env.READY = path.join(root, 'ready');
     const controller = new AbortController();

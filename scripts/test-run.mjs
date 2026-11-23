@@ -10,8 +10,8 @@ import { runSupervised } from './test-supervision.mjs';
 const mode = process.argv[2];
 if (!['test', 'test-worker', 'shots', 'e2e'].includes(mode)) throw new Error('Expected test, shots, or e2e');
 if (mode === 'test') {
-  const count = Number(process.env.LAVISH_KIT_TEST_JOBS || 3);
-  if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error('LAVISH_KIT_TEST_JOBS must be an integer from 1 to 8');
+  const count = Number(process.env.LAVISH_HUB_TEST_JOBS || 3);
+  if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error('LAVISH_HUB_TEST_JOBS must be an integer from 1 to 8');
   const files = (await readdir('test')).filter(name => name.endsWith('.test.mjs')).sort();
   // Approximate baseline seconds, used only to balance groups, never to skip tests.
   const weights = { 'maintenance-finalization': 3, 'maintenance-integration': 14, markdown: 19, 'visual-checks': 17 };
@@ -35,14 +35,14 @@ const controller = new AbortController();
 if (mode === 'test-worker') {
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => controller.abort());
 }
-const root = await mkdtemp(path.join(os.tmpdir(), 'lavish-kit-run-'));
+const root = await mkdtemp(path.join(os.tmpdir(), 'lavish-hub-run-'));
 const port = await new Promise((resolve, reject) => {
   const server = net.createServer().once('error', reject);
   server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(error => error ? reject(error) : resolve(port)); });
 });
 const runId = randomUUID();
-const marker = [process.env.LAVISH_KIT_TEST_RUN, runId].filter(Boolean).join(',');
-const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_KIT_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
+const marker = [process.env.LAVISH_HUB_TEST_RUN, runId].filter(Boolean).join(',');
+const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_HUB_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
 delete env.HC_TERMINAL_ID;
 // Use a short directory to keep socket paths within macOS Unix socket limits.
 let hcRoot;

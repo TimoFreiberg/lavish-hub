@@ -5,13 +5,13 @@ import { diffThemeCss, palette, syntaxTheme, themeCss } from '../src/orangebox.m
 import { createHighlighter } from 'shiki';
 
 function run(...args) {
-  return spawnSync(process.execPath, ['bin/lavish-kit', ...args], { encoding: 'utf8' });
+  return spawnSync(process.execPath, ['bin/lavish-hub', ...args], { encoding: 'utf8' });
 }
 
 test('theme CLI describes and exports the shared Orangebox theme', () => {
   const help = run('--help');
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /lavish-kit theme \[css\|syntax\|diff-css\]/);
+  assert.match(help.stdout, /lavish-hub theme \[css\|syntax\|diff-css\]/);
   for (const args of [['theme'], ['theme', '--help']]) {
     const result = run(...args);
     assert.equal(result.status, 0, result.stderr);

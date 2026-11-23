@@ -35,7 +35,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   delete env.HC_TERMINAL_ID;
   try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
-  const child = spawn(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.resolve('bin/lavish-hub'), 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '', stdout = ''; child.stderr.on('data', chunk => { stderr += chunk; });
   child.stdout.on('data', chunk => { stdout += chunk; });
   t.after(async () => {
@@ -47,8 +47,8 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   const record = JSON.parse(await readFile(runtime, 'utf8'));
   const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
   assert.equal(health.version, '0.1.97');
-  assert.equal(health.lavish_kit_page_reviews, 1);
-  assert.equal(health.lavish_kit_hub_assets, 1);
+  assert.equal(health.lavish_hub_page_reviews, 1);
+  assert.equal(health.lavish_hub_assets, 1);
   assert.equal(await realpath(health.state_dir), await realpath(state));
   assert.ok(record.page.endsWith('hub.html'));
   const localBase = `http://127.0.0.1:${port}`;
@@ -73,13 +73,13 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await writeFile(source, '<!doctype html><html><head><link rel="stylesheet" href="review.css?v=1"></head><body><h1 id="authored">Published review</h1><input aria-label="Authored draft"><script src="review.js?v=2"></script></body></html>');
   await writeFile(path.join(dir, 'review.css'), '#authored { color: rgb(1, 2, 3) }');
   await writeFile(path.join(dir, 'review.js'), 'document.querySelector("#authored").dataset.ran="yes"');
-  const publishOut = await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
+  const publishOut = await run(process.execPath, [path.resolve('bin/lavish-hub'), 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
   const url = stderr.match(/ready: (https?:\/\/\S+)/)?.[1];
   assert.ok(url, stderr);
   assert.ok(publishOut.stdout.includes(`${url}?view=review`), publishOut.stdout);
   const initialStatus = await (await fetch(proxyAction, { method: 'POST', headers: actionHeaders, body: '{"operation":"status"}' })).json();
   assert.equal(initialStatus.result.selected, 'commits');
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
   const forward = net.createServer(socket => {
     const upstream = net.connect(port, '127.0.0.1');
@@ -145,7 +145,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await card.getByRole('button', { name: 'Queue' }).click();
   const replacement = path.join(dir, 'replacement.html');
   await writeFile(replacement, '<!doctype html><title>Replacement</title><p>Replacement document</p>');
-  await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', replacement, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
+  await run(process.execPath, [path.resolve('bin/lavish-hub'), 'publish', replacement, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
   await page.getByRole('button', { name: 'Send to Agent', exact: true }).click();
   for (let i = 0; i < 200 && !stdout.includes('\n'); i++) await delay(50);
   assert.ok(stdout.includes('\n'), `No notification: ${stderr}`);
@@ -380,7 +380,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   t.diagnostic(`Normal click to navigate response: ${(normalResponse - normalStart).toFixed(1)}ms; click to Commits heading: ${(performance.now() - normalStart).toFixed(1)}ms`);
   const markdown = path.join(dir, 'notes.md');
   await writeFile(markdown, '# Notes\nOriginal\n');
-  await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'publish', markdown, '--id', 'notes', '--title', 'Notes', '--attention', '--workspace', repo], { env });
+  await run(process.execPath, [path.resolve('bin/lavish-hub'), 'publish', markdown, '--id', 'notes', '--title', 'Notes', '--attention', '--workspace', repo], { env });
   const notesButton = frame.getByRole('button', { name: 'Notes', exact: true });
   await notesButton.waitFor();
   assert.equal(await notesButton.getAttribute('data-attention'), 'true');
@@ -426,7 +426,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await frame.getByRole('button', { name: 'Save', exact: true }).click();
   await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor();
   assert.equal(await readFile(markdown, 'utf8'), '# Notes\nSaved through the forward\n');
-  await run(process.execPath, [path.resolve('bin/lavish-kit'), 'hub', 'stop', '--workspace', repo], { env });
+  await run(process.execPath, [path.resolve('bin/lavish-hub'), 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
   assert.equal(exit, 0, stderr);
 });
@@ -441,9 +441,9 @@ test('hub asset route grants narrow CORS to registered verified bundles', async 
   const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
   delete env.HC_TERMINAL_ID;
   try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
-  const cli = path.resolve('bin/lavish-kit');
+  const cli = path.resolve('bin/lavish-hub');
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
-  const child = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [cli, 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '';
   child.stderr.on('data', chunk => { stderr += chunk; }); child.stdout.resume();
   t.after(async () => {
@@ -461,7 +461,7 @@ test('hub asset route grants narrow CORS to registered verified bundles', async 
   const stylesheet = html.match(/href="(hub-asset-[a-f0-9]{64}\.css)"/)[1];
   const source = path.join(dir, 'review.html');
   await writeFile(source, '<!doctype html><title>Review</title><p>Published</p>');
-  await run(process.execPath, [cli, 'hub', 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
   const sibling = `document-${createHash('sha256').update(JSON.stringify(['review', await realpath(source)])).digest('hex')}.html`;
   // The hub page loads its bundles from the opaque-origin artifact frame, so only
   // `Origin: null` is the caller that needs the grant, and only for a bundle.
@@ -525,7 +525,7 @@ test('hub asset route grants narrow CORS to registered verified bundles', async 
   assert.notEqual(tampered.headers.etag, served.headers.etag);
   await writeFile(path.join(identity.directory, bundle), original);
   assert.equal((await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity' } })).headers[allowed], 'null', 'restoring the bytes restores the grant');
-  await run(process.execPath, [cli, 'hub', 'stop', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
   assert.equal(exit, 0, stderr);
   const ended = await request(bundle, { headers: { origin: 'null', 'accept-encoding': 'identity' } });
@@ -544,11 +544,11 @@ test('CLI recovers published HTML after SIGKILL and refuses edited generated fil
   const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
   delete env.HC_TERMINAL_ID;
   try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
-  const cli = path.resolve('bin/lavish-kit');
+  const cli = path.resolve('bin/lavish-hub');
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const children = [];
   const start = () => {
-    const child = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [cli, 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     child.errors = ''; child.stderr.on('data', chunk => { child.errors += chunk; }); child.stdout.resume(); children.push(child); return child;
   };
   const waitReady = async child => {
@@ -567,7 +567,7 @@ test('CLI recovers published HTML after SIGKILL and refuses edited generated fil
   });
   const source = path.join(dir, 'review.html'); await writeFile(source, '<p>Crash recovery</p>');
   const first = start(); await waitReady(first);
-  await run(process.execPath, [cli, 'hub', 'publish', source, '--id', 'review', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', source, '--id', 'review', '--workspace', repo], { env });
   const name = `document-${createHash('sha256').update(JSON.stringify(['review', await realpath(source)])).digest('hex')}.html`;
   const sibling = path.join(identity.directory, name), registration = path.join(identity.directory, 'documents.json');
   const before = await readFile(registration, 'utf8');

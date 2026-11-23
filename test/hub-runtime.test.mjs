@@ -15,7 +15,7 @@ import { EventEmitter } from 'node:events';
 import { createHubProxy } from '../vendor/lavish/src/hub-proxy.js';
 import { buildSelfContainedHtml } from '../vendor/lavish/src/export-bundle.js';
 
-const cli = path.resolve('bin/lavish-kit');
+const cli = path.resolve('bin/lavish-hub');
 test('hub foreground owner rejects duplicates and stops without a relay', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-owner-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
@@ -33,7 +33,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   app.use((req, res, next) => generatedDirectory ? express.static(generatedDirectory)(req, res, next) : next());
   app.use((req, res) => {
     res.setHeader('content-type', 'application/json');
-    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.97', lavish_kit_page_reviews: 1, lavish_kit_hub_assets: 1, state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
+    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.97', lavish_hub_page_reviews: 1, lavish_hub_assets: 1, state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
     else {
       polls++;
       if (pollMode === 'feedback') { pollMode = 'waiting'; res.end(JSON.stringify({ status: 'feedback', prompts: ['Review this'], dom_snapshot: 'quoted context' })); }
@@ -74,15 +74,15 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   for (let i = 0; i < 400; i++) { try { await stat(runtime); break; } catch { if (owner.exitCode !== null) throw new Error(stderr); await delay(30); } }
   assert.equal((await stat(runtime)).mode & 0o777, 0o600);
   const run = (file, args, options) => execute(file, args, { ...options, timeout: 5000 });
-  await assert.rejects(run(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env }), /hub owner is already running/i);
-  const { stdout } = await run(process.execPath, [cli, 'hub', '--workspace', repo], { env });
+  await assert.rejects(run(process.execPath, [cli, 'listen', '--workspace', repo], { env }), /hub owner is already running/i);
+  const { stdout } = await run(process.execPath, [cli, '--workspace', repo], { env });
   assert.match(stdout, /Hub owner running/);
-  assert.equal((await run(process.execPath, [cli, 'hub', 'url', '--workspace', repo], { env })).stdout, 'http://localhost:123/review\n');
+  assert.equal((await run(process.execPath, [cli, 'url', '--workspace', repo], { env })).stdout, 'http://localhost:123/review\n');
   const subdir = path.join(repo, 'subdir'); await mkdir(subdir);
-  assert.match((await run(process.execPath, [cli, 'hub'], { env, cwd: subdir })).stdout, /Hub owner running/);
+  assert.match((await run(process.execPath, [cli], { env, cwd: subdir })).stdout, /Hub owner running/);
   const other = path.join(dir, 'other'); await mkdir(other); execFileSync('jj', ['git', 'init', other]);
-  await assert.rejects(run(process.execPath, [cli, 'hub', '--workspace', other], { env }), /No live hub owner/);
-  assert.match((await run(process.execPath, [cli, 'hub', 'url', '--workspace', other], { env })).stdout, new RegExp(`^http://[^/]+:${server.address().port}/session/[a-f0-9]{16}\\n$`));
+  await assert.rejects(run(process.execPath, [cli, '--workspace', other], { env }), /No live hub owner/);
+  assert.match((await run(process.execPath, [cli, 'url', '--workspace', other], { env })).stdout, new RegExp(`^http://[^/]+:${server.address().port}/session/[a-f0-9]{16}\\n$`));
   const hubHtml = await readFile(path.join(identity.directory, 'hub.html'), 'utf8');
   const bundleNames = [...hubHtml.matchAll(/(?:src|href)="(hub-asset-[a-f0-9]{64}\.(?:js|css))"/g)].map(match => match[1]);
   assert.equal(bundleNames.length, 4);
@@ -111,9 +111,9 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     return (await response.json()).result;
   };
   assert.equal((await request('status')).selected, 'commits');
-  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
+  await run(process.execPath, [cli, '--workspace', repo, '--view', 'tasks'], { env });
   assert.equal((await request('status')).selected, 'tasks');
-  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--open'], { env });
+  await run(process.execPath, [cli, '--workspace', repo, '--open'], { env });
   const inside = path.join(repo, 'inside.html');
   await mkdir(path.join(repo, 'assets'));
   await writeFile(inside, '<!doctype html><html><head><script>window.tagText="<body>"</script><base href="assets/"><link rel="stylesheet" href="asset.css"><script src="asset.js"></script></head><body><input aria-label="Frame draft"><p>original</p><img alt="asset" src="asset.svg"></body></html>');
@@ -121,7 +121,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(path.join(repo, 'assets', 'asset.js'), 'window.assetLoaded = true');
   await writeFile(path.join(repo, 'assets', 'asset.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"></svg>');
   await writeFile(path.join(repo, 'asset.css'), 'original');
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
   const browserPage = await browser.newPage();
   await browserPage.goto(`${browserBase}/hub.html`);
@@ -129,7 +129,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await browserPage.getByRole('button', { name: 'Edit Tasks Markdown' }).click();
   const taskDraft = browserPage.getByRole('textbox', { name: 'Tasks Markdown' });
   await taskDraft.fill('Unsaved task');
-  await run(process.execPath, [cli, 'hub', 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
   const sibling = (await request('documents')).documents.find(doc => doc.id === 'inside').sibling;
   assert.match(await readFile(path.join(identity.directory, sibling), 'utf8'), /original/);
   assert.equal((await request('status')).selected, 'tasks');
@@ -143,10 +143,10 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await browserPage.evaluate(() => { window.focusedHubButton = document.activeElement; window.mountedTaskDraft = document.querySelector('#view textarea'); });
   const focusCheckDoc = path.join(dir, 'focus-check.md');
   await writeFile(focusCheckDoc, '# Focus check\n');
-  await run(process.execPath, [cli, 'hub', 'publish', focusCheckDoc, '--id', 'focus-check', '--title', 'Focus check', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', focusCheckDoc, '--id', 'focus-check', '--title', 'Focus check', '--workspace', repo], { env });
   await browserPage.getByRole('button', { name: 'Focus check', exact: true }).waitFor();
   assert.equal(await browserPage.evaluate(() => document.activeElement === window.focusedHubButton && window.focusedHubButton.isConnected && document.querySelector('#view textarea') === window.mountedTaskDraft), true);
-  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
+  await run(process.execPath, [cli, '--workspace', repo, '--view', 'inside'], { env });
   await browserPage.getByText('Navigation paused: unsaved drafts remain on this page.').waitFor();
   assert.equal(await taskDraft.inputValue(), 'Unsaved task');
   await browserPage.getByRole('button', { name: 'inside.html', exact: true }).click();
@@ -159,7 +159,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await taskBeforeUnload.dismiss();
   assert.equal(await taskDraft.inputValue(), 'Unsaved task');
   await writeFile(path.join(repo, 'change.txt'), 'A changed line\n');
-  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'changes'], { env });
+  await run(process.execPath, [cli, '--workspace', repo, '--view', 'changes'], { env });
   const diffPage = await browser.newPage();
   await diffPage.goto(`${browserBase}/hub.html`);
   await diffPage.locator('.file-link[data-path="change.txt"]').waitFor();
@@ -176,7 +176,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(diffBeforeUnload.type(), 'beforeunload');
   await diffBeforeUnload.dismiss();
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
-  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
+  await run(process.execPath, [cli, '--workspace', repo, '--view', 'inside'], { env });
   await diffPage.getByText('Navigation paused: unsaved drafts remain on this page.').waitFor();
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
   await diffPage.getByRole('button', { name: 'inside.html', exact: true }).click();
@@ -209,7 +209,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   }
   const otherHtml = path.join(repo, 'other.html');
   await writeFile(otherHtml, '<!doctype html><p>Other</p>');
-  await run(process.execPath, [cli, 'hub', 'publish', otherHtml, '--id', 'other-html', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', otherHtml, '--id', 'other-html', '--workspace', repo], { env });
   const otherSibling = (await request('documents')).documents.find(doc => doc.id === 'other-html').sibling;
   for (const fromHub of [true, false]) {
     await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
@@ -368,7 +368,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await siblingPage.getByRole('link', { name: 'Changes', exact: true }).click();
   await siblingPage.getByRole('button', { name: 'Changes', exact: true }).waitFor();
   assert.equal((await request('status')).selected, 'changes');
-  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'inside'], { env });
+  await run(process.execPath, [cli, '--workspace', repo, '--view', 'inside'], { env });
   await siblingPage.getByLabel('Frame draft').fill('Authored draft');
   let refreshes = 0;
   siblingPage.on('request', request => {
@@ -390,7 +390,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.ok(refreshes > beforeDialogRefresh, 'polling should resume after cancellation');
   assert.equal(await siblingPage.evaluate(() => document.activeElement === window.focusedNavigationLink && window.focusedNavigationLink.isConnected), true);
   assert.equal(await siblingPage.getByLabel('Frame draft').inputValue(), 'Authored draft');
-  await run(process.execPath, [cli, 'hub', '--workspace', repo, '--view', 'tasks'], { env });
+  await run(process.execPath, [cli, '--workspace', repo, '--view', 'tasks'], { env });
   await delay(2300);
   assert.equal(await siblingPage.getByLabel('Frame draft').inputValue(), 'Authored draft');
   await siblingPage.getByRole('link', { name: 'Tasks', exact: true }).click();
@@ -398,7 +398,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await siblingPage.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor();
   await siblingPage.close();
   await writeFile(inside, '<p>externally updated</p>');
-  await run(process.execPath, [cli, 'hub', 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', inside, '--id', 'inside', '--workspace', repo], { env });
   assert.match(await readFile(path.join(identity.directory, sibling), 'utf8'), /externally updated/);
   const updatedPage = await browser.newPage();
   await updatedPage.goto(`${browserBase}/${sibling}`);
@@ -407,7 +407,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const outsideHtml = path.join(dir, 'outside.html');
   await writeFile(outsideHtml, '<p>outside</p>');
   await rm(inside);
-  await run(process.execPath, [cli, 'hub', 'publish', outsideHtml, '--id', 'outside', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', outsideHtml, '--id', 'outside', '--workspace', repo], { env });
   assert.match(await readFile(path.join(identity.directory, sibling), 'utf8'), /externally updated/);
   await writeFile(inside, '<p>externally updated</p>');
   const beforeConflict = await request('documents');
@@ -423,7 +423,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(newDocument, '<p>new document</p>');
   await writeFile(path.join(identity.directory, sibling), `${await readFile(path.join(identity.directory, sibling), 'utf8')}<!-- local edit -->`);
   const editedInside = await readFile(path.join(identity.directory, sibling), 'utf8');
-  await run(process.execPath, [cli, 'hub', 'publish', newDocument, '--id', 'new', '--title', 'New document', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', newDocument, '--id', 'new', '--title', 'New document', '--workspace', repo], { env });
   await request('navigate', { id: 'inside' });
   await existingPage.getByRole('link', { name: 'New document' }).waitFor();
   assert.equal(await existingPage.evaluate(() => document.activeElement === window.focusedNavigationLink && window.focusedNavigationLink.isConnected), true);
@@ -433,7 +433,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const beforeTargetConflict = await request('documents');
   const selectedBeforeTargetConflict = (await request('status')).selected;
   const stateBeforeTargetConflict = await readFile(stateFile, 'utf8');
-  await assert.rejects(run(process.execPath, [cli, 'hub', 'publish', outsideHtml, '--id', 'outside', '--metadata-file', replacementMetadata, '--workspace', repo], { env }), /refusing to overwrite/);
+  await assert.rejects(run(process.execPath, [cli, 'publish', outsideHtml, '--id', 'outside', '--metadata-file', replacementMetadata, '--workspace', repo], { env }), /refusing to overwrite/);
   assert.deepEqual(await request('documents'), beforeTargetConflict);
   assert.equal((await request('status')).selected, selectedBeforeTargetConflict);
   assert.equal(await readFile(stateFile, 'utf8'), stateBeforeTargetConflict);
@@ -443,7 +443,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(path.join(identity.directory, sibling), editedInside.replace('<!-- local edit -->', ''));
   await writeFile(path.join(dir, 'outside.css'), 'outside');
   await symlink(path.join(repo, 'asset.css'), path.join(dir, 'linked.css'));
-  await run(process.execPath, [cli, 'hub', 'publish', outsideHtml, '--id', 'outside', '--workspace', repo, '--open'], { env });
+  await run(process.execPath, [cli, 'publish', outsideHtml, '--id', 'outside', '--workspace', repo, '--open'], { env });
   assert.equal((await request('status')).selected, 'outside');
   const openedLines = (await readFile(path.join(dir, 'opened'), 'utf8')).trim().split('\n');
   assert.equal(openedLines.length, 2);
@@ -456,7 +456,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(outsideHtml, '<p>new external source</p>');
   await rename(stateFile, `${stateFile}.backup`);
   await mkdir(stateFile);
-  await assert.rejects(run(process.execPath, [cli, 'hub', 'publish', outsideHtml, '--id', 'outside', '--metadata-file', replacementMetadata, '--workspace', repo], { env }));
+  await assert.rejects(run(process.execPath, [cli, 'publish', outsideHtml, '--id', 'outside', '--metadata-file', replacementMetadata, '--workspace', repo], { env }));
   assert.deepEqual(await request('documents'), beforePersistFailure);
   assert.equal((await request('status')).selected, selectedBeforePersistFailure);
   assert.equal(await readFile(path.join(identity.directory, sibling), 'utf8'), oldInside);
@@ -469,7 +469,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const metadata = path.join(dir, 'metadata.json');
   await writeFile(metadata, JSON.stringify({ reviewedRepository: 'Reviewed repo', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40) }));
   const selectedBeforePublish = (await request('status')).selected;
-  const publishOutput = await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--metadata-file', metadata, '--attention', '--workspace', repo], { env });
+  const publishOutput = await run(process.execPath, [cli, 'publish', document, '--id', 'review', '--metadata-file', metadata, '--attention', '--workspace', repo], { env });
   assert.match(publishOutput.stdout, /\?view=review/);
   assert.equal((await request('status')).selected, selectedBeforePublish);
   const publishedReview = (await request('documents')).documents.find(doc => doc.id === 'review');
@@ -486,14 +486,14 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(acknowledgedReview.attention, false);
   assert.equal(acknowledgedReview.viewedVersion, publishedReview.version);
   await writeFile(metadata, JSON.stringify({ unknown: 'invalid' }));
-  await assert.rejects(run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env }), /metadata/i);
+  await assert.rejects(run(process.execPath, [cli, 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env }), /metadata/i);
   assert.equal((await request('documents')).documents.find(doc => doc.id === 'review').metadata.reviewedRepository, 'Reviewed repo');
-  await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', document, '--id', 'review', '--workspace', repo], { env });
   assert.deepEqual((await request('documents')).documents.find(doc => doc.id === 'review').metadata, {});
   const reviewedScope = { reviewedRepository: 'Reviewed repo', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), sourceUrl: 'https://example.com/review' };
   await writeFile(metadata, JSON.stringify(reviewedScope));
-  await run(process.execPath, [cli, 'hub', 'publish', outsideHtml, '--id', 'outside', '--metadata-file', metadata, '--workspace', repo], { env });
-  await run(process.execPath, [cli, 'hub', 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', outsideHtml, '--id', 'outside', '--metadata-file', metadata, '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env });
   assert.deepEqual((await request('documents')).documents.find(doc => doc.id === 'review').metadata, reviewedScope);
   const original = await request('readDocument', { id: 'review' });
   assert.equal((await request('saveDocument', { id: 'review', version: original.version, baseHash: original.hash, text: '# Saved directly\n' })).reply, 'Saved');
@@ -528,21 +528,21 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(notification.type, 'agent-notification');
   assert.deepEqual(notification.prompts, ['Review this']);
   assert.equal(notification.context, 'quoted context');
-  assert.match(notification.reply, /lavish-kit reply/);
+  assert.match(notification.reply, /lavish-hub reply/);
   const shutdownMarker = path.join(dir, 'shutdown-marker');
   const shutdownCommand = { id: 'owner-shutdown', argv: [process.execPath, '-e', "require('fs').writeFileSync(process.argv[1], 'started'); setTimeout(() => require('fs').writeFileSync(process.argv[1], 'escaped'), 1500)", shutdownMarker] };
   const shutdownRequest = request('executeCommand', shutdownCommand).catch(() => null);
   for (let i = 0; i < 100; i++) { try { await stat(shutdownMarker); break; } catch { await delay(20); } }
   assert.equal(await readFile(shutdownMarker, 'utf8'), 'started');
   const ownerExit = new Promise(resolve => owner.once('exit', resolve));
-  await run(process.execPath, [cli, 'hub', 'stop', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'stop', '--workspace', repo], { env });
   await shutdownRequest;
   await delay(1600);
   assert.equal(await readFile(shutdownMarker, 'utf8'), 'started');
   const exit = await ownerExit;
   assert.equal(exit, 0, stderr);
   await assert.rejects(readFile(runtime), { code: 'ENOENT' });
-  await assert.rejects(stat(path.join(env.XDG_STATE_HOME, 'lavish-kit', 'relay.json')), { code: 'ENOENT' });
+  await assert.rejects(stat(path.join(env.XDG_STATE_HOME, 'lavish-hub', 'relay.json')), { code: 'ENOENT' });
 
   await rm(repo, { recursive: true, force: true });
   const restarted = spawn(process.execPath, ownerArgs, { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -586,7 +586,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await delay(150);
   assert.equal(polls, stoppedPolls, 'ambiguous poll must not be retried');
   await assert.rejects(readFile(runtime), { code: 'ENOENT' });
-  await assert.rejects(run(process.execPath, [cli, 'hub', '--workspace', repo], { env }), /No live hub owner/);
+  await assert.rejects(run(process.execPath, [cli, '--workspace', repo], { env }), /No live hub owner/);
   const pollsBeforeEnd = polls;
   pollMode = 'end-between';
   const endedOwner = spawn(process.execPath, ownerArgs, { env, stdio: ['ignore', 'ignore', 'pipe'] });

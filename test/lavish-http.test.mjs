@@ -16,7 +16,7 @@ async function fixture(t) {
   const state = path.join(dir, 'state'); await mkdir(state);
   const file = path.join(dir, 'review.html'); await writeFile(file, '<!doctype html><html lang="en"><title>HTTP probe</title><p>Review</p></html>');
   const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_AXI_STATE_DIR: state };
-  const health = { ok: true, app: 'lavish-axi', version: supportedLavishVersion, lavish_kit_page_reviews: 1, lavish_kit_hub_assets: 1, state_id: keyFor(path.join(await realpath(state), 'state.json')) };
+  const health = { ok: true, app: 'lavish-axi', version: supportedLavishVersion, lavish_hub_page_reviews: 1, lavish_hub_assets: 1, state_id: keyFor(path.join(await realpath(state), 'state.json')) };
   return { dir, state, file, env, health };
 }
 
@@ -41,7 +41,7 @@ test('hub HTTP requires the patched version and matching state before polling', 
     if (new URL(url).pathname === '/health') return Response.json(x.health);
     polls++; return Response.json({ status: 'waiting' });
   } });
-  delete x.health.lavish_kit_page_reviews;
+  delete x.health.lavish_hub_page_reviews;
   // The server is this process's own, so the remedy has to address its state
   // directory and port through the packaged CLI: `lavish-axi` is not on PATH, and a
   // command without those two would reach a different server or none.
@@ -50,7 +50,7 @@ test('hub HTTP requires the patched version and matching state before polling', 
     && error.message.includes(`LAVISH_AXI_STATE_DIR='${x.state}'`)
     && /LAVISH_AXI_PORT=\d+ node '[^']*vendor\/lavish\/dist\/cli\.mjs' stop$/.test(error.message)
     && !/`lavish-axi stop`/.test(error.message));
-  x.health.lavish_kit_page_reviews = 1; x.health.state_id = 'other';
+  x.health.lavish_hub_page_reviews = 1; x.health.state_id = 'other';
   await assert.rejects(client.poll(x.file, 'test'), /STATE_MISMATCH/);
   assert.equal(polls, 0);
   x.health.state_id = keyFor(path.join(await realpath(x.state), 'state.json'));
@@ -67,7 +67,7 @@ test('a same-version server built without the hub asset grant is refused with th
   // An owner that started from an earlier build of the vendored server answers the
   // supported version and the older patch, so the missing grant is the only sign it
   // cannot serve hub renderers.
-  delete x.health.lavish_kit_hub_assets;
+  delete x.health.lavish_hub_assets;
   await assert.rejects(client.poll(x.file, 'test'), error => error.code === 'UNSUPPORTED_LAVISH'
     && /hub asset origin grant/.test(error.message)
     // A hub restart keeps the server, so the remedy is the packaged CLI's own
@@ -78,12 +78,12 @@ test('a same-version server built without the hub asset grant is refused with th
   assert.equal(polls, 0, 'nothing is consumed from a server that cannot serve the page');
   // Both markers missing names both, so the refusal says everything the adopted
   // server lacks and still sends it nothing.
-  delete x.health.lavish_kit_page_reviews;
+  delete x.health.lavish_hub_page_reviews;
   await assert.rejects(client.poll(x.file, 'test'), error => error.code === 'UNSUPPORTED_LAVISH'
     && /lacks the page review routes and the hub asset origin grant/.test(error.message));
   assert.equal(polls, 0, 'a server missing either marker is never asked for work');
-  x.health.lavish_kit_page_reviews = 1;
-  x.health.lavish_kit_hub_assets = 1;
+  x.health.lavish_hub_page_reviews = 1;
+  x.health.lavish_hub_assets = 1;
   assert.equal((await client.poll(x.file, 'test')).session.status, 'waiting');
   assert.equal(polls, 1);
 });
@@ -143,9 +143,9 @@ test('vendored preflight only permits refusal or a compatible server', async t =
     assert.equal(options.method, undefined);
     return Response.json(x.health);
   } });
-  delete x.health.lavish_kit_page_reviews;
+  delete x.health.lavish_hub_page_reviews;
   await assert.rejects(client.verifyIfRunning(), /UNSUPPORTED_LAVISH/);
-  x.health.lavish_kit_page_reviews = 1;
+  x.health.lavish_hub_page_reviews = 1;
   x.health.state_id = 'other';
   await assert.rejects(client.verifyIfRunning(), /STATE_MISMATCH/);
   x.health.state_id = keyFor(path.join(await realpath(x.state), 'state.json'));
@@ -164,11 +164,11 @@ test('HTTP preserves feedback, listener errors, cancellation, and non-consuming 
     calls.push([new URL(url), options]);
     return Response.json(new URL(url).pathname === '/health' ? x.health : result, { status: result.code === 'LISTENER_ACTIVE' && new URL(url).pathname !== '/health' ? 409 : 200 });
   } });
-  const feedback = await client.poll(x.file, `lavish-kit:${x.file}`);
+  const feedback = await client.poll(x.file, `lavish-hub:${x.file}`);
   assert.deepEqual(feedback.prompts, result.prompts); assert.deepEqual(feedback.artifact_failures, result.artifact_failures);
   assert.equal(feedback.snapshot_page, 'tasks.html');
   assert.equal(feedback.session.session_ended, true); assert.equal(feedback.session.ended_by, 'user');
-  assert.equal(calls.at(-1)[0].searchParams.get('owner'), `lavish-kit:${x.file}`);
+  assert.equal(calls.at(-1)[0].searchParams.get('owner'), `lavish-hub:${x.file}`);
   assert.equal(calls.at(-1)[0].searchParams.has('takeover'), false); assert.equal(calls.at(-1)[1].signal, controller.signal);
   result = { code: 'LISTENER_ACTIVE', error: 'already owned' }; await assert.rejects(client.poll(x.file, 'other'), /LISTENER_ACTIVE/);
   result = { code: 'LISTENER_REPLACED' }; await assert.rejects(client.poll(x.file, 'test'), /LISTENER_REPLACED/);

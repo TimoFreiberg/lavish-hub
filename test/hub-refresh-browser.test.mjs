@@ -18,7 +18,7 @@ test('navigation renders before snapshot and serializes delayed owner updates', 
     navigate: async ({ id }) => { navigations.push(id); if (navigations.length === 1) await navigationGate; selected = id; return { selected }; },
     readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseSnapshot(); releaseNavigation(); await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
@@ -48,7 +48,7 @@ test('unchanged snapshot polls keep the rendered repository and manual refresh f
     },
   });
   t.after(() => transport.close());
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -75,7 +75,7 @@ test('cross-page navigation pauses pending refresh and resumes after failure', {
     snapshot: () => { snapshots++; return { base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }; },
     navigate: async () => { navigations++; await navigationGate; throw new Error('navigation failed'); },
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseStatus(); releaseNavigation(); await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -104,7 +104,7 @@ test('new selection wins while remote navigation waits for annotation mode', { t
     navigate: ({ id }) => { selected = id; return { selected }; },
     readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
@@ -135,7 +135,7 @@ test('older remote navigation cannot resume polling during a newer cross-page se
     navigate: async () => { navigations++; await navigationGate; selected = 'commits'; throw new Error('navigation failed'); },
     readDocument: () => ({ text: '', hash: 'one', version: 'one' }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseNavigation(); await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -163,7 +163,7 @@ test('document failure does not also display a renderer failure', { timeout: 300
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
     navigate: () => ({}), readDocument: async () => { await gate; throw new Error('Document unavailable'); },
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseRead(); await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -186,7 +186,7 @@ test('a stale document render cannot append another editor', { timeout: 30000 },
     navigate: ({ id }) => { selected = id; return { selected }; },
     readDocument: async () => { const read = ++reads; if (read === 1) await gate; return { text: read === 1 ? 'Stale' : 'Current', hash: String(read), version: 'one' }; },
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseRead(); await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
@@ -216,7 +216,7 @@ test('failed navigation survives polling and can be retried without losing a dra
     navigate: ({ id }) => { if (++attempts === 1) throw new Error('Navigation rejected'); selected = id; return { selected }; },
     readDocument: () => ({ text: 'Original', hash: 'one', version: 'one' }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
@@ -259,7 +259,7 @@ test('refresh updates clean documents and retains dirty drafts and their target'
     readDocument: () => ({ ...document }),
     saveDocument: body => { saved = body; throw new Error('Document target changed'); },
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -289,7 +289,7 @@ test('unchanged snapshots preserve the focused editor and external changes rende
     status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [{ changeId: 'c'.repeat(32), commitId: 'b'.repeat(40), description }], generated: String(++calls), operationId: String(calls) }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -315,7 +315,7 @@ for (const activation of ['click', 'keyboard']) test(`activating an upper commit
       { changeId: 'd'.repeat(32), commitId: 'e'.repeat(40), description: 'Lower' },
     ] }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -347,7 +347,7 @@ test('commit descriptions render safely and retain draft targets across rewrites
     snapshot: () => ({ base: 'a'.repeat(40), head: commitId, stat: 'aggregate-only', commits: [{ changeId, commitId, description, stat: 'file | 2 +-\n1 file changed' }] }),
     describe: body => { saved = body; return { status: 'conflict', reason: 'stale', current: [{ description: 'External' }] }; },
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
@@ -397,7 +397,7 @@ test('successful description save survives an old snapshot and renders literal t
     snapshot: () => ({ base: 'a'.repeat(40), head: current.commitId, commits: [current] }),
     describe: () => ({ status: 'saved', current: { changeId, commitId: newId, description: '<b>literal</b>\nsecond\n' } }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -427,7 +427,7 @@ test('consecutive saves retain the latest target across an intermediate snapshot
       return { status: 'saved', current: { ...current } };
     },
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseSecond?.(); await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
@@ -467,7 +467,7 @@ test('long rendered descriptions and statistics have resize handles, immutable c
       { changeId: 'f'.repeat(32), commitId: 'f'.repeat(40), description: 'Divergent', divergent: true },
     ] }),
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
@@ -496,7 +496,7 @@ test('description lines scroll horizontally without wrapping or changing text', 
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [{ changeId: 'c'.repeat(32), commitId: 'b'.repeat(40), description: text }] }),
     describe: body => { saved = body.description; return { status: 'saved', current: { commitId: 'b'.repeat(40), description: body.description } }; },
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
@@ -530,7 +530,7 @@ test('Markdown controls save task toggles and retain failed drafts', { timeout: 
     readDocument: () => ({ ...data }),
     saveDocument: async body => { requests.push(body); if (fail) throw new Error('Conflict saving task'); await new Promise(resolve => { release = resolve; }); data = { ...data, text: body.text, hash: 'two' }; return { reply: 'Saved' }; },
   });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
@@ -580,7 +580,7 @@ async function pollingPage(browser, transport, { hidden = false } = {}) {
 }
 const setTabHidden = (page, hidden) => page.evaluate(value => { globalThis.__hidden = value; document.dispatchEvent(new Event('visibilitychange')); }, hidden);
 const commits = () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] });
-const launch = () => chromium.launch({ executablePath: process.env.LAVISH_KIT_CHROMIUM || chromium.executablePath(), headless: true });
+const launch = () => chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
 
 test('repository snapshots are requested only by repository views', { timeout: 30000 }, async t => {
   let selected = 'tasks', statusCalls = 0, snapshots = 0;

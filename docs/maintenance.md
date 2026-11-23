@@ -23,8 +23,8 @@ node scripts/maintenance.mjs retry JOB_ID
 The repository defaults to `gh repo view`; set `MAINTENANCE_REPO=owner/repo`
 if needed. The operator defaults to the authenticated GitHub user; set
 `MAINTENANCE_OPERATOR` to select a different login. Run from the intended
-repository. State is under `$XDG_STATE_HOME/lavish-kit/maintenance` (or
-`$HOME/.local/state/lavish-kit/maintenance`), shared by its workspaces. It
+repository. State is under `$XDG_STATE_HOME/lavish-hub/maintenance` (or
+`$HOME/.local/state/lavish-hub/maintenance`), shared by its workspaces. It
 contains GitHub activity and should be treated as private. Draft state containing
 per-job finalizations is not supported: back up and remove `state.json` before
 restarting, and manually reconcile any unfinished public actions first. A leftover `lock`
@@ -81,8 +81,8 @@ grant on a verified `hub-asset-<hash>.js` representation in the vendored artifac
 route is a local difference of the same kind: the hub page fetches its renderer
 bundles from the opaque-origin artifact frame, so a candidate that drops the grant
 serves a hub whose renderers cannot load. Keep its `Vary: Origin` and the
-`lavish_kit_hub_assets` field its `/health` reports. The release number stays
-upstream's, so only that field lets a lavish-kit process recognize a server built
+`lavish_hub_assets` field its `/health` reports. The release number stays
+upstream's, so only that field lets a lavish-hub process recognize a server built
 without the grant, including one still running from an earlier build of the same
 release, and refuse it. Closing the connection after every HTTP response, and the
 heartbeat message on live-event WebSockets with the chrome's silence check, are

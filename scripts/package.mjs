@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.resolve(process.argv[2] || '.');
-const source = process.env.LAVISH_KIT_SOURCE_COMMIT || execFileSync('jj', ['log', '-r', '@', '--no-graph', '-T', 'commit_id'], { cwd: root, encoding: 'utf8' }).trim();
-const temp = await mkdtemp(path.join(os.tmpdir(), 'lavish-kit-package-'));
+const source = process.env.LAVISH_HUB_SOURCE_COMMIT || execFileSync('jj', ['log', '-r', '@', '--no-graph', '-T', 'commit_id'], { cwd: root, encoding: 'utf8' }).trim();
+const temp = await mkdtemp(path.join(os.tmpdir(), 'lavish-hub-package-'));
 const run = (cmd, args, cwd, env = process.env) => execFileSync(cmd, args, { cwd, env, stdio: 'inherit' });
 try {
   for (const name of ['package.json', 'package-lock.json', 'build.mjs', 'bin', 'src', 'web', 'vendor', 'LICENSE', 'docs']) {
@@ -28,15 +28,15 @@ try {
   pkg.bundledDependencies = Object.keys(pkg.dependencies);
   pkg.files = ['bin', 'src/cli.mjs', 'src/deps.mjs', 'src/orangebox.mjs', 'src/diff/model.mjs', 'src/hub-*.mjs', 'src/lavish.mjs', 'src/lavish-http.mjs', 'src/lavish-port.mjs', 'src/quote.mjs', 'src/runtime.mjs', 'src/save.mjs', 'src/save-message.mjs', 'web/hub-app.mjs', 'web/hub.css', 'web/confirm-navigation.js', 'dist/diff-app.js', 'dist/diff.css', 'dist/hub-markdown.js', 'dist/document.css', 'vendor/lavish/package.json', 'vendor/lavish/dist', 'vendor/lavish/LICENSE', 'vendor/lavish/THIRD-PARTY-NOTICES.md', 'LICENSE', 'docs', 'provenance.json'];
   await writeFile(path.join(temp, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
-  await writeFile(path.join(temp, 'provenance.json'), JSON.stringify({ source, lavishVersion: '0.1.97', lavishKitPageReviews: 1 }, null, 2) + '\n');
+  await writeFile(path.join(temp, 'provenance.json'), JSON.stringify({ source, lavishVersion: '0.1.97', lavishHubPageReviews: 1 }, null, 2) + '\n');
   await mkdir(output, { recursive: true });
   run('npm', ['pack', '--ignore-scripts', '--pack-destination', output], temp);
-  const packed = path.join(output, `lavish-kit-${pkg.version}.tgz`);
+  const packed = path.join(output, `lavish-hub-${pkg.version}.tgz`);
   const bytes = await readFile(packed);
   const digest = createHash('sha256').update(bytes).digest('hex');
-  await writeFile(path.join(output, 'lavish-kit.tgz'), bytes);
+  await writeFile(path.join(output, 'lavish-hub.tgz'), bytes);
   await rm(packed);
-  await writeFile(path.join(output, 'SHA256SUMS'), `${digest}  lavish-kit.tgz\n`);
+  await writeFile(path.join(output, 'SHA256SUMS'), `${digest}  lavish-hub.tgz\n`);
   const npm = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim();
   await writeFile(path.join(output, 'release-metadata.json'), JSON.stringify({ version: pkg.version, source, node: process.version, npm, sha256: digest }, null, 2) + '\n');
 } finally { await rm(temp, { recursive: true, force: true }); }

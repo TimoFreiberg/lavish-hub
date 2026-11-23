@@ -26,7 +26,7 @@ export async function prepareDiff(options, cwd = process.cwd()) {
     if (options.git || options.rev || options.from || options.to) throw new DiffUsageError('a patch on stdin conflicts with --git, -r, --from, and --to');
     return { kind: 'stdin', root: path.resolve(options.repoRoot || cwd), range: 'stdin', rangeSource: 'stdin', rangeSpec: 'stdin', revision: null };
   }
-  if (options.repoRoot) throw new DiffUsageError('--repo-root requires a patch on stdin (lavish-kit diff -)');
+  if (options.repoRoot) throw new DiffUsageError('--repo-root requires a patch on stdin (lavish-hub diff -)');
   if (options.rev && (options.from || options.to)) throw new DiffUsageError('-r conflicts with --from/--to');
   if (Boolean(options.from) !== Boolean(options.to)) throw new DiffUsageError('--from and --to must be given together');
   const jj = options.git ? null : await run('jj', ['root'], cwd, { allowFailure: true }).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
@@ -38,7 +38,7 @@ export async function prepareDiff(options, cwd = process.cwd()) {
     return { kind: 'jj', root, rangeArgs, logRev, to: options.rev ? null : to, range: options.rev || `${from} → ${to}`, rangeSource: options.rev ? `-r ${options.rev}` : options.from ? `--from ${from} --to ${to}` : 'default: branch vs trunk', rangeSpec: options.rev ? `-r ${options.rev}` : `${from}..${to}` };
   }
   const rootResult = await run('git', ['rev-parse', '--show-toplevel'], cwd, { allowFailure: true });
-  if (rootResult.code) throw new DiffUsageError('not in a jj or git repository; run from inside one, or pipe a patch to lavish-kit diff - --repo-root DIR');
+  if (rootResult.code) throw new DiffUsageError('not in a jj or git repository; run from inside one, or pipe a patch to lavish-hub diff - --repo-root DIR');
   const root = rootResult.stdout.trim();
   if (options.rev && !options.rev.includes('..')) throw new DiffUsageError('in a git repository, -r takes a range A..B; use --from A --to B for two revisions');
   let diffArgs, range, rangeSource, to;

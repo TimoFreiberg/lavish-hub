@@ -86,7 +86,7 @@ const state = {
   viewed: new Set(), collapsed: new Set(), current: 0, hunk: -1, draft: null, storageFailed: false,
 };
 if (!embedded) window.addEventListener('beforeunload', event => { if (state.draft?.textarea.value) { event.preventDefault(); event.returnValue = ''; } });
-if (!window.lavishPreview) try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-kit-viewed') || '[]')); } catch { state.storageFailed = true; }
+if (!window.lavishPreview) try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-hub-viewed') || '[]')); } catch { state.storageFailed = true; }
 const header = el('header', null, 'page-header'), toolbar = el('div', null, 'toolbar'), sidebar = el('nav', null, 'sidebar'), viewport = el('div', null, 'viewport'), notice = el('div', null, 'notice'), expansionNotice = el('div', null, 'notice');
 sidebar.setAttribute('aria-label', 'Changed files');
 expansionNotice.setAttribute('role', 'status');
@@ -181,9 +181,9 @@ window.addEventListener('scroll', schedulePlacements, true);
 // header must render at exactly this height or every later file drifts.
 const HEADER_HEIGHT = 44;
 const LINE_HEIGHT = 21;
-function persist() { if (window.lavishPreview) return; try { localStorage.setItem('lavish-kit-viewed', JSON.stringify([...state.viewed])); } catch { state.storageFailed = true; renderToolbar(); } }
+function persist() { if (window.lavishPreview) return; try { localStorage.setItem('lavish-hub-viewed', JSON.stringify([...state.viewed])); } catch { state.storageFailed = true; renderToolbar(); } }
 function makeWorker() {
-  workerUrl = URL.createObjectURL(new Blob([LAVISH_KIT_WORKER_SOURCE], { type: 'text/javascript' }));
+  workerUrl = URL.createObjectURL(new Blob([LAVISH_HUB_WORKER_SOURCE], { type: 'text/javascript' }));
   const poolSize = Math.min(4, Math.max(2, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
   return new WorkerPoolManager({ poolSize, workerFactory: () => new Worker(workerUrl), onWorkerError: event => { event.preventDefault?.(); fallback(); } }, { theme: 'orangebox', themeType: 'dark', langs: [] });
 }
@@ -393,7 +393,7 @@ function fileHeader(index) {
   box.append(main, meta);
   return box;
 }
-const supportedLanguages = new Set(LAVISH_KIT_LANGUAGES);
+const supportedLanguages = new Set(LAVISH_HUB_LANGUAGES);
 function itemFor(file, index) {
   if (file.parsed && !file.parseError) {
     const lang = getFiletypeFromFileName(file.parsed.name);

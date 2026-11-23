@@ -12,17 +12,17 @@ import { computeHubUrl } from '../src/hub-url.mjs';
 import { resolveWorkspace } from '../src/hub-workspace.mjs';
 import { runtimeEnv, lavishCli } from '../src/runtime.mjs';
 
-const cli = path.resolve('bin/lavish-kit');
+const cli = path.resolve('bin/lavish-hub');
 
 test('hub-only CLI rejects removed commands', () => {
-  for (const command of ['diff', 'file', 'pr', 'task', 'retarget', '-']) {
+  for (const command of ['hub', 'diff', 'file', 'pr', 'task', 'retarget', '-']) {
     const result = spawnSync(process.execPath, [cli, command], { encoding: 'utf8' });
     assert.equal(result.status, 2, `${command}: ${result.stderr}`);
     assert.match(result.stderr, /unknown command/);
   }
   const help = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /lavish-kit reply PAGE --agent-reply TEXT/);
+  assert.match(help.stdout, /lavish-hub reply PAGE --agent-reply TEXT/);
 });
 
 test('reply parsing preserves argument boundaries', () => {
@@ -42,8 +42,8 @@ test('missing hub assets retain their actionable error', async t => {
 test('runtime defaults and explicit overrides agree', () => {
   const defaults = runtimeEnv({ HOME: '/home/example' });
   assert.equal(defaults.LAVISH_AXI_PORT, '4388');
-  assert.equal(defaults.LAVISH_AXI_STATE_DIR, path.join('/home/example', '.local/state/lavish-kit/lavish'));
-  assert.equal(runtimeEnv({ HOME: '/home/example', XDG_STATE_HOME: '/state' }).LAVISH_AXI_STATE_DIR, '/state/lavish-kit/lavish');
+  assert.equal(defaults.LAVISH_AXI_STATE_DIR, path.join('/home/example', '.local/state/lavish-hub/lavish'));
+  assert.equal(runtimeEnv({ HOME: '/home/example', XDG_STATE_HOME: '/state' }).LAVISH_AXI_STATE_DIR, '/state/lavish-hub/lavish');
   const explicit = runtimeEnv({ LAVISH_AXI_PORT: '1234', LAVISH_AXI_STATE_DIR: '/custom' });
   assert.equal(explicit.LAVISH_AXI_PORT, '1234');
   assert.equal(explicit.LAVISH_AXI_STATE_DIR, '/custom');
@@ -51,10 +51,10 @@ test('runtime defaults and explicit overrides agree', () => {
 });
 
 test('hub url parses arguments and predicts workspace session URLs without side effects', async t => {
-  assert.deepEqual(parseArgs(['hub', 'url']), { hub: 'url' });
-  assert.deepEqual(parseArgs(['hub', 'url', '--workspace', 'sub']), { hub: 'url', workspace: 'sub' });
-  for (const args of [['hub', 'url', '--open'], ['hub', 'url', '--reopen'], ['hub', 'url', '--view', 'commits']]) {
-    assert.throws(() => parseArgs(args), /unknown hub argument/);
+  assert.deepEqual(parseArgs(['url']), { hub: 'url' });
+  assert.deepEqual(parseArgs(['url', '--workspace', 'sub']), { hub: 'url', workspace: 'sub' });
+  for (const args of [['url', '--open'], ['url', '--reopen'], ['url', '--view', 'commits']]) {
+    assert.throws(() => parseArgs(args), /unknown argument/);
   }
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-url-')));
   t.after(() => rm(dir, { recursive: true, force: true }));

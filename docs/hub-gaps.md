@@ -7,5 +7,5 @@ standalone commands also offered workflows that the hub does not replace:
 - Arbitrary standalone revision-range selection beyond the hub's jj views.
 - Opening a file review and returning without a foreground hub owner.
 - Standalone watch, relay, retarget, and Artifacts workflows.
-- General access to the Lavish CLI through lavish-kit. The public bridge supports
+- General access to the Lavish CLI through lavish-hub. The public bridge supports
   replies only.

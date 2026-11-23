@@ -89,7 +89,7 @@ export function markdownOutputPath(source, out) {
   if (out) return path.resolve(out);
   const hash = createHash('sha256').update(source).digest('hex').slice(0, 10);
   const basename = path.basename(source, path.extname(source));
-  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-kit/pages/markdown', `${basename}-${hash}`, 'index.html');
+  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'lavish-hub/pages/markdown', `${basename}-${hash}`, 'index.html');
 }
 
 export async function writeMarkdown(file, deps, { out, assetBase, bootstrap } = {}) {

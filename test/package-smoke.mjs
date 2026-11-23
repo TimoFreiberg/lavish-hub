@@ -7,8 +7,8 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
-const archive = path.resolve(process.argv[2] || 'lavish-kit.tgz');
-const temp = await mkdtemp(path.join(os.tmpdir(), 'lavish-kit-smoke-'));
+const archive = path.resolve(process.argv[2] || 'lavish-hub.tgz');
+const temp = await mkdtemp(path.join(os.tmpdir(), 'lavish-hub-smoke-'));
 let owner;
 try {
   const inventory = spawnSync('tar', ['-tzf', archive], { encoding: 'utf8' });
@@ -16,11 +16,11 @@ try {
   assert.doesNotMatch(inventory.stdout, /(?:^|\/)(?:\.git|\.jj|\.workspaces|\.checks|@esbuild|playwright-core)(?:\/|$)/m);
   const extract = spawnSync('tar', ['-xzf', archive, '-C', temp], { encoding: 'utf8' });
   assert.equal(extract.status, 0, extract.stderr);
-  const root = path.join(temp, 'package'), cli = path.join(root, 'bin/lavish-kit');
+  const root = path.join(temp, 'package'), cli = path.join(root, 'bin/lavish-hub');
   for (const file of ['vendor/lavish/dist/cli.mjs', 'vendor/lavish/dist/server.mjs', 'vendor/lavish/dist/design/daisyui.css', 'vendor/lavish/dist/whiteboard/whiteboard.js', 'vendor/lavish/dist/whiteboard/fonts/Excalifont', 'node_modules/express/package.json', 'dist/hub-markdown.js']) await readFile(path.join(root, file)).catch(async error => { if (error.code !== 'EISDIR') throw error; });
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   assert.match(pkg.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
-  assert.deepEqual(Object.keys(pkg.bin), ['lavish-kit']);
+  assert.deepEqual(Object.keys(pkg.bin), ['lavish-hub']);
   assert.ok(!pkg.scripts?.install && !pkg.scripts?.postinstall && !pkg.scripts?.prepare);
   const dependencies = spawnSync('npm', ['ls', '--omit=dev', '--all'], { cwd: root, encoding: 'utf8' });
   assert.equal(dependencies.status, 0, dependencies.stdout + dependencies.stderr);
@@ -57,7 +57,7 @@ try {
   await new Promise((resolve, reject) => socket.once('error', reject).listen(0, '127.0.0.1', resolve));
   const port = socket.address().port;
   await new Promise((resolve, reject) => socket.close(error => error ? reject(error) : resolve()));
-  const env = { ...process.env, HOME: home, XDG_STATE_HOME: path.join(home, 'state'), XDG_DATA_HOME: path.join(home, 'data'), LAVISH_AXI_STATE_DIR: path.join(home, 'state/lavish-kit/lavish'), LAVISH_AXI_PORT: String(port), PATH: `${trap}${path.delimiter}${process.env.PATH}` };
+  const env = { ...process.env, HOME: home, XDG_STATE_HOME: path.join(home, 'state'), XDG_DATA_HOME: path.join(home, 'data'), LAVISH_AXI_STATE_DIR: path.join(home, 'state/lavish-hub/lavish'), LAVISH_AXI_PORT: String(port), PATH: `${trap}${path.delimiter}${process.env.PATH}` };
   const run = args => spawnSync(process.execPath, [cli, ...args], { cwd: repo, env, encoding: 'utf8', timeout: 15000 });
   assert.equal(run(['--help']).status, 0);
   for (const format of ['css', 'syntax', 'diff-css']) {
@@ -70,7 +70,7 @@ try {
   assert.equal(init.status, 0, init.stderr);
   const predicted = run(['hub', 'url']);
   assert.equal(predicted.status, 0, predicted.stderr);
-  owner = spawn(process.execPath, [cli, 'hub', 'listen'], { cwd: repo, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  owner = spawn(process.execPath, [cli, 'listen'], { cwd: repo, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; owner.stderr.on('data', chunk => { logs += chunk; });
   let status;
   for (let i = 0; i < 100; i++) {
@@ -81,8 +81,8 @@ try {
   }
   assert.equal(status.status, 0, logs + status.stderr);
   const health = await fetch(`http://127.0.0.1:${port}/health`).then(r => r.json());
-  assert.equal(health.lavish_kit_page_reviews, 1);
-  assert.equal(health.lavish_kit_hub_assets, 1);
+  assert.equal(health.lavish_hub_page_reviews, 1);
+  assert.equal(health.lavish_hub_assets, 1);
   const file = path.join(temp, 'example.html');
   await writeFile(file, '<title>Example</title><link rel="stylesheet" href="example.css"><script src="example.js"></script><p>Hello</p>');
   await writeFile(path.join(temp, 'example.css'), 'p { color: red }');

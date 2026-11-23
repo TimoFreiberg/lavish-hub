@@ -8,10 +8,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
-const cli = path.join(root, 'bin', 'lavish-kit');
+const cli = path.join(root, 'bin', 'lavish-hub');
 const lavishCli = path.join(root, 'vendor', 'lavish', 'dist', 'cli.mjs');
-const marker = '.lavish-kit-demo';
-export const defaultDir = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'lavish-kit-demo');
+const marker = '.lavish-hub-demo';
+export const defaultDir = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'lavish-hub-demo');
 
 /** Environment for the demo hub and every command that talks to it. */
 export function demoEnv(dir, port = 4399) {
@@ -238,8 +238,8 @@ function quiet(command, args, env) {
 export async function stopDemo(dir, port = 4399) {
   const env = demoEnv(dir, port);
   const repo = path.join(dir, 'repo');
-  if (quiet(process.execPath, [cli, 'hub', 'stop', '--workspace', repo], env) === 0) {
-    for (let i = 0; i < 50 && quiet(process.execPath, [cli, 'hub', '--workspace', repo], env) === 0; i++) await new Promise(r => setTimeout(r, 200));
+  if (quiet(process.execPath, [cli, 'stop', '--workspace', repo], env) === 0) {
+    for (let i = 0; i < 50 && quiet(process.execPath, [cli, '--workspace', repo], env) === 0; i++) await new Promise(r => setTimeout(r, 200));
   }
   if (existsSync(lavishCli)) quiet(process.execPath, [lavishCli, 'stop'], env);
 }
@@ -288,12 +288,12 @@ async function main() {
   const { repo, docs } = await generateDemo(options.dir);
   await writeFile(path.join(options.dir, 'port'), String(options.port));
   const env = demoEnv(options.dir, options.port);
-  const hub = (...args) => execFileSync(process.execPath, [cli, 'hub', ...args, '--workspace', repo], { env, stdio: ['ignore', 'ignore', 'inherit'] });
-  const child = spawn(process.execPath, [cli, 'hub', 'listen', '--workspace', repo], { env, stdio: 'inherit' });
+  const hub = (...args) => execFileSync(process.execPath, [cli, ...args, '--workspace', repo], { env, stdio: ['ignore', 'ignore', 'inherit'] });
+  const child = spawn(process.execPath, [cli, 'listen', '--workspace', repo], { env, stdio: 'inherit' });
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
   const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0))));
   const deadline = Date.now() + 60_000;
-  while (quiet(process.execPath, [cli, 'hub', '--workspace', repo], env) !== 0) {
+  while (quiet(process.execPath, [cli, '--workspace', repo], env) !== 0) {
     if (child.exitCode !== null || Date.now() > deadline) { child.kill('SIGTERM'); console.error('demo: hub did not start'); return await exited || 1; }
     await new Promise(r => setTimeout(r, 300));
   }

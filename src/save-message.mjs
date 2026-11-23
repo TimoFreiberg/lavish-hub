@@ -1,6 +1,6 @@
 // Shared by the browser editor and relay. No path is accepted from the page.
-export const saveTag = 'lavish-kit-save';
-const prefix = 'lavish-kit-save/v1\n';
+export const saveTag = 'lavish-hub-save';
+const prefix = 'lavish-hub-save/v1\n';
 export function encodeSave(baseHash, text) {
   return prefix + JSON.stringify({ baseHash, text });
 }

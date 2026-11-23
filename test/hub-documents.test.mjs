@@ -61,7 +61,7 @@ test('obsolete attachments are ignored without affecting tasks or published docu
   await assert.rejects(store.attach({ kind: 'pr', file: tasks }), /Invalid attachment/);
   await store.publish({ id: 'pr', file: tasks });
   assert.equal((await store.read({ id: 'pr' })).text, 'tasks');
-  assert.throws(() => parseArgs(['hub', 'pr', '--file', tasks]), /unknown hub command/);
+  assert.throws(() => parseArgs(['pr', '--file', tasks]), /unknown command/);
 });
 
 test('hub metadata validation and CLI options', async t => {
@@ -74,8 +74,8 @@ test('hub metadata validation and CLI options', async t => {
   await assert.rejects(readMetadata(file), /metadata field/);
   await writeFile(file, JSON.stringify({ reviewedRepository: 'x'.repeat(17000) }));
   await assert.rejects(readMetadata(file), /16 KiB/);
-  assert.deepEqual(parseArgs(['hub', 'publish', 'review.md', '--id', 'review', '--metadata-file', 'meta.json']), { hub: 'publish', file: 'review.md', id: 'review', metadataFile: 'meta.json' });
-  assert.deepEqual(parseArgs(['hub', 'publish', 'review.md', '--id', 'review', '--attention']), { hub: 'publish', file: 'review.md', id: 'review', attention: true });
-  assert.throws(() => parseArgs(['hub', 'publish', 'review.md', '--id', 'review', '--attention', '--attention']), /given twice/);
-  assert.throws(() => parseArgs(['hub', 'publish', 'review.md']), /requires --id/);
+  assert.deepEqual(parseArgs(['publish', 'review.md', '--id', 'review', '--metadata-file', 'meta.json']), { hub: 'publish', file: 'review.md', id: 'review', metadataFile: 'meta.json' });
+  assert.deepEqual(parseArgs(['publish', 'review.md', '--id', 'review', '--attention']), { hub: 'publish', file: 'review.md', id: 'review', attention: true });
+  assert.throws(() => parseArgs(['publish', 'review.md', '--id', 'review', '--attention', '--attention']), /given twice/);
+  assert.throws(() => parseArgs(['publish', 'review.md']), /requires --id/);
 });

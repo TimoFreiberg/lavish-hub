@@ -29,7 +29,7 @@ await esbuild.build({
   entryPoints: [path.join(root, 'web/diff-app.mjs')],
   outfile: path.join(out, 'diff-app.js'), bundle: true, minify: true, format: 'iife',
   platform: 'browser', splitting: false, nodePaths: [path.join(deps, 'node_modules')],
-  define: { LAVISH_KIT_WORKER_SOURCE: JSON.stringify(worker.outputFiles[0].text), LAVISH_KIT_LANGUAGES: JSON.stringify(languages) },
+  define: { LAVISH_HUB_WORKER_SOURCE: JSON.stringify(worker.outputFiles[0].text), LAVISH_HUB_LANGUAGES: JSON.stringify(languages) },
   plugins: [languageCatalog], logLevel: 'silent',
 });
 await copyFile(path.join(root, 'web/diff.css'), path.join(out, 'diff.css'));

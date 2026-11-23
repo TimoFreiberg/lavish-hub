@@ -16,7 +16,7 @@ test('status, retry and launch preconditions use local state', () => {
     assert.equal(run('--help').status, 0);
     assert.equal(run('status').status, 0);
     assert.match(run('once').stderr, /HC_TERMINAL_ID is missing/);
-    const stateDir = path.join(dir, 'lavish-kit', 'maintenance', 'owner--project');
+    const stateDir = path.join(dir, 'lavish-hub', 'maintenance', 'owner--project');
     const stateFile = path.join(stateDir, 'state.json');
     writeFileSync(stateFile, JSON.stringify({ jobs: [{ id: 'one', status: 'failed' }] }));
     assert.equal(run('retry', 'one').status, 0);
