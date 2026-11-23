@@ -141,6 +141,29 @@ body.lavish {
   border-bottom: var(--hairline-subtle);
   box-sizing: border-box;
 }
+.hubs-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--w-medium);
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.hubs-link:hover {
+  border-color: var(--border-strong);
+  background: var(--steel-700);
+  color: var(--fg);
+}
 .brand {
   display: flex;
   align-items: flex-end;
@@ -1777,6 +1800,9 @@ body.layout-gate-active iframe#artifact {
   .bar {
     gap: 10px;
     --bar-pad: var(--space-6);
+  }
+  .hubs-link {
+    padding: 0 8px;
   }
   .brand-support {
     display: none;

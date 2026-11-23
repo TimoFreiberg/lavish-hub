@@ -27,7 +27,8 @@ in effect through the UI server. Stopping the owner or ending its review removes
 the browser route. Saves and launches are not retried after a lost connection.
 Check their outcome before retrying.
 
-Open `/hubs` on the Lavish UI address to see active workspace hubs. The page
+Open `/hubs` on the Lavish UI address to see active workspace hubs, or use the
+**Hubs** link in the Lavish header bar to return to it from any session. The page
 works through the same forwarded port and links to each session on that origin.
 It shows the workspace directory name and up to 240 characters of the first
 line of the current jj `@-` commit description. If the workspace cannot be read,

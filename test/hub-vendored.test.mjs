@@ -426,6 +426,11 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await frame.getByRole('button', { name: 'Save', exact: true }).click();
   await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor();
   assert.equal(await readFile(markdown, 'utf8'), '# Notes\nSaved through the forward\n');
+  const hubsBackLink = page.getByRole('link', { name: 'Hubs', exact: true });
+  assert.equal(await hubsBackLink.getAttribute('href'), '/hubs');
+  await hubsBackLink.click();
+  await page.waitForURL(new URL('/hubs', forwardedUrl).href);
+  await page.getByRole('link', { name: 'repo' }).waitFor();
   await run(process.execPath, [path.resolve('bin/lavish-hub'), 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
   assert.equal(exit, 0, stderr);

@@ -911,6 +911,7 @@ test("chrome top bar follows the design mock wordmark and overflow menu treatmen
   const html = createChromeHtml({ key: "abc", file: "/tmp/artifact.html" });
   const css = await chromeCssSource();
 
+  assert.match(html, /class="hubs-link" id="hubsLink" href="\/hubs"/);
   assert.match(html, /class="brand-mark">Lavish/);
   assert.match(html, /class="brand-support">Editor/);
   assert.match(css, /font-family:var\(--font-serif\)/);
