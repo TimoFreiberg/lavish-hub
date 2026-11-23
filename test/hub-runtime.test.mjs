@@ -582,6 +582,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const restartExit = new Promise(resolve => restarted.once('exit', resolve));
   pollMode = 'truncated';
   assert.notEqual(await restartExit, 0, restartError);
+  assert.match(restartError, /uncertain delivery outcome/i);
+  assert.match(restartError, /review chat/i);
   const stoppedPolls = polls;
   await delay(150);
   assert.equal(polls, stoppedPolls, 'ambiguous poll must not be retried');

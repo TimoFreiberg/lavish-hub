@@ -270,6 +270,9 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     return 0;
   } catch (error) {
     if (stopping && (error.name === 'AbortError' || abort.signal.aborted)) return 0;
+    if (error?.ambiguousDelivery) {
+      console.error('Feedback poll failed with an uncertain delivery outcome; Lavish may already have consumed a batch and marked it Seen in the review chat. Check the review chat or ask the reviewer to resend before restarting lavish-hub listen.');
+    }
     throw error;
   } finally {
     for (const signal of signals) process.removeListener(signal, stop);

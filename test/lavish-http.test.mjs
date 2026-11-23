@@ -28,11 +28,11 @@ test('HTTP checks version and state before consuming; never retries broken poll 
   };
   const client = createLavishClient({ env: x.env, fetch });
   x.health.version = '99.0.0';
-  await assert.rejects(client.poll(x.file, 'test'), /UNSUPPORTED_LAVISH/); assert.equal(polls, 0);
+  await assert.rejects(client.poll(x.file, 'test'), error => /UNSUPPORTED_LAVISH/.test(error.message) && !error.ambiguousDelivery); assert.equal(polls, 0);
   x.health.version = supportedLavishVersion; x.health.state_id = 'another-state';
-  await assert.rejects(client.poll(x.file, 'test'), /STATE_MISMATCH/); assert.equal(polls, 0);
+  await assert.rejects(client.poll(x.file, 'test'), error => /STATE_MISMATCH/.test(error.message) && !error.ambiguousDelivery); assert.equal(polls, 0);
   x.health.state_id = keyFor(path.join(await realpath(x.state), 'state.json'));
-  await assert.rejects(client.poll(x.file, 'test'), SyntaxError); assert.equal(polls, 1);
+  await assert.rejects(client.poll(x.file, 'test'), error => error instanceof SyntaxError && error.ambiguousDelivery === true); assert.equal(polls, 1);
 });
 
 test('hub HTTP requires the patched version and matching state before polling', async t => {
@@ -170,9 +170,9 @@ test('HTTP preserves feedback, listener errors, cancellation, and non-consuming 
   assert.equal(feedback.session.session_ended, true); assert.equal(feedback.session.ended_by, 'user');
   assert.equal(calls.at(-1)[0].searchParams.get('owner'), `lavish-hub:${x.file}`);
   assert.equal(calls.at(-1)[0].searchParams.has('takeover'), false); assert.equal(calls.at(-1)[1].signal, controller.signal);
-  result = { code: 'LISTENER_ACTIVE', error: 'already owned' }; await assert.rejects(client.poll(x.file, 'other'), /LISTENER_ACTIVE/);
-  result = { code: 'LISTENER_REPLACED' }; await assert.rejects(client.poll(x.file, 'test'), /LISTENER_REPLACED/);
-  result = { status: 'missing' }; await assert.rejects(client.poll(x.file, 'test'), /NOT_FOUND/);
+  result = { code: 'LISTENER_ACTIVE', error: 'already owned' }; await assert.rejects(client.poll(x.file, 'other'), error => /LISTENER_ACTIVE/.test(error.message) && !error.ambiguousDelivery);
+  result = { code: 'LISTENER_REPLACED' }; await assert.rejects(client.poll(x.file, 'test'), error => /LISTENER_REPLACED/.test(error.message) && !error.ambiguousDelivery);
+  result = { status: 'missing' }; await assert.rejects(client.poll(x.file, 'test'), error => /NOT_FOUND/.test(error.message) && !error.ambiguousDelivery);
   await writeFile(path.join(x.state, 'state.json'), JSON.stringify({ sessions: { a: { file: x.file, status: 'open', prompts: ['untouched'] }, b: { file: 'ended.html', status: 'ended' } } }));
   const before = await readFile(path.join(x.state, 'state.json'), 'utf8');
   assert.deepEqual(await client.list(), { sessions: [{ file: x.file, status: 'open' }] });

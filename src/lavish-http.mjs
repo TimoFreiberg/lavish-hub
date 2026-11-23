@@ -92,9 +92,18 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
       if (timeoutMs !== undefined) query.set('timeoutMs', String(timeoutMs));
       // Never retry a consuming request: a truncated response has an unknown
       // delivery outcome.
-      const data = await json(`${base}/api/poll?${query}`, { signal });
+      let data;
+      try {
+        data = await json(`${base}/api/poll?${query}`, { signal });
+      } catch (error) {
+        const nonConsuming = error?.name === 'AbortError' || ['LISTENER_ACTIVE', 'LISTENER_REPLACED', 'NOT_FOUND', 'VALIDATION_ERROR'].includes(error?.code);
+        if (!nonConsuming && error && typeof error === 'object') error.ambiguousDelivery = true;
+        throw error;
+      }
       if (data.status === 'missing') throw failure('NOT_FOUND', 'No active Lavish session for this file');
-      if (!['feedback', 'ended', 'waiting', 'browser_disconnected'].includes(data.status)) throw failure('LAVISH_PROTOCOL_ERROR', 'Unknown poll status');
+      if (!['feedback', 'ended', 'waiting', 'browser_disconnected'].includes(data.status)) {
+        throw Object.assign(failure('LAVISH_PROTOCOL_ERROR', 'Unknown poll status'), { ambiguousDelivery: true });
+      }
       return {
         session: { file: absolute, status: data.status, ...(data.session_ended ? { session_ended: true } : {}), ...(data.ended_by ? { ended_by: data.ended_by } : {}) },
         ...(data.status === 'feedback' ? { prompts: data.prompts || [], dom_snapshot: data.dom_snapshot || '', ...(Object.hasOwn(data, 'snapshot_page') ? { snapshot_page: data.snapshot_page } : {}), ...(data.artifact_failures?.length ? { artifact_failures: data.artifact_failures } : {}) } : {}),
