@@ -122,9 +122,9 @@ export async function launchBrowser() {
 
 export async function offlineRoutes(page) {
   const assets = new Map([
-    ['https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css', [require.resolve('daisyui/daisyui.css'), 'text/css']],
-    ['https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css', [require.resolve('daisyui/themes.css'), 'text/css']],
-    ['https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js', [require.resolve('@tailwindcss/browser'), 'text/javascript']],
+    ['https://cdn.jsdelivr.net/npm/daisyui@5.8.2/daisyui.css', [require.resolve('daisyui/daisyui.css'), 'text/css']],
+    ['https://cdn.jsdelivr.net/npm/daisyui@5.8.2/themes.css', [require.resolve('daisyui/themes.css'), 'text/css']],
+    ['https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.5/dist/index.global.js', [require.resolve('@tailwindcss/browser'), 'text/javascript']],
   ]);
   await page.route('**/*', route => {
     const url = route.request().url(), asset = assets.get(url);

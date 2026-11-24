@@ -47,7 +47,7 @@ try {
   await inspect(root);
   const provenance = JSON.parse(await readFile(path.join(root, 'provenance.json'), 'utf8'));
   assert.match(provenance.source, /^[0-9a-f]{40,64}$/);
-  assert.equal(provenance.lavishVersion, '0.1.97');
+  assert.equal(provenance.lavishVersion, '0.1.98');
   const readonly = spawnSync('chmod', ['-R', 'a-w', root], { encoding: 'utf8' });
   assert.equal(readonly.status, 0, readonly.stderr);
   const repo = path.join(temp, 'repo'), home = path.join(temp, 'home'), trap = path.join(temp, 'trap');

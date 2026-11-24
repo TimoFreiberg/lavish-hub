@@ -63,7 +63,9 @@ skill.
 The import commit `905d0e2f0dbcfb1bb29d65aad90f8b5981a92fa3` identifies the
 vendored source as 0.1.97; the upstream
 [0.1.97 tag](https://github.com/kunchenguid/lavish-axi/releases/tag/lavish-axi-v0.1.97)
-points to `79aa0a18dba9c1a1dcec6db19d2ef4eb7643754b`. The local commit
+points to `79aa0a18dba9c1a1dcec6db19d2ef4eb7643754b`. Vendored source was later
+bumped to [0.1.98](https://github.com/kunchenguid/lavish-axi/releases/tag/lavish-axi-v0.1.98)
+while retaining the local patches. The local commit
 `70cb1ada946b295b24481bb2d14d56405cab8d31` ports page-scoped reviews from
 [upstream PR 363](https://github.com/kunchenguid/lavish-axi/pull/363); later local
 changes also touch the vendored source. These identifiers describe the recorded

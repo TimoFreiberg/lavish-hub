@@ -69,7 +69,10 @@ export async function presentReview(file, url, { title, open = false, log = cons
   file = path.resolve(file);
   if (title === undefined) {
     const html = await readFile(file, 'utf8');
-    title = html.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i)?.[1].trim() || path.basename(file);
+    // Skip HTML comments and raw script/style blocks so a commented <title> does not win.
+    const titleScan = /<!--[\s\S]*?-->|<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>|<title\b[^>]*>([\s\S]*?)<\/title\s*>/gi;
+    const match = [...html.matchAll(titleScan)].find(entry => entry[2] !== undefined);
+    title = match?.[2].replace(/\s+/g, ' ').trim() || path.basename(file);
   }
   let registered = false;
   if (process.env.HC_TERMINAL_ID) {

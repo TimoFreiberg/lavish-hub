@@ -46,7 +46,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   for (let i = 0; i < 400; i++) { try { await stat(runtime); break; } catch { if (child.exitCode !== null) throw new Error(stderr); await delay(50); } }
   const record = JSON.parse(await readFile(runtime, 'utf8'));
   const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
-  assert.equal(health.version, '0.1.97');
+  assert.equal(health.version, '0.1.98');
   assert.equal(health.lavish_hub_page_reviews, 1);
   assert.equal(health.lavish_hub_assets, 1);
   assert.equal(await realpath(health.state_dir), await realpath(state));

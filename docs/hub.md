@@ -11,7 +11,7 @@ page reloads.
 
 ## Runtime
 
-The package includes patched Lavish 0.1.97 and does not use `lavish-axi` on
+The package includes patched Lavish 0.1.98 and does not use `lavish-axi` on
 `PATH`. The hub checks the server's version, patch capability, and state directory
 before polling. A different server on the configured port may need to be
 stopped or assigned a different port. See [building and releasing](releasing.md)

@@ -1,6 +1,6 @@
 # Lavish HTTP boundary
 
-The foreground hub uses the packaged, patched Lavish 0.1.97 runtime. Before use it checks the server health response, version, the page-review and hub-asset capabilities, and canonical state identity. The default state directory is `${XDG_STATE_HOME:-$HOME/.local/state}/lavish-hub/lavish`; `LAVISH_AXI_STATE_DIR` overrides it.
+The foreground hub uses the packaged, patched Lavish 0.1.98 runtime. Before use it checks the server health response, version, the page-review and hub-asset capabilities, and canonical state identity. The default state directory is `${XDG_STATE_HOME:-$HOME/.local/state}/lavish-hub/lavish`; `LAVISH_AXI_STATE_DIR` overrides it.
 
 Without `LAVISH_AXI_PORT`, commands find an existing Lavish server for that state directory on ports 4388–4407, or choose the first available port in that range. Unidentified listeners on unrecorded ports are skipped. If the recorded port is occupied but its listener cannot identify itself, startup is refused rather than risking a second server writing the same state. A matching but incompatible server is rejected rather than replaced. An explicit `LAVISH_AXI_PORT` selects exactly that port, with no fallback, and is rejected if another known port uses the same state.
 

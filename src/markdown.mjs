@@ -106,9 +106,9 @@ export async function writeMarkdown(file, deps, { out, assetBase, bootstrap } = 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escape(title)}</title>
-<link rel="stylesheet" href="${assetBase ? `${escape(assetBase)}/daisyui.css` : 'https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css'}">
-<link rel="stylesheet" href="${assetBase ? `${escape(assetBase)}/themes.css` : 'https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css'}">
-<script src="${assetBase ? `${escape(assetBase)}/tailwind.js` : 'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js'}"></script>
+<link rel="stylesheet" href="${assetBase ? `${escape(assetBase)}/daisyui.css` : 'https://cdn.jsdelivr.net/npm/daisyui@5.8.2/daisyui.css'}">
+<link rel="stylesheet" href="${assetBase ? `${escape(assetBase)}/themes.css` : 'https://cdn.jsdelivr.net/npm/daisyui@5.8.2/themes.css'}">
+<script src="${assetBase ? `${escape(assetBase)}/tailwind.js` : 'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.5/dist/index.global.js'}"></script>
 <style>
   ${themeCss}
   body { background: var(--color-base-100); color: var(--color-base-content); }

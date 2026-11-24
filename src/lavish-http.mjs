@@ -6,7 +6,7 @@ import { quote } from './quote.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
 import { resolveLavishPort } from './lavish-port.mjs';
 
-export const supportedLavishVersion = '0.1.97';
+export const supportedLavishVersion = '0.1.98';
 // Local vendor patches this client cannot work without, named by the /health field
 // that reports each one. The vendored server keeps its upstream release number, so
 // a process started from an earlier build of it reports the supported version and

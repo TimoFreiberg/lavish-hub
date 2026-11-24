@@ -32,7 +32,7 @@ test('reply refuses incompatible servers before side effects and forwards compat
     let body = ''; for await (const chunk of req) body += chunk;
     requests.push({ method: req.method, url: req.url, body });
     res.setHeader('content-type', 'application/json');
-    if (req.url.startsWith('/health')) res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: compatible ? '0.1.97' : '0.1.96', lavish_hub_page_reviews: 1, lavish_hub_assets: 1, state_id: stateId }));
+    if (req.url.startsWith('/health')) res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: compatible ? '0.1.98' : '0.1.97', lavish_hub_page_reviews: 1, lavish_hub_assets: 1, state_id: stateId }));
     else res.end(JSON.stringify({ status: 'sent' }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

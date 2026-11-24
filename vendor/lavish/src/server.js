@@ -437,6 +437,7 @@ export async function serve({
   });
   const activeTailscaleNetwork = tailscaleNetworkKey(tailscale);
   const serverStateId = stateId(stateFile);
+  const serverProcessId = crypto.randomUUID();
   let tailscalePhoneReady = false;
   let tailscaleDetectionWarning = typeof tailscale?.warning === "string" ? tailscale.warning : "";
   // Requested addresses that have not bound yet, with the last error for each. Background recovery
@@ -1382,6 +1383,7 @@ export async function serve({
       // refuses that server by name instead of failing every render.
       lavish_hub_assets: 1,
       state_id: serverStateId,
+      process_id: serverProcessId,
       state_dir: path.dirname(stateFile),
       // Where this process is listening and every address it was asked to serve (bound or still
       // retrying). The CLI uses both to find one daemon per port whatever host it was configured
@@ -4388,8 +4390,11 @@ export function extractArtifactHead(html) {
     faviconTag = `<link rel="icon" href="${safeHref}">`;
   }
   let title = "";
-  const titleMatch = head.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (titleMatch) title = titleMatch[1].replace(/\s+/g, " ").trim();
+  // A comment may mention <title> (templates do), and script/style text is raw, so a "<!--" there is
+  // no comment. Skip complete comments and whole script/style elements; the first <title> left wins.
+  const titleScan = /<!--[\s\S]*?-->|<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>|<title[^>]*>([\s\S]*?)<\/title>/gi;
+  const titleMatch = [...head.matchAll(titleScan)].find((match) => match[2] !== undefined);
+  if (titleMatch) title = titleMatch[2].replace(/\s+/g, " ").trim();
   return { faviconTag, title };
 }
 

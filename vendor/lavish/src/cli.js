@@ -45,6 +45,7 @@ import {
   LOOPBACK_HOST,
   resolveConcreteListenHosts,
   serverLogFile,
+  stateDir,
   stateFile,
   stateId,
 } from "./paths.js";
@@ -1881,14 +1882,22 @@ async function findRunningServer(port, { reconcileNetwork = false } = {}) {
 }
 
 // Other Lavish daemons of this installation on the same port. An address the chosen server itself
-// reports as bound is the chosen server, not a duplicate. A server too old to report its addresses
-// is about to be replaced by version, so every other address is retired with it: an old daemon left
-// holding loopback would otherwise make the upgraded server refuse to start.
+// reports as bound, or a matching process identity through a proxy, is not a duplicate. A server
+// too old to report its addresses is about to be replaced by version, so every other address is
+// retired with it: an old daemon left holding loopback would otherwise make the upgraded server
+// refuse to start.
 function ownedDuplicates(owned, chosen) {
   const covered = new Set([chosen.host, ...(Array.isArray(chosen.health.hosts) ? chosen.health.hosts : [])]);
+  const chosenId = chosen.health.process_id;
   const duplicates = [];
   for (const entry of owned) {
-    if (entry === chosen || covered.has(entry.host)) continue;
+    const processId = entry.health.process_id;
+    if (
+      entry === chosen ||
+      covered.has(entry.host) ||
+      (typeof processId === "string" && processId !== "" && processId === chosenId)
+    )
+      continue;
     duplicates.push(entry);
     for (const host of Array.isArray(entry.health.hosts) ? entry.health.hosts : [entry.host]) covered.add(host);
   }
@@ -2314,10 +2323,16 @@ export function createServerSpawnOptions(logFd = null) {
   const stdio = /** @type {import("node:child_process").StdioOptions} */ (
     logFd === null ? "ignore" : ["ignore", logFd, logFd]
   );
+  // The server is shared machine-wide, so it must not pin the first caller's folder: tools that
+  // reap processes by working directory when deleting a worktree would stop every open session.
+  // The state dir is passed absolute so a relative LAVISH_AXI_STATE_DIR is not re-resolved
+  // against that new cwd.
+  const dir = path.resolve(stateDir());
   return {
     detached: true,
     stdio,
-    env: { ...process.env, LAVISH_AXI_NO_OPEN: "1" },
+    cwd: dir,
+    env: { ...process.env, LAVISH_AXI_STATE_DIR: dir, LAVISH_AXI_NO_OPEN: "1" },
   };
 }
 
