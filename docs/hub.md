@@ -27,17 +27,17 @@ in effect through the UI server. Stopping the owner or ending its review removes
 the browser route. Saves and launches are not retried after a lost connection.
 Check their outcome before retrying.
 
-Open `/hubs` on the Lavish UI address to see active workspace hubs, or use the
-**Hubs** link in the Lavish header bar to return to it from any session. The page
-works through the same forwarded port and links to each session on that origin.
-A titled hub is labeled `<title> · <repo>`, and an untitled workspace hub uses its
-workspace directory name. The summary shows up to 240 characters of the first
-line of the tracked target's description (or its parent if empty), or the
-workspace's jj `@-` description when no target is set. If the workspace cannot be read,
-it shows an unavailable message.
-The list refreshes automatically; an owner that stops refreshing disappears after
-45 seconds. These labels and descriptions are visible to anyone who can access
-the Lavish server, so avoid putting secrets in them.
+Open `/hubs` on the Lavish UI address to see active workspace hubs (`/` redirects
+there). Use the **Hubs** link in the Lavish header to return from a session. Links
+use the same origin, including a forwarded port.
+
+Each row links to its hub and shows the title (falling back to a non-empty jj
+description, then the repository name) alongside the primary repository name and,
+when it differs from the repository name, the workspace name. If the workspace
+cannot be read, the row shows `Workspace unavailable`. The list refreshes
+automatically, and an owner that stops refreshing disappears after 45 seconds.
+Titles and descriptions are visible to anyone who can access the Lavish server,
+so avoid putting secrets in them.
 
 ## Sessions and targets
 
@@ -50,9 +50,20 @@ lavish-hub target --session review-a --title 'Review A updated'
 lavish-hub target --session review-a --base main
 ```
 
-Because concurrent sessions share a repository, session-scoped `listen` requires `--title` and `--rev` even when restarting an existing session. For session-scoped or titled hubs, the sidebar in both the hub and published HTML shows the title above the repository name, and browser tabs show `<View> · <title>`. Untitled workspace-scoped hubs show the workspace name in the sidebar and tab title instead. Title changes made with `target --title` appear on the next poll.
+Because concurrent sessions share a repository, session-scoped `listen` requires
+`--rev` even when restarting an existing session. `--title` is optional. The hub
+also checks for a Polytoken session matching the hub's session ID,
+`POLYTOKEN_SESSION_ID`, or an ancestor process, refreshing that title on startup
+and on each hub registration refresh. An explicit `--title` (on `listen` or
+`target --title`) takes precedence and is saved in `target.json`, while
+looked-up titles stay in memory so live renames are not frozen across restarts. When
+neither supplies a title, `/hubs` falls back to a non-empty jj description and
+then the repository name. The sidebar shows the title above the repository name
+when available (untitled workspace-scoped hubs show the workspace name), and
+browser tabs show `<title> · Lavish` or `<repo> · Lavish` when untitled. Open
+pages pick up title changes on their next poll.
 
-`--rev REV` on `listen` or `lavish-hub target REV` sets what the hub tracks. Bookmarks follow moves, and change IDs follow rewrites. Working-copy expressions such as `@` are resolved in the invoking workspace and pinned to that change so the hub can read it without snapshotting or contending with working-copy edits in other workspaces. The target, optional base, and title are saved in `target.json`. Restarting reuses saved settings from `target.json` unless overridden, though session-scoped `listen` still requires `--title` and `--rev`. `--base REV` chooses a base for the fork point with the target, while `--no-base` returns to the default based on `trunk()`. `target` updates only the supplied fields and needs at least one.
+`--rev REV` on `listen` or `lavish-hub target REV` sets what the hub tracks. Bookmarks follow moves, and change IDs follow rewrites. Working-copy expressions such as `@` are resolved in the invoking workspace and pinned to that change so the hub can read it without snapshotting or contending with working-copy edits in other workspaces. The target, optional base, and explicit title are saved in `target.json`. Restarting reuses saved settings from `target.json` unless overridden, though session-scoped `listen` still requires `--rev`. `--base REV` chooses a base for the fork point with the target, while `--no-base` returns to the default based on `trunk()`. `target` updates only the supplied fields and needs at least one.
 
 Workspace-scoped hubs normally disable repository actions once their checkout disappears so a replacement checkout at the same path cannot receive actions meant for the old one. To keep a workspace-scoped hub usable after deleting its temporary workspace, run `lavish-hub target @` (or another revision) from that workspace before deletion. Repository operations then run against the primary repository, while source files inside the deleted or replaced workspace stay blocked and managed tasks and external documents remain accessible. Address the owner with its original `--workspace` path after deletion. If the primary repository itself is replaced at the same path, repository actions remain blocked.
 
@@ -190,8 +201,8 @@ or run `lavish-hub stop [--workspace DIR]` to request shutdown. Add `--open`
 to `lavish-hub` or `publish` to open the existing review (or list
 it under Artifacts when available); on `publish`, `--open` also selects the
 published document. Plain `publish` leaves the active view unchanged and
-prints JSON containing the direct `?view=ID` link. The browser tab title follows the active view
-and session title or workspace name (`<View> · <title or workspace>` via Lavish's `setDocumentMeta()`). Selection
+prints JSON containing the direct `?view=ID` link. The browser tab title stays
+`<title> · Lavish` (or `<repo> · Lavish` when untitled) across view switches. Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. An open hub checks for selection, repository, and source changes about
 every two seconds after each completed check; slow or unavailable actions can delay

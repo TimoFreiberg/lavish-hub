@@ -98,6 +98,9 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   assert.equal(await realpath(health.state_dir), await realpath(state));
   assert.ok(record.page.endsWith('hub.html'));
   const localBase = `http://127.0.0.1:${port}`;
+  const root = await fetch(`${localBase}/`, { redirect: 'manual' });
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.get('location'), '/hubs');
   const sessionKey = createHash('sha256').update(await realpath(record.page)).digest('hex').slice(0, 16);
   const proxyAction = `${localBase}/hub-proxy/${sessionKey}/action`;
   const actionHeaders = { 'content-type': 'application/json', 'x-lavish-capability': record.capability };
@@ -140,10 +143,61 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   const dashboard = await browser.newPage();
   await dashboard.route(`http://127.0.0.1:${port}/**`, route => route.abort());
   await dashboard.goto(new URL('/hubs', forwardedUrl).href);
-  const hubLink = dashboard.getByRole('link', { name: 'repo' });
+  const hubLink = dashboard.locator('.hub-card');
   await hubLink.waitFor();
   assert.equal(await hubLink.getAttribute('href'), `/session/${sessionKey}`);
   assert.equal(new URL(await hubLink.getAttribute('href'), dashboard.url()).port, String(forward.address().port));
+  assert.equal(await dashboard.title(), 'Active hubs · Lavish');
+  const fixtures = [
+    { title: '<img src=x onerror=alert(1)>', repo: 'primary', workspace: 'secondary', summary: 'hidden commit', label: 'label' },
+    { title: 'Same workspace', repo: 'primary', workspace: 'primary', summary: 'another hidden commit', label: 'label' },
+    { title: null, repo: 'primary', workspace: 'secondary', summary: 'promoted commit', label: 'label' },
+    { title: null, repo: 'primary', workspace: null, summary: '(no description)', label: 'label' },
+    { title: null, repo: 'primary', workspace: null, summary: null, label: 'label' },
+    { title: 'T'.repeat(200), repo: 'R'.repeat(200), workspace: 'W'.repeat(200), summary: '', label: 'label' },
+    { repo: 'primary', label: 'primary' },
+    { repo: 'primary', label: 'label', summary: '   ' },
+  ].map(hub => ({ ...hub, url: `/session/${sessionKey}` }));
+  await dashboard.route('**/api/hubs', route => route.fulfill({ json: { hubs: fixtures } }));
+  await dashboard.reload();
+  const cards = dashboard.locator('.hub-card');
+  await cards.nth(5).waitFor();
+  assert.equal(await cards.nth(0).locator('.entry-title').textContent(), fixtures[0].title);
+  assert.equal(await cards.nth(0).locator('img').count(), 0);
+  assert.equal(await cards.nth(0).locator('.repo').textContent(), 'primary');
+  assert.equal(await cards.nth(0).locator('.workspace-name').textContent(), 'secondary');
+  assert.equal(await cards.nth(0).locator('.workspace svg').getAttribute('width'), '12');
+  assert.equal(await cards.nth(1).locator('.workspace').count(), 0);
+  assert.equal(await cards.nth(2).locator('.entry-title').textContent(), 'promoted commit');
+  assert.equal((await cards.nth(2).textContent()).match(/promoted commit/g).length, 1);
+  assert.equal(await cards.nth(3).locator('.entry-title').textContent(), 'primary');
+  assert.equal((await cards.nth(3).textContent()).includes('(no description)'), false);
+  assert.equal(await cards.nth(4).locator('.entry-title').textContent(), 'primary');
+  assert.equal(await cards.nth(4).locator('.unavailable').textContent(), 'Workspace unavailable');
+  assert.equal(await cards.nth(6).locator('.entry-title').textContent(), 'primary');
+  assert.equal(await cards.nth(6).locator('.unavailable').count(), 0);
+  assert.equal(await cards.nth(7).locator('.entry-title').textContent(), 'primary');
+  assert.equal(await cards.locator('.unavailable').count(), 1);
+  assert.equal((await cards.nth(0).textContent()).includes('hidden commit'), false);
+  await dashboard.setViewportSize({ width: 320, height: 800 });
+  assert.equal(await dashboard.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  const narrowPositions = await cards.nth(0).evaluate(node => ({
+    content: node.querySelector('.entry-content').getBoundingClientRect().left,
+    metadata: node.querySelector('.metadata').getBoundingClientRect().left,
+  }));
+  assert.ok(Math.abs(narrowPositions.content - narrowPositions.metadata) < 1);
+  await dashboard.unroute('**/api/hubs');
+  let releaseLoading;
+  const loading = new Promise(resolve => { releaseLoading = resolve; });
+  await dashboard.route('**/api/hubs', async route => { await loading; await route.fulfill({ json: { hubs: [] } }); });
+  await dashboard.reload({ waitUntil: 'domcontentloaded' });
+  assert.equal(await dashboard.locator('#state-title').textContent(), 'Loading hubs…');
+  releaseLoading();
+  await dashboard.getByRole('heading', { name: 'No active hubs' }).waitFor();
+  await dashboard.unroute('**/api/hubs');
+  await dashboard.route('**/api/hubs', route => route.fulfill({ status: 503 }));
+  await dashboard.reload();
+  await dashboard.getByRole('heading', { name: 'Hubs are unavailable' }).waitFor();
   await dashboard.close();
   const page = await browser.newPage();
   await page.route(`http://127.0.0.1:${port}/**`, route => route.abort());
@@ -153,7 +207,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await page.goto(directReviewUrl.href);
   const authored = page.frameLocator('#artifact').locator('#authored');
   await authored.waitFor({ timeout: 20000 });
-  await page.waitForFunction(() => document.title === 'Review · repo · Lavish');
+  await page.waitForFunction(() => document.title === 'repo · Lavish');
   const showAnyway = page.getByRole('button', { name: 'Show anyway' });
   if (await showAnyway.isVisible()) await showAnyway.click();
   assert.equal(await authored.getAttribute('data-ran'), 'yes');
@@ -445,7 +499,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await notesButton.waitFor();
   assert.equal(await notesButton.getAttribute('data-attention'), 'true');
   assert.equal(await notesButton.getAttribute('aria-describedby'), 'hub-nav-desc-attention');
-  assert.equal(await page.title(), 'Commits · repo · Lavish');
+  assert.equal(await page.title(), 'repo · Lavish');
   // Opening a direct link in the same tab overrides any retained sibling destination in sessionStorage.
   // Also verify a transient acknowledge failure retries on the next poll while the rendered view stays open.
   let failedAck = false;
@@ -462,13 +516,13 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   directNotesUrl.searchParams.set('view', 'notes');
   await page.goto(directNotesUrl.href);
   await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor({ timeout: 20000 });
-  await page.waitForFunction(() => document.title === 'Notes · repo · Lavish');
+  await page.waitForFunction(() => document.title === 'repo · Lavish');
   await frame.locator('button[data-hub-id="notes"]:not([data-attention]):not([data-unseen])').waitFor({ timeout: 10000 });
   assert.equal(failedAck, true);
   await page.unroute('**/action', ackRoute);
   // Switching views after a direct link and reloading must stay on the manually chosen view.
   await frame.getByRole('button', { name: 'Tasks', exact: true }).click();
-  await page.waitForFunction(() => document.title === 'Tasks · repo · Lavish');
+  await page.waitForFunction(() => document.title === 'repo · Lavish');
   for (let i = 0; i < 40; i++) {
     const s = await (await fetch(proxyAction, { method: 'POST', headers: actionHeaders, body: '{"operation":"status"}' })).json();
     if (s.result?.selected === 'tasks') break;
@@ -476,7 +530,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   }
   await page.reload();
   await frame.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 20000 });
-  await page.waitForFunction(() => document.title === 'Tasks · repo · Lavish');
+  await page.waitForFunction(() => document.title === 'repo · Lavish');
   await frame.getByRole('button', { name: 'Notes', exact: true }).click();
   await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor({ timeout: 20000 });
   await frame.getByRole('button', { name: 'Edit Document Markdown' }).click();
@@ -486,11 +540,19 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await frame.getByRole('button', { name: 'Save', exact: true }).click();
   await frame.getByRole('button', { name: 'Edit Document Markdown' }).waitFor();
   assert.equal(await readFile(markdown, 'utf8'), '# Notes\nSaved through the forward\n');
+  await run(process.execPath, [path.resolve('bin/lavish-hub'), 'target', '--title', 'Session title', '--workspace', repo], { env });
+  await page.waitForFunction(() => document.title === 'Session title · Lavish', null, { timeout: 15000 });
+  await frame.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await frame.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 20000 });
+  assert.equal(await page.title(), 'Session title · Lavish');
+  await frame.getByRole('button', { name: 'Review', exact: true }).click();
+  await page.frameLocator('#artifact').getByText('Replacement document').waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => document.title === 'Session title · Lavish');
   const hubsBackLink = page.getByRole('link', { name: 'Hubs', exact: true });
   assert.equal(await hubsBackLink.getAttribute('href'), '/hubs');
   await hubsBackLink.click();
   await page.waitForURL(new URL('/hubs', forwardedUrl).href);
-  await page.getByRole('link', { name: 'repo' }).waitFor();
+  await page.locator('.hub-card').waitFor();
   await run(process.execPath, [path.resolve('bin/lavish-hub'), 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
   assert.equal(exit, 0, stderr);

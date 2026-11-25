@@ -99,9 +99,24 @@ test('dashboard exposes only live display metadata and relative session links', 
   const list = async () => (await (await fetch(`${base}/hubs`)).json()).hubs;
   assert.deepEqual(await list(), []);
   assert.equal((await register(registration)).status, 200);
-  assert.deepEqual(await list(), [{ label: '<workspace>', summary: 'first', url: `/session/${key}` }]);
+  assert.deepEqual(await list(), [{ label: '<workspace>', summary: 'first', title: null, repo: '<workspace>', workspace: null, url: `/session/${key}` }]);
+  const display = { label: 'old label', title: 'Title', repo: 'primary', workspace: 'secondary', summary: 'commit' };
+  assert.equal((await register({ ...registration, display })).status, 200);
+  assert.deepEqual(await list(), [{ ...display, url: `/session/${key}` }]);
+  assert.equal((await register({ ...registration, display: { repo: 'primary' } })).status, 200);
+  assert.deepEqual(await list(), [{ label: 'primary', summary: '', title: null, repo: 'primary', workspace: null, url: `/session/${key}` }]);
+  assert.equal((await register({ ...registration, display: { label: '', repo: 'primary' } })).status, 200);
+  assert.equal((await list())[0].label, 'primary');
+  assert.equal((await register({ ...registration, display: { label: '😀'.repeat(255), repo: 'primary' } })).status, 200);
+  assert.equal((await list())[0].label, '😀'.repeat(255));
+  for (const bad of [
+    {}, { label: '', repo: '' }, { label: null, repo: 'repo' },
+    ...Object.entries({ label: 255, title: 240, repo: 255, workspace: 255, summary: 240 }).map(([field, max]) => ({ label: 'valid', [field]: 'x'.repeat(max + 1) })),
+    ...['label', 'title', 'repo', 'workspace'].flatMap(field => ['\u0000', '\n', '\u007f'].map(char => ({ label: 'valid', [field]: `bad${char}text` }))),
+    { label: 'valid', title: 3 }, { label: 'valid', summary: false },
+  ]) assert.equal((await register({ ...registration, display: bad })).status, 400, JSON.stringify(bad));
   assert.equal((await register({ ...registration, display: { label: 'next', summary: null } })).status, 200);
-  assert.deepEqual(await list(), [{ label: 'next', summary: null, url: `/session/${key}` }]);
+  assert.deepEqual(await list(), [{ label: 'next', summary: null, title: null, repo: 'next', workspace: null, url: `/session/${key}` }]);
   const original = Date.now;
   try { Date.now = () => original() + 46000; assert.deepEqual(await list(), []); } finally { Date.now = original; }
   assert.equal((await register(registration)).status, 200);
