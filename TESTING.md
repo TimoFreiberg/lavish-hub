@@ -88,15 +88,15 @@ refuse to choose between them. The private listener is not for browser access.
 
 Run `just check` (or `node scripts/check.mjs all`) for the entire pipeline.
 It can run in the background: `just check > check.log 2>&1 &`. It installs with
-`npm ci` once, generates all screenshots first, then overlaps the full test and
-e2e suites. Every invocation announces a unique ignored
+`npm ci` once, prepares build artifacts, then runs screenshots, tests, and e2e
+suites in parallel. Every invocation announces a unique ignored
 `.checks/<run>/` directory containing stage logs and atomic `status.json` updates.
 After screenshot generation **and cleanup**, `screenshots-ready.json` appears
 and the CLI prints `Screenshots ready`. Open that run's `shots/index.html` and
 inspect PNGs at original size while the remaining suites run. The marker reports
 whether screenshot checks passed; readiness itself is not success. The final
 CLI exit status is nonzero for any failed stage, spawn failure, signal, or cleanup
-audit. `status.json` records each stage's code and elapsed seconds. Visual review
+audit. `status.json` records total elapsed seconds and each stage's code and elapsed seconds. Visual review
 is mandatory and separately recorded by the reviewer, never automatically
 claimed by the command. Runs retain their logs and screenshots on success and
 failure; remove old `.checks/<run>/` directories when no longer needed.

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runChecks } from '../scripts/check.mjs';
+import { formatDuration, runChecks } from '../scripts/check.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -100,7 +100,7 @@ async function waitFor(predicate) {
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  for (const interrupted of ['shots', 'test']) {
+  for (const interrupted of ['prepare', 'parallel']) {
     test(`correctness command cancels all stages on ${signal} during ${interrupted}`, { timeout: 15000 }, async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'lavish-check-signal-'));
       let child;
@@ -109,12 +109,10 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
         await mkdir(path.join(root, 'bin'));
         await copyFile(new URL('../scripts/check.mjs', import.meta.url), path.join(root, 'scripts/check.mjs'));
         await writeFile(path.join(root, 'bin/npm'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
-        await writeFile(path.join(root, 'scripts/prepare-check.mjs'), 'process.exit(0);\n');
-        await writeFile(path.join(root, 'scripts/test-run.mjs'), `
+        const waitScript = nameExpr => `
 import { appendFile, access } from 'node:fs/promises';
-const name = process.argv[2];
+const name = ${nameExpr};
 await appendFile('events', name + ':start\\n');
-if (${JSON.stringify(interrupted)} === 'test' && name === 'shots') process.exit(0);
 const keepAlive = setInterval(() => {}, 1000);
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {
   await appendFile('events', name + ':signal\\n');
@@ -125,16 +123,19 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {
   process.exitCode = 0;
 });
 await appendFile('events', name + ':ready\\n');
-`);
+`;
+        await writeFile(path.join(root, 'scripts/prepare-check.mjs'), interrupted === 'prepare' ? waitScript("'prepare'") : 'process.exit(0);\n');
+        await writeFile(path.join(root, 'scripts/test-run.mjs'), waitScript('process.argv[2]'));
         let output = '';
         child = spawn(process.execPath, ['scripts/check.mjs'], { cwd: root, env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}` }, stdio: ['ignore', 'pipe', 'pipe'] });
         child.stdout.on('data', data => { output += data; });
         child.stderr.on('data', data => { output += data; });
         const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); });
         const events = async () => readFile(path.join(root, 'events'), 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
+        const stages = interrupted === 'prepare' ? ['prepare'] : ['shots', 'test', 'e2e'];
         await waitFor(async () => {
           const text = await events();
-          return text.includes(`${interrupted}:ready`) && (interrupted !== 'test' || text.includes('e2e:ready'));
+          return stages.every(stage => text.includes(`${stage}:ready`));
         });
         const contender = spawn(process.execPath, ['scripts/check.mjs'], { cwd: root, env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}` }, stdio: ['ignore', 'pipe', 'pipe'] });
         let contention = '';
@@ -147,14 +148,12 @@ await appendFile('events', name + ':ready\\n');
         assert.equal(exit.signal, null, output);
         assert.equal(exit.code, 1, output);
         const text = await events();
-        const stages = interrupted === 'shots' ? ['shots'] : ['test', 'e2e'];
         for (const stage of stages) {
           assert.ok(text.includes(`${stage}:signal`), text);
           assert.ok(text.includes(`${stage}:cleanup`), text);
         }
-        if (interrupted === 'shots') {
-          assert.equal(text.includes('test:start'), false, text);
-          assert.equal(text.includes('e2e:start'), false, text);
+        if (interrupted === 'prepare') {
+          for (const stage of ['shots', 'test', 'e2e']) assert.equal(text.includes(`${stage}:start`), false, text);
         }
         const directory = output.match(/Correctness artifacts: (.+)/)[1];
         const status = JSON.parse(await readFile(path.join(directory, 'status.json'), 'utf8'));
@@ -178,8 +177,7 @@ for (const failing of [undefined, 'install', 'prepare', 'shots', 'test', 'e2e'])
       execute: async (name, directory) => {
         events.push(name);
         assert.equal(directory, '<artifacts>');
-        if (['test', 'e2e'].includes(name)) {
-          assert.ok(snapshots.has('screenshots-ready.json'));
+        if (['shots', 'test', 'e2e'].includes(name)) {
           active++; maximum = Math.max(maximum, active);
           await new Promise(resolve => setImmediate(resolve)); active--;
         }
@@ -189,19 +187,25 @@ for (const failing of [undefined, 'install', 'prepare', 'shots', 'test', 'e2e'])
     assert.equal(result.status, failing ? 'failed' : 'passed');
     assert.equal(events[1], 'install');
     if (failing === 'install' || failing === 'prepare') {
-      assert.equal(events.includes('shots'), false); assert.equal(snapshots.has('screenshots-ready.json'), false);
+      assert.equal(events.includes('shots'), false);
+      assert.equal(events.includes('test'), false);
+      assert.equal(events.includes('e2e'), false);
+      assert.equal(snapshots.has('screenshots-ready.json'), false);
     } else {
-      assert.ok(events.indexOf('shots') < events.indexOf('test'));
-      assert.equal(maximum, 2);
+      for (const stage of ['shots', 'test', 'e2e']) assert.ok(events.indexOf('prepare') < events.indexOf(stage));
+      assert.equal(maximum, 3);
       assert.equal(snapshots.get('screenshots-ready.json').status, failing === 'shots' ? 'failed' : 'passed');
       assert.deepEqual(Object.keys(result.stages).sort(), ['e2e', 'install', 'prepare', 'shots', 'test']);
     }
     assert.equal(snapshots.get('status.json').status, result.status);
+    assert.equal(typeof result.seconds, 'number');
+    assert.ok(result.seconds >= 0);
+    assert.equal(snapshots.get('status.json').seconds, result.seconds);
     assert.equal(result.screenshotReviewRequired, true);
   });
 }
 
-for (const boundary of ['before checks', 'after install', 'after shots']) {
+for (const boundary of ['before checks', 'after install', 'after prepare']) {
   test(`correctness pipeline remembers cancellation ${boundary}`, async () => {
     const controller = new AbortController(), started = [];
     if (boundary === 'before checks') controller.abort();
@@ -210,11 +214,11 @@ for (const boundary of ['before checks', 'after install', 'after shots']) {
       execute: async name => { started.push(name); return 0; },
       publish: async (name, value) => {
         if ((boundary === 'after install' && name === 'status.json' && value.stages.install)
-          || (boundary === 'after shots' && name === 'screenshots-ready.json')) controller.abort();
+          || (boundary === 'after prepare' && name === 'status.json' && value.stages.prepare)) controller.abort();
       },
     });
     assert.equal(result.status, 'failed');
-    assert.deepEqual(started, boundary === 'before checks' ? [] : boundary === 'after install' ? ['install'] : ['install', 'prepare', 'shots']);
+    assert.deepEqual(started, boundary === 'before checks' ? [] : boundary === 'after install' ? ['install'] : ['install', 'prepare']);
   });
 }
 
@@ -241,4 +245,42 @@ test('correctness pipeline records cancellation during final status publication'
 test('correctness pipeline records stage exceptions and completes other checks', async () => {
   const result = await runChecks({ directory: '<artifacts>', publish: async () => {}, execute: async name => { if (name === 'test') throw new Error('launch failed'); return 0; } });
   assert.equal(result.status, 'failed'); assert.equal(result.stages.test.error, 'launch failed'); assert.equal(result.stages.e2e.code, 0);
+});
+
+test('formatDuration renders sub-minute and minute-plus durations cleanly', () => {
+  assert.equal(formatDuration(-1), '0.0s');
+  assert.equal(formatDuration(0), '0.0s');
+  assert.equal(formatDuration(12.34), '12.3s');
+  assert.equal(formatDuration(59.94), '59.9s');
+  assert.equal(formatDuration(59.95), '1m 0.0s');
+  assert.equal(formatDuration(60), '1m 0.0s');
+  assert.equal(formatDuration(125.67), '2m 5.7s');
+});
+
+test('correctness command reports per-stage and total elapsed durations', { timeout: 15000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'lavish-check-duration-'));
+  try {
+    await mkdir(path.join(root, 'scripts'));
+    await mkdir(path.join(root, 'bin'));
+    await copyFile(new URL('../scripts/check.mjs', import.meta.url), path.join(root, 'scripts/check.mjs'));
+    await writeFile(path.join(root, 'bin/npm'), '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+    await writeFile(path.join(root, 'scripts/prepare-check.mjs'), 'process.exit(0);\n');
+    await writeFile(path.join(root, 'scripts/test-run.mjs'), 'process.exit(0);\n');
+    const result = spawnSync(process.execPath, ['scripts/check.mjs', 'all'], {
+      cwd: root,
+      env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}` },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    for (const stage of ['install', 'prepare', 'shots', 'test', 'e2e']) {
+      assert.match(result.stdout, new RegExp(`${stage}: PASS \\(\\d+(?:m \\d+)?\\.\\ds\\)`));
+    }
+    assert.match(result.stdout, /Correctness passed in \d+(?:m \d+)?\.\ds: .+\/status\.json; screenshot inspection still required/);
+    const directory = result.stdout.match(/Correctness artifacts: (.+)/)[1];
+    const status = JSON.parse(await readFile(path.join(directory, 'status.json'), 'utf8'));
+    assert.equal(typeof status.seconds, 'number');
+    assert.ok(status.seconds >= 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -6,8 +6,16 @@ import { pathToFileURL } from 'node:url';
 
 const root = path.resolve(import.meta.dirname, '..');
 
+export function formatDuration(seconds) {
+  const tenths = Math.round(Math.max(0, seconds) * 10);
+  const minutes = Math.floor(tenths / 600);
+  const remainingSeconds = (tenths % 600) / 10;
+  return minutes > 0 ? `${minutes}m ${remainingSeconds.toFixed(1)}s` : `${remainingSeconds.toFixed(1)}s`;
+}
+
 export async function runChecks({ mode = 'all', directory, execute, publish, signal, shotsDirectory = '../../shots' } = {}) {
   if (!['all', 'test', 'e2e', 'shots'].includes(mode)) throw new Error('Expected all, test, e2e, or shots');
+  const started = performance.now();
   const result = { version: 1, status: 'running', screenshotReviewRequired: mode === 'all' || mode === 'shots', stages: {} };
   const stage = async name => {
     if (signal?.aborted) return 1;
@@ -20,19 +28,27 @@ export async function runChecks({ mode = 'all', directory, execute, publish, sig
     return code;
   };
   await publish('status.json', result);
-  if (await stage('install') || await stage('prepare')) { result.status = 'failed'; await publish('status.json', result); return result; }
-  if (mode === 'all' || mode === 'shots') {
+  if (await stage('install') || await stage('prepare')) {
+    result.status = 'failed';
+    result.seconds = (performance.now() - started) / 1000;
+    await publish('status.json', result);
+    return result;
+  }
+  const runShots = async () => {
     const code = await stage('shots');
     // Readiness means generation and cleanup finished, not that checks passed.
     await publish('screenshots-ready.json', { version: 1, status: code === 0 ? 'passed' : 'failed', directory: mode === 'all' ? 'shots' : shotsDirectory, reviewRequired: true });
     console.log(`Screenshots ready: ${directory}/screenshots-ready.json (inspection required)`);
-  }
-  if (mode === 'all') await Promise.all([stage('test'), stage('e2e')]);
-  else if (mode !== 'shots') await stage(mode);
+  };
+  if (mode === 'all') await Promise.all([runShots(), stage('test'), stage('e2e')]);
+  else if (mode === 'shots') await runShots();
+  else await stage(mode);
   result.status = signal?.aborted || Object.values(result.stages).some(stage => stage.code !== 0) ? 'failed' : 'passed';
+  result.seconds = (performance.now() - started) / 1000;
   await publish('status.json', result);
   if (result.status === 'passed' && signal?.aborted) {
     result.status = 'failed';
+    result.seconds = (performance.now() - started) / 1000;
     await publish('status.json', result);
   }
   return result;
@@ -71,6 +87,7 @@ async function main() {
       console.log(`Starting ${name}; log: ${directory}/${name}.log`);
       try {
         if (cancellation.signal.aborted) return 1;
+        const start = performance.now();
         return await new Promise((resolve, reject) => {
           const child = spawn(name === 'install' ? 'npm' : process.execPath, args, { cwd: root, env, stdio: ['ignore', log.fd, log.fd] });
           children.add(child);
@@ -78,7 +95,7 @@ async function main() {
           child.once('exit', code => {
             children.delete(child);
             const status = cancellation.signal.aborted ? 1 : (code ?? 1);
-            console.log(`${name}: ${status === 0 ? 'PASS' : 'FAIL'}`);
+            console.log(`${name}: ${status === 0 ? 'PASS' : 'FAIL'} (${formatDuration((performance.now() - start) / 1000)})`);
             resolve(status);
           });
         });
@@ -88,7 +105,7 @@ async function main() {
     const result = await runChecks({ mode, directory, execute, publish, signal: cancellation.signal, shotsDirectory });
     // Publication completes the result; later signals must not change only the exit code.
     finalized = true;
-    console.log(`Correctness ${result.status}: ${directory}/status.json${result.screenshotReviewRequired ? '; screenshot inspection still required' : ''}`);
+    console.log(`Correctness ${result.status} in ${formatDuration(result.seconds)}: ${directory}/status.json${result.screenshotReviewRequired ? '; screenshot inspection still required' : ''}`);
     process.exitCode = result.status === 'passed' ? 0 : 1;
   } finally {
     try { await rm(lock, { recursive: true, force: true }); }

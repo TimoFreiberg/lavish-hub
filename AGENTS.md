@@ -60,8 +60,8 @@ files stay local and outside the reviewed repository.
   docs-only, agent-instruction, or non-code config/tooling changes that do not
   affect runtime behavior or tests. When runtime, UI, or test files change, run
   the relevant checks (or full `just check` for broad or cross-cutting changes).
-  `just check` installs dependencies exclusively, generates and audits the full
-  screenshot matrix first, then runs the full test and e2e suites with
+  `just check` installs dependencies exclusively, prepares build artifacts, then
+  runs the full screenshot matrix, test suite, and e2e suite in parallel with
   separate temporary state and ports. Once it prints `Screenshots ready`,
   visually inspect the PNGs in the announced artifact directory at original size
   while the remaining checks run. Eight primary wide/dark images represent the

@@ -10,7 +10,7 @@ demo *args:
 demo-stop *args:
     node scripts/demo.mjs --stop {{args}}
 
-# One install, screenshots first, then isolated correctness suites.
+# One install, then screenshots and isolated correctness suites in parallel.
 check:
     node scripts/check.mjs all
 
