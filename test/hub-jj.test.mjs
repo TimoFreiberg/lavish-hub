@@ -4,7 +4,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { createHubJj, discoverStartupTarget, escapeJjString, isWorkingCopyRev, readHubSnapshot, resolveTargetRev } from '../src/hub-jj.mjs';
+import { createHubJj, escapeJjString, isWorkingCopyRev, readHubSnapshot, resolveTargetRev } from '../src/hub-jj.mjs';
 
 const env = { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.invalid', JJ_USER: 'Test', JJ_EMAIL: 'test@example.invalid' };
 const run = (cwd, ...args) => execFileSync(args[0], args.slice(1), { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -170,20 +170,6 @@ test('target revset tracks bookmark moves live and change IDs across amends and 
   run(cwd, 'jj', 'git', 'export');
   run(cwd, 'jj', 'git', 'fetch', '--remote', 'peer');
   assert.equal((await readHubSnapshot(cwd, { target: { rev: remote } })).head, movedAfterRebase.head);
-});
-
-test('startup target discovery pins described or non-empty @ and falls back to @-', async t => {
-  const cwd = await repo(t);
-  const current = () => run(cwd, 'jj', 'log', '-r', '@', '--no-graph', '-T', 'change_id');
-  assert.equal((await discoverStartupTarget(cwd)).changeId, current());
-  run(cwd, 'jj', 'new', '@');
-  run(cwd, 'jj', 'describe', '-m', 'described');
-  const described = current();
-  assert.equal((await discoverStartupTarget(cwd)).changeId, described);
-  run(cwd, 'jj', 'new', '@');
-  assert.equal((await discoverStartupTarget(cwd)).changeId, described);
-  run(cwd, 'jj', 'new', 'root()');
-  assert.equal((await discoverStartupTarget(cwd)).changeId, current());
 });
 
 test('custom base override scopes stacked commits and non-trunk branches', async t => {

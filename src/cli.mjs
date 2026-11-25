@@ -11,6 +11,7 @@ import { themeCss, syntaxTheme, diffThemeCss } from './orangebox.mjs';
 
 const usage = `usage: lavish-hub [listen|stop|status|url] [--workspace DIR] [--session ID] [--open] [--reopen] [--view ID]
        lavish-hub listen [--rev REV] [--base REV | --no-base] [--title TEXT]
+       lavish-hub listen --session ID --title TEXT --rev REV [--base REV | --no-base] [--workspace DIR] [--open] [--reopen]
        lavish-hub target [REV] [--base REV | --no-base] [--title TEXT] [--session ID] [--workspace DIR]
        lavish-hub publish FILE [--id ID] [--title T] [--metadata-file JSON] [--repo REPO] [--base-commit HEX] [--head-commit HEX] [--source-url URL] [--no-scope] [--workspace DIR] [--session ID] [--attention] [--open]
        lavish-hub tasks --file FILE [--workspace DIR] [--session ID]
@@ -43,6 +44,12 @@ Run listen in the foreground to own a workspace hub and receive feedback as
 agent-notification JSON lines. Use reply --batch <batchId> to respond to a notification.
 See docs/hub.md for configuration and workflow details.`;
 class UsageError extends Error { constructor(message) { super(message); this.name = 'UsageError'; } }
+function assertSessionListenOptions(options) {
+  const missing = [];
+  if (options.title === undefined) missing.push('--title');
+  if (options.rev === undefined) missing.push('--rev');
+  if (missing.length) throw new UsageError(`listen with --session requires ${missing.join(' and ')}`);
+}
 
 export function parseArgs(args) {
   if (args.length === 1 && args[0] === '--help') return { help: true };
@@ -107,7 +114,7 @@ export function parseArgs(args) {
     if (['listen', 'target'].includes(command) && result.title !== undefined) result.title = validateSessionTitle(result.title);
   } catch (error) { throw new UsageError(error.message); }
   if (result.base !== undefined && result.noBase) throw new UsageError('--base and --no-base are mutually exclusive');
-  if (command === 'listen' && result.session !== undefined && result.title === undefined) throw new UsageError('listen with --session requires --title');
+  if (command === 'listen' && result.session !== undefined) assertSessionListenOptions(result);
   if (command === 'target' && result.rev === undefined && result.base === undefined && !result.noBase && result.title === undefined) throw new UsageError('target requires REV, --base, --no-base, or --title');
   if (command === 'publish' && result.noScope && ['metadataFile', 'repo', 'baseCommit', 'headCommit', 'sourceUrl'].some(key => result[key] !== undefined)) throw new UsageError('--no-scope cannot be combined with metadata or scope flags');
   if (command === 'tasks' && !result.file) throw new UsageError('tasks requires --file');
@@ -159,7 +166,7 @@ export async function main(args = process.argv.slice(2)) {
       if (result.domSnapshot) process.stdout.write(result.domSnapshot);
       return 0;
     }
-    if (options.hub === 'listen' && session && options.title === undefined) throw new UsageError('listen with --session requires --title');
+    if (options.hub === 'listen' && session) assertSessionListenOptions(options);
     if (options.hub === 'listen') return await runHubOwner(options);
     if (options.hub === 'target') {
       const body = await prepareTargetRequest(options);

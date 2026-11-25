@@ -28,8 +28,12 @@ test('publish help and conflicting scope flags', () => {
   assert.match(result.stderr, /lavish-hub: \[USAGE_ERROR\] action=fix_args — --no-scope cannot be combined/);
 });
 
-test('session CLI flags, mandatory title, and LAVISH_HUB_SESSION parsing and URL prediction', async t => {
-  for (const args of [['listen', '--session', 'x'], ['listen', '--session', '../x', '--title', 'X'], ['listen', '--title', '  '], ['status', '--session', 'a/b']]) assert.throws(() => parseArgs(args));
+test('session CLI flags, mandatory title and rev, and LAVISH_HUB_SESSION parsing and URL prediction', async t => {
+  assert.throws(() => parseArgs(['listen', '--session', 'x']), /listen with --session requires --title and --rev/);
+  assert.throws(() => parseArgs(['listen', '--session', 'x', '--title', 'X']), /listen with --session requires --rev/);
+  assert.throws(() => parseArgs(['listen', '--session', 'x', '--rev', '@']), /listen with --session requires --title/);
+  for (const args of [['listen', '--session', '../x', '--title', 'X', '--rev', '@'], ['listen', '--title', '  '], ['status', '--session', 'a/b']]) assert.throws(() => parseArgs(args));
+  assert.deepEqual(parseArgs(['listen']), { hub: 'listen' });
   assert.deepEqual(parseArgs(['listen', '--session', 's', '--title', '  Review  ', '--rev', '@', '--base', 'main']), { hub: 'listen', session: 's', title: 'Review', rev: '@', base: 'main' });
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'session-url-')));
   t.after(() => rm(dir, { recursive: true, force: true }));
@@ -42,9 +46,17 @@ test('session CLI flags, mandatory title, and LAVISH_HUB_SESSION parsing and URL
   assert.equal(await hubUrl({ workspace: child, env }, deps), url);
   assert.notEqual(await hubUrl({ workspace: repo, session: 'other', env }, deps), url);
   await assert.rejects(stat(path.join(dir, 'data')), { code: 'ENOENT' });
-  for (const [args, session] of [[['listen', '--workspace', repo], 'abc'], [['status', '--workspace', repo], 'bad/session'], [['reply', '--batch', 'id', 'text', '--workspace', repo], 'bad/session'], [['context', '--batch', 'id', '--workspace', repo], 'bad/session']]) {
+  for (const [args, session, pattern] of [
+    [['listen', '--workspace', repo], 'abc', /listen with --session requires --title and --rev/],
+    [['listen', '--workspace', repo, '--title', 'Review'], 'abc', /listen with --session requires --rev/],
+    [['listen', '--workspace', repo, '--rev', '@'], 'abc', /listen with --session requires --title/],
+    [['status', '--workspace', repo], 'bad/session', /Invalid session ID/],
+    [['reply', '--batch', 'id', 'text', '--workspace', repo], 'bad/session', /Invalid session ID/],
+    [['context', '--batch', 'id', '--workspace', repo], 'bad/session', /Invalid session ID/],
+  ]) {
     const result = spawnSync(process.execPath, [cli, ...args], { env: { ...env, LAVISH_HUB_SESSION: session }, encoding: 'utf8' });
     assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, pattern);
   }
 });
 

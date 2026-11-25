@@ -98,19 +98,6 @@ export async function resolveTargetRev(cwd, input, { ignoreWorkingCopy = false }
   return { input, revset: input, kind: 'revset' };
 }
 
-export async function discoverStartupTarget(cwd) {
-  const startupTemplate = '"[" ++ json(change_id) ++ "," ++ json(description) ++ "," ++ json(empty) ++ "," ++ json(root) ++ "]\\n"';
-  const log = async revset => (await run(cwd, ['log', '-r', revset, '--no-graph', '-T', startupTemplate])).split('\n').filter(Boolean).map(line => JSON.parse(line));
-  const current = await log('@');
-  if (current.length !== 1) throw new Error('Working-copy head must resolve to one commit');
-  let [changeId, description, empty] = current[0];
-  if (!description.trim() && empty) {
-    const parent = await log('@-');
-    if (parent.length === 1 && !parent[0][3]) changeId = parent[0][0];
-  }
-  return { input: changeId.slice(0, 12), revset: `change_id(${changeId})`, kind: 'change', changeId };
-}
-
 export async function readHubSnapshot(cwd, { target, afterMetadata } = {}) {
   return readSnapshotAt(cwd, await operation(cwd, { ignoreWorkingCopy: Boolean(target?.rev) }), { target, afterMetadata });
 }

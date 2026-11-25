@@ -105,7 +105,8 @@ test('publish derives IDs and scope, and accepts explicit PR metadata', async t 
 });
 
 test('concurrent repo-scoped sessions run independently against the same primary repo', async t => {
-  const f = await sessionFixture(t), a = await f.start(f.repo, 'one', 'First session'), b = await f.start(f.child, 'two', 'Second session');
+  const f = await sessionFixture(t), a = await f.start(f.repo, 'one', 'First session', { rev: '@' }), b = await f.start(f.child, 'two', 'Second session', { rev: '@-' });
+  await assert.rejects(f.start(f.repo, 'missing-rev', 'No rev'), /listen with --session requires --rev/);
   assert.notEqual(a.identity.directory, b.identity.directory);
   assert.equal((await a.request('status')).session, 'one');
   assert.equal((await b.request('status')).session, 'two');
@@ -122,8 +123,8 @@ test('concurrent repo-scoped sessions run independently against the same primary
   await a.stop(); await b.stop();
 });
 
-test('session startup rejects target discovery against a replacement repository', async t => {
-  const f = await sessionFixture(t), original = await f.start(f.repo, 'replace', 'Review');
+test('session startup rejects a replacement repository without snapshotting it', async t => {
+  const f = await sessionFixture(t), original = await f.start(f.repo, 'replace', 'Review', { rev: '@' });
   await original.stop();
   await rm(path.join(original.identity.directory, 'target.json'));
   await rename(f.repo, path.join(f.dir, 'old-repo'));
@@ -131,13 +132,9 @@ test('session startup rejects target discovery against a replacement repository'
   await writeFile(path.join(f.repo, 'untracked'), 'do not snapshot');
   const operation = () => execFileSync('jj', ['--ignore-working-copy', 'op', 'log', '-n', '1', '--no-graph', '-T', 'id'], { cwd: f.repo, encoding: 'utf8' });
   const before = operation();
-  const unavailable = await f.start(f.repo, 'replace', 'Review');
-  assert.equal((await unavailable.request('status')).available, false);
-  assert.equal(operation(), before);
-  await assert.rejects(stat(path.join(original.identity.directory, 'target.json')), { code: 'ENOENT' });
-  await unavailable.stop();
   await assert.rejects(f.start(f.repo, 'replace', 'Review', { rev: '@' }), /Repository is unavailable/);
   assert.equal(operation(), before);
+  await assert.rejects(stat(path.join(original.identity.directory, 'target.json')), { code: 'ENOENT' });
 });
 
 test('working-copy target preparation and startup reject a replaced child checkout', async t => {
@@ -163,8 +160,8 @@ test('working-copy target preparation and startup reject a replaced child checko
   assert.doesNotMatch(await readFile(calls, 'utf8'), /^log /m);
 });
 
-test('repo-scoped session persists discovered target across restart', async t => {
-  const f = await sessionFixture(t), a = await f.start(f.child, 'persist', 'Persistence', { base: 'root()' });
+test('repo-scoped session persists base across restart and rejects invalid target records', async t => {
+  const f = await sessionFixture(t), a = await f.start(f.child, 'persist', 'Persistence', { rev: '@-', base: 'root()' });
   const initial = await a.request('status');
   assert.ok(initial.target);
   const targetFile = path.join(a.identity.directory, 'target.json');
@@ -172,18 +169,19 @@ test('repo-scoped session persists discovered target across restart', async t =>
   assert.equal((await stat(targetFile)).mode & 0o777, 0o600);
   await a.stop();
   execFileSync('jj', ['new'], { cwd: f.child, stdio: 'ignore' });
-  const restarted = await f.start(f.child, 'persist', 'Persistence');
+  await assert.rejects(f.start(f.child, 'persist', 'Persistence'), /listen with --session requires --rev/);
+  const restarted = await f.start(f.child, 'persist', 'Persistence', { rev: initial.target });
   const status = await restarted.request('status');
   assert.equal(status.target, initial.target);
   assert.equal(initial.base, 'root()'); assert.equal(status.base, initial.base);
   assert.deepEqual(JSON.parse(await readFile(targetFile, 'utf8')), saved);
   await restarted.stop();
   await writeFile(targetFile, JSON.stringify({ rev: { input: '@', revset: '@', kind: 'revset' } }));
-  await assert.rejects(f.start(f.child, 'persist', 'Persistence'), /Invalid target record/);
+  await assert.rejects(f.start(f.child, 'persist', 'Persistence', { rev: '@' }), /Invalid target record/);
 });
 
 test('lavish-hub target retargets active session and preserves or updates base and title', async t => {
-  const f = await sessionFixture(t), a = await f.start(f.child, 'target', 'Original');
+  const f = await sessionFixture(t), a = await f.start(f.child, 'target', 'Original', { rev: '@-' });
   const initial = await a.request('status');
   const before = await a.request('snapshot');
   const source = path.join(f.dir, 'target-review.html');

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
-import { createHubJj, discoverStartupTarget, isWorkingCopyRev, resolveTargetRev } from './hub-jj.mjs';
+import { createHubJj, isWorkingCopyRev, resolveTargetRev } from './hub-jj.mjs';
 import { createHubDocuments } from './hub-documents.mjs';
 import { createHubCommands } from './hub-commands.mjs';
 import { resolveWorkspace, resolveRecordedWorkspace, resolveHubSession, resolveRecordedSession, resolveSessionId, primaryRootForRepo, repoMatches, checkoutMatchesRepo, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
@@ -137,7 +137,12 @@ async function release(lock, instance) {
 
 export async function runHubOwner(options = {}, { prepare = prepareReview } = {}) {
   const identity = await resolveHubIdentity(options);
-  if (identity.session && options.title === undefined) throw new Error('listen with --session requires --title');
+  if (identity.session) {
+    const missing = [];
+    if (options.title === undefined) missing.push('--title');
+    if (options.rev === undefined) missing.push('--rev');
+    if (missing.length) throw new Error(`listen with --session requires ${missing.join(' and ')}`);
+  }
   const title = options.title === undefined ? undefined : validateSessionTitle(options.title);
   const primaryRoot = primaryRootForRepo(identity.repo), repoName = path.basename(primaryRoot);
   const instance = randomUUID();
@@ -168,10 +173,6 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       };
       const next = { ...currentTarget };
       if (options.rev !== undefined) next.rev = await resolveStartup(options.rev);
-      else if (identity.session && !next.rev) {
-        await checkInvocationCheckout(identity, invocationDir);
-        next.rev = await discoverStartupTarget(invocationDir);
-      }
       if (options.base !== undefined) next.base = await resolveStartup(options.base);
       if (options.noBase) delete next.base;
       if (title !== undefined) next.title = title;
