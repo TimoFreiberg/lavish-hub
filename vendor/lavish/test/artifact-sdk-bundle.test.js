@@ -306,6 +306,7 @@ function bootSdk({
     resizeObservers,
     mutationObservers,
     get api() { return sandbox.window.lavish; },
+    onWindowEvent(type, handler) { sandbox.window.addEventListener(type, handler); },
     // The SDK checks `instanceof Element`, so a stub that must pass that check takes this prototype.
     asElement(stub) {
       return Object.setPrototypeOf(stub, sandbox.Element.prototype);
@@ -433,6 +434,23 @@ function bootSdk({
     },
   };
 }
+
+test("artifact-sdk forwards syncUrl and dispatches lavish:urlChange", () => {
+  const sdk = bootSdk();
+  sdk.api.syncUrl({ view: "tasks", hash: "#notes", mode: "push" });
+  const message = sdk.posted.at(-1);
+  assert.equal(message.type, "lavish:syncUrl");
+  assert.equal(message.view, "tasks");
+  assert.equal(message.hash, "#notes");
+  assert.equal(message.mode, "push");
+  assert.equal(message.artifact_load_token, "load-token");
+  let event;
+  sdk.onWindowEvent("lavish:urlChange", (value) => { event = value; });
+  sdk.sendChromeMessage({ type: "lavish:urlChange", view: "changes", hash: "#section" });
+  assert.equal(event.type, "lavish:urlChange");
+  assert.equal(event.detail.view, "changes");
+  assert.equal(event.detail.hash, "#section");
+});
 
 for (const { label, attributes, enabled } of [
   { label: "default", attributes: {}, enabled: true },

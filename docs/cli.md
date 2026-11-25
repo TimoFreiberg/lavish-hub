@@ -14,7 +14,7 @@ lavish-hub context --batch ID [--workspace DIR] [--session ID]
 lavish-hub theme [css|syntax|diff-css]
 ```
 
-`listen` owns a workspace in the foreground; wait until it is ready before using the short commands. `url` prints the workspace review URL without starting an owner or Lavish server. `lavish-hub` and `lavish-hub status` report the owner's status; `lavish-hub --view ID` selects a view. `stop` requests shutdown. `tasks` attaches a task file. `--open` opens an existing review, and `--reopen` permits an explicitly ended review to reopen when starting the owner. `--workspace` selects the jj workspace instead of the current directory.
+`listen` owns a workspace in the foreground; wait until it is ready before using the short commands. `url` prints the workspace review URL without starting an owner or Lavish server. `lavish-hub` and `lavish-hub status` report the owner's status; `lavish-hub --view ID` selects the default view without switching open tabs. `stop` requests shutdown. `tasks` attaches a task file. `--open` opens an existing review, and `--reopen` permits an explicitly ended review to reopen when starting the owner. `--workspace` selects the jj workspace instead of the current directory.
 
 `--session ID` scopes the hub to the repository and session ID instead of a single workspace. `LAVISH_HUB_SESSION` supplies the ID when the flag is absent, and the flag takes precedence. Multiple sessions can run concurrently against the same repository, and each is addressable from the primary checkout or any child workspace of that repository. IDs start with an ASCII letter or digit and contain up to 128 ASCII letters, digits, `.`, `_`, or `-`. Without either setting, the hub stays scoped to its workspace. Session-scoped `listen` requires `--rev REV` (even on restart), while `--title` is optional. Use `target --title TEXT` or `target REV` to update either while the owner runs.
 
@@ -26,7 +26,7 @@ To keep a workspace-scoped hub usable after deleting its temporary workspace, ru
 
 `publish FILE` registers an existing HTML or Markdown file without changing the current view. Omit `--id` to reuse an existing registration for the same canonical file, or derive a stable ID from its filename (see [hub](hub.md) for derivation and collision rules). By default, scope records the repository and the tracked jj target's base and head commits. Use `--no-scope` for an unscoped artifact, or supply `--repo`, `--base-commit`, `--head-commit`, and `--source-url` for explicit scope. `--metadata-file JSON` accepts a JSON object with `reviewedRepository`, `baseCommit`, `headCommit`, and `sourceUrl`, and inline flags override the corresponding file fields. Supplying any inline scope flag or a metadata file disables automatic scope, even if only some fields are supplied. `--no-scope` cannot be combined with either.
 
-The command prints one JSON line with `id`, `url`, `title`, and `scope` (`url` or `scope` can be `null`). `--attention` flags the document in the sidebar until opened, and `--open` selects and opens it. Run `lavish-hub publish --help` for local jj, remote PR, and unscoped examples.
+The command prints one JSON line with `id`, `url`, `title`, and `scope` (`url` or `scope` can be `null`). `--attention` flags the document in the sidebar until opened, and `--open` selects it and opens a browser without switching existing tabs. Run `lavish-hub publish --help` for local jj, remote PR, and unscoped examples.
 
 ## Feedback
 

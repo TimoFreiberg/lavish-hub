@@ -46,7 +46,7 @@ async function updatePage(browser, controls = '<label>Draft <input id="draft" va
   await page.goto('http://lavish.test/published.html');
   const config = JSON.stringify({ url: 'http://lavish.test/hub-proxy/test', capability: 'c'.repeat(64), id: 'doc', version: 'v1', workspaceName: 'workspace', repoName: 'repo' });
   const navigation = renderSiblingNavigation({ destinations: [{ id: 'doc', title: 'Document', href: 'published.html' }], doc: { id: 'doc' }, identity: {}, repoName: 'repo', workspaceName: 'workspace', reviewedScope: '', confirmNavigation: 'globalThis.confirmDraftNavigation = async () => true;', navConfig: config });
-  const stub = `<script>${noNavigationApi ? "Object.defineProperty(window, 'navigation', { value: undefined });" : ''}globalThis.__doc={id:'doc',title:'Document',source:'doc.html',sibling:'published.html',version:'v1'};globalThis.__selected='doc';globalThis.fetch=async (_url,options)=>({ok:true,json:async()=>({result:JSON.parse(options.body).operation==='status'?{selected:globalThis.__selected}:JSON.parse(options.body).operation==='documents'?{documents:[globalThis.__doc]}:{}})});</script>`;
+  const stub = `<script>${noNavigationApi ? "Object.defineProperty(window, 'navigation', { value: undefined });" : ''}globalThis.__doc={id:'doc',title:'Document',source:'doc.html',sibling:'published.html',version:'v1'};globalThis.__selected='doc';globalThis.__revision=1;globalThis.__polls=0;globalThis.fetch=async (_url,options)=>({ok:true,json:async()=>({result:JSON.parse(options.body).operation==='status'?(globalThis.__polls++,{selected:globalThis.__selected,selectionRevision:globalThis.__revision}):JSON.parse(options.body).operation==='documents'?{documents:[globalThis.__doc]}:{}})});</script>`;
   await page.setContent(`<!doctype html><html lang="en" data-theme="orangebox"><head><title>Document</title><style>${themeCss}</style></head><body>${stub}${navigation}<main>${controls}</main></body></html>`);
   return page;
 }
@@ -55,13 +55,13 @@ const advance = (page, update = {}) => page.evaluate(update => { Object.assign(g
 test('published HTML sidebar auto-reloads when clean and version advances', { timeout: 30000 }, async t => {
   const page = await updatePage(browser);
   const navigation = page.waitForEvent('framenavigated'); await advance(page); await navigation;
-  assert.equal(page.url(), 'http://lavish.test/published.html'); assert.equal(await page.title(), 'Reloaded');
+  assert.equal(page.url(), 'http://lavish.test/published.html?view=doc'); assert.equal(await page.title(), 'Reloaded');
 });
 
 test('published HTML sidebar navigates when republished sibling path or type changes', { timeout: 30000 }, async t => {
   for (const [update, destination] of [[{ sibling: 'replacement.html' }, 'replacement.html'], [{ source: 'doc.md' }, 'hub.html']]) {
     const page = await updatePage(browser); const navigation = page.waitForEvent('framenavigated'); await advance(page, update); await navigation;
-    assert.equal(page.url(), 'http://lavish.test/' + destination); await page.close();
+    assert.equal(page.url(), 'http://lavish.test/' + destination + (destination === 'hub.html' ? '?__lavish_hub_view=doc' : '')); await page.close();
   }
 });
 
@@ -128,26 +128,25 @@ test('published HTML sidebar tracks formatting and removed controls', { timeout:
 });
 
 describe('published HTML sidebar navigation guards and update behavior', () => {
-test('published HTML sidebar gives remote selection precedence and respects error guards', { timeout: 30000 }, async t => {
+test('published HTML stays put on remote selection and shows toast while keeping in-place updates for current doc', { timeout: 30000 }, async t => {
   const page = await updatePage(browser);
-  await page.evaluate(() => { document.querySelector('[role=status]').dataset.error = ''; });
-  await advance(page); await page.getByRole('button', { name: 'Reload updated document' }).waitFor();
+  await page.waitForFunction(() => globalThis.__polls >= 1);
   assert.equal(await page.title(), 'repo');
-  await page.evaluate(() => { delete document.querySelector('[role=status]').dataset.error; globalThis.__selected = 'tasks'; });
-  const navigation = page.waitForEvent('framenavigated'); await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await navigation;
-  assert.equal(page.url(), 'http://lavish.test/hub.html');
-});
-
-test('published HTML sidebar keeps pending edits during remote selection and yields when clean', { timeout: 30000 }, async t => {
-  const page = await updatePage(browser); await page.locator('#draft').fill('unsaved');
-  await page.evaluate(() => { globalThis.__selected = 'tasks'; document.dispatchEvent(new Event('visibilitychange')); });
-  await page.getByRole('link', { name: 'Tasks' }).waitFor();
+  await page.locator('#draft').fill('unsaved');
+  await page.evaluate(() => { globalThis.__selected = 'tasks'; globalThis.__revision++; document.dispatchEvent(new Event('visibilitychange')); });
+  const toast = page.locator('#lavish-hub-toast');
+  await toast.getByText('Selected: Tasks').waitFor();
+  assert.equal(page.url(), 'http://lavish.test/published.html?view=doc');
   assert.equal(await page.locator('#draft').inputValue(), 'unsaved');
-  await page.locator('#draft').fill('initial');
-  assert.equal(await page.title(), 'repo');
+  await toast.getByRole('button', { name: 'Dismiss notification' }).click();
+  assert.equal(await toast.isVisible(), false);
+  await advance(page);
+  await page.getByRole('button', { name: 'Reload updated document' }).waitFor();
+  assert.equal(await page.locator('#draft').inputValue(), 'unsaved');
   const navigation = page.waitForEvent('framenavigated');
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await navigation;
-  assert.equal(page.url(), 'http://lavish.test/hub.html');
+  await page.locator('#draft').fill('initial');
+  await navigation;
+  assert.equal(await page.title(), 'Reloaded');
 });
 
 test('published HTML sidebar defers reload while navigation is in flight or failed', { timeout: 30000 }, async t => {
@@ -173,7 +172,7 @@ test('published HTML sidebar defers reload while navigation is in flight or fail
 
 test('published HTML sidebar guards updates when navigation may still be in progress', { timeout: 30000 }, async () => {
   const page = await updatePage(browser, undefined, { noNavigationApi: true });
-  await page.route('http://lavish.test/hub.html', route => route.abort('aborted'));
+  await page.route(url => url.pathname === '/hub.html', route => route.abort('aborted'));
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await page.getByRole('link', { name: 'Tasks' }).click();
   await page.getByText('Navigation may still be in progress; select a destination to continue').waitFor();

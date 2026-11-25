@@ -103,6 +103,7 @@ async function createChromeHarness({
   // a MessageChannel challenge; keeping the fixture opt-in leaves the legacy
   // queue tests on their existing global postMessage path.
   modernBinding = null,
+  outerUrl = "http://lavish.test/session/abc",
 } = {}) {
   const source = await readFile(sourceUrl, "utf8");
   // Seed sessionStorage before the client boots, to model a tab whose queue was
@@ -452,19 +453,21 @@ async function createChromeHarness({
   };
 
   let clockNow = Date.now();
+  const location = new URL(outerUrl);
+  location.reload = () => { reloadCount += 1; };
+  const historyCalls = [];
+  const history = Object.fromEntries(["pushState", "replaceState"].map((method) => [method, (_state, _title, url) => {
+    historyCalls.push({ method, url });
+    location.href = new URL(url, location.href).href;
+  }]));
   const context = {
     AbortController,
     clearTimeout: fakeClearTimeout,
     console,
     ...(fakeClock ? { Date: { now: () => clockNow, parse: Date.parse } } : {}),
     fetch: harnessFetch,
-    location: {
-      protocol: "http:",
-      host: "lavish.test",
-      reload() {
-        reloadCount += 1;
-      },
-    },
+    location,
+    history,
     navigator: {
       clipboard: {
         async writeText(value) {
@@ -474,11 +477,11 @@ async function createChromeHarness({
     },
     setTimeout: fakeSetTimeout,
     crypto: globalThis.crypto,
-    URL: {
-      createObjectURL() {
+    URL: class extends URL {
+      static createObjectURL() {
         return "blob:lavish-test";
-      },
-      revokeObjectURL() {},
+      }
+      static revokeObjectURL() {}
     },
     WebSocket: class FakeWebSocket {
       static OPEN = 1;
@@ -605,6 +608,8 @@ async function createChromeHarness({
   return {
     element,
     frame,
+    location,
+    historyCalls,
     postedToFrame,
     postedToWhiteboard,
     clipboardWrites,
@@ -8085,6 +8090,64 @@ test("protocol 1 upload results stay on the accepting document across replacemen
   assert.equal(resultB.nonce, "same-nonce");
   assert.equal(resultB.document_id, "document-b");
   assert.equal(resultB.artifact_load_token, "harness-load-1");
+});
+
+test("chrome-client validates view, sanitizes hash on lavish:syncUrl, and queues pre-bind popstate", async () => {
+  let releaseValidation;
+  const validation = new Promise((resolve) => { releaseValidation = resolve; });
+  const binding = { page: "page-a.html", proof: "proof-a", route: "page-a.html", destination: "/artifact/abc/page-a.html", documentId: "document-a", token: "harness-load-1", revision: 1 };
+  const chrome = await createChromeHarness({
+    artifactSrc: "/artifact/abc/page-a.html",
+    outerUrl: "http://lavish.test/session/abc?view=tasks#section",
+    sessionData: { ...defaultSessionData, pageProtocol: 1, initialView: "tasks" },
+    modernBinding: binding,
+    bindingValidationResponses: [validation],
+  });
+  await flushPromises();
+  assert.equal(chrome.location.search, "?view=tasks");
+  const initialFrameUrl = new URL(chrome.replacedDestinations.at(-1), chrome.location.href);
+  assert.equal(initialFrameUrl.searchParams.get("__lavish_hub_view"), "tasks");
+  assert.equal(initialFrameUrl.hash, "#section");
+  chrome.location.href = "http://lavish.test/session/abc?view=changes#back";
+  chrome.dispatchWindowEvent("popstate");
+  chrome.sendFrameMessage({ type: "lavish:syncUrl", view: "tasks", mode: "replace", artifact_load_token: "harness-load-1" });
+  assert.equal(chrome.historyCalls.length, 0);
+  releaseValidation({ ok: true, status: 204, json: async () => ({}) });
+  await flushPromises(); await flushPromises();
+  const activation = chrome.modernPostedToFrame.find((message) => message.type === "lavish:activate");
+  assert.ok(activation);
+  const change = chrome.modernPostedToFrame.find((message) => message.type === "lavish:urlChange");
+  assert.equal(change.view, "changes"); assert.equal(change.hash, "#back");
+  assert.ok(chrome.modernPostedToFrame.indexOf(activation) < chrome.modernPostedToFrame.indexOf(change));
+  assert.equal(chrome.modernPostedToFrame.some((message) => message.type === "lavish:restoreScroll"), false);
+  const send = async (data) => { chrome.sendModernMessage({ ...activation, ...data }); await flushPromises(); };
+  chrome.sendFrameMessage({ ...activation, type: "lavish:syncUrl", view: "foreign", mode: "push" });
+  for (const handler of chrome.messageHandlers()) handler({ source: chrome.createForeignWindow().source, data: { ...activation, type: "lavish:syncUrl", view: "foreign", mode: "push" } });
+  await send({ type: "lavish:syncUrl", view: "foreign", document_id: "wrong", mode: "push" });
+  await send({ type: "lavish:syncUrl", view: "bad view", mode: "push" });
+  await send({ type: "lavish:syncUrl", view: "x".repeat(65), mode: "push" });
+  assert.equal(chrome.historyCalls.length, 0);
+  await send({ type: "lavish:syncUrl", view: "tasks", hash: "a\u0000b\u007f", mode: "push" });
+  assert.equal(chrome.location.search, "?view=tasks"); assert.equal(chrome.location.hash, "#ab");
+  assert.equal(chrome.historyCalls.at(-1).method, "pushState");
+  await send({ type: "lavish:syncUrl", hash: "#" + "x".repeat(600), mode: "replace" });
+  assert.equal(chrome.location.hash, "#" + "x".repeat(511));
+  assert.equal(chrome.historyCalls.at(-1).method, "replaceState");
+  const count = chrome.historyCalls.length;
+  await send({ type: "lavish:syncUrl", hash: "#" + "x".repeat(511), mode: "push" });
+  assert.equal(chrome.historyCalls.length, count);
+
+  const legacy = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
+  await flushPromises();
+  legacy.location.href = "http://lavish.test/session/abc?view=changes#back";
+  legacy.dispatchWindowEvent("popstate");
+  const token = legacy.artifactLoadToken();
+  assert.ok(token);
+  legacy.sendFrameMessage({ type: "lavish:syncUrl", view: "tasks", mode: "replace", artifact_load_token: token });
+  assert.equal(legacy.historyCalls.length, 0);
+  legacy.sendFrameMessage({ type: "lavish:syncUrl", view: "tasks", mode: "push", artifact_load_token: token });
+  assert.equal(legacy.historyCalls.length, 1);
+  assert.equal(legacy.location.search, "?view=tasks");
 });
 
 test("protocol 1 restores review state and scroll only for the accepted canonical page", async () => {

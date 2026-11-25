@@ -92,8 +92,12 @@ Publishing registers or replaces the document without changing the active browse
 view and prints one JSON line with `id`, `url`, `title`, and `scope`. The URL is the
 direct `?view=ID` link when available. Pass `--attention` to mark the document in
 the sidebar for review without taking over the page (opening it clears the flag).
-New or updated publications show a `New` badge until opened. Pass `--open` to
-`publish`, or run `lavish-hub --view ID [--open]`, to select and open it.
+New or updated publications show a `New` badge until opened. Open tabs stay on
+their current view. New publications, updates, `--attention` flags, and remote
+`--view` selections on other views show a bottom-right notification with an Open
+button that dismisses after six seconds. `--view ID` changes the default selection
+without switching open tabs, and `--open` launches a browser at the selected
+document.
 
 By default, publication records the repository name and the base and head commits
 of the tracked jj target. If the workspace or repository is unavailable, automatic
@@ -150,16 +154,19 @@ and diff views use the Orangebox dark palette. Published HTML without a root `da
 `data-theme="orangebox"` and a dark background and foreground fallback. Authored
 CSS can override the fallback, and an existing root `data-theme` is retained. The
 fallback does not load DaisyUI for pages that do not already include it.
-Explicit view commands (`lavish-hub --view ID` or `publish --open`) also switch an open published HTML page to the
-selected view, unless unsaved edits pause the switch. The hub asks before leaving
-for a published HTML page when a hub draft or an unqueued diff comment is
-unsaved. Published pages similarly ask after user input or changes outside the
-navigation, and pause automatic switches. In the in-page confirmation, choose
+The address bar tracks the active view as `?view=ID`, including a `#fragment`
+when navigating to a section. Copy that URL to open the same view and section.
+Back and Forward move between views and sections. Fragment links in Markdown and
+published HTML stay on the page, even when the HTML uses a `<base href>`.
+
+The hub asks before leaving for a published HTML page when a hub draft or an
+unqueued diff comment is unsaved. Published pages similarly ask after user input
+or changes outside the navigation. In the in-page confirmation, choose
 Keep editing or press Escape to keep the current page and its edits. Choose Leave
 page to discard them. If the browser cannot tell whether a slow navigation is still
-in progress, the page shows a notice and pauses automatic page switches. Select a
-destination to continue. These guards do not persist drafts: leaving the page, a
-browser crash, or forced closure can discard them. Reverting authored form controls
+in progress, the page shows a notice. Select a destination to continue. These guards
+do not persist drafts: leaving the page, a browser crash, or forced closure can
+discard them. Reverting authored form controls
 or `contenteditable` regions to their initial values, or resetting a form, clears
 the edited state. Lavish annotation cards do not count as authored edits. Custom
 editors that do not emit trusted `input` or `change` events may not be detected, and
@@ -202,15 +209,16 @@ to `lavish-hub` or `publish` to open the existing review (or list
 it under Artifacts when available); on `publish`, `--open` also selects the
 published document. Plain `publish` leaves the active view unchanged and
 prints JSON containing the direct `?view=ID` link. The browser tab title stays
-`<title> · Lavish` (or `<repo> · Lavish` when untitled) across view switches. Selection
-is shared by the running owner and is restored on page refresh; a new owner starts
-on Commits. An open hub checks for selection, repository, and source changes about
-every two seconds after each completed check; slow or unavailable actions can delay
-updates. A read-only check that has not answered after ten seconds is abandoned, so a
-stalled owner cannot hold the poll open; the next check follows after the usual delay.
+`<title> · Lavish` (or `<repo> · Lavish` when untitled) across view switches. The running owner
+remembers the default selection for new tabs (starting on Commits), while an open
+tab keeps its own `?view=ID` URL across refreshes. An open hub checks for selection,
+repository, and source changes about every two seconds after each completed check;
+slow or unavailable actions can delay updates. A read-only check that has not
+answered after ten seconds is abandoned, so a stalled owner cannot hold the poll
+open; the next check follows after the usual delay.
 Polling stops while the tab is hidden and catches up as soon as it is
-visible again, on the hub and on published pages, so a selection the owner made
-meanwhile opens then. A page that loads in a background tab keeps its first poll so
+visible again, on the hub and on published pages, so updates and notifications from
+while the tab was hidden appear then. A page that loads in a background tab keeps its first poll so
 it has content when it is shown, then waits; that first poll is spent even when it
 fails, so a page that never rendered waits for visibility instead of retrying in
 the background. Only Commits and Changes request the repository snapshot; the other

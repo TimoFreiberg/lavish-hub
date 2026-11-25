@@ -95,13 +95,13 @@ test('cross-page navigation pauses pending refresh and resumes after failure', {
   assert.equal(navigations, 1);
 });
 
-test('new selection wins while remote navigation waits for annotation mode', { timeout: 30000 }, async t => {
-  let selected = 'commits', statusCalls = 0;
+test('remote selection or publication does not switch views and shows auto-dismissing toast with Open and Dismiss', { timeout: 30000 }, async t => {
+  let selected = 'commits', revision = 1, documents = [];
   const transport = await createHubTransport({
-    status: () => { statusCalls++; return { available: true, selected }; },
-    documents: () => ({ documents: [{ id: 'published', title: 'Published', source: 'index.html', sibling: 'published.html' }] }),
+    status: () => ({ available: true, selected, selectionRevision: revision }),
+    documents: () => ({ documents }),
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
-    navigate: ({ id }) => { selected = id; return { selected }; },
+    navigate: ({ id }) => { selected = id; revision++; return { selected }; },
     readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
@@ -109,50 +109,30 @@ test('new selection wins while remote navigation waits for annotation mode', { t
   const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   const page = await browser.newPage();
-  await page.setContent(`<div id="app"></div><script>globalThis.lavish={setAnnotationMode(value){if(value&&!globalThis.releaseMode)return new Promise(resolve=>{globalThis.releaseMode=resolve})}};globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
   await page.getByText('No commits in this range.').waitFor();
-  selected = 'published';
+  selected = 'tasks'; revision++;
   await page.getByRole('button', { name: 'Refresh' }).click();
-  await page.waitForFunction(() => typeof globalThis.releaseMode === 'function');
-  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
-  await page.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor();
-  const before = statusCalls;
-  await page.evaluate(() => globalThis.releaseMode());
-  await assertEventually(() => assert.ok(statusCalls > before));
-  assert.equal(await page.locator('#view h1').textContent(), 'Tasks');
-});
-
-test('older remote navigation cannot resume polling during a newer cross-page selection', { timeout: 30000 }, async t => {
-  let selected = 'commits', statusCalls = 0, navigations = 0, releaseNavigation;
-  const navigationGate = new Promise(resolve => { releaseNavigation = resolve; });
-  const transport = await createHubTransport({
-    status: () => { statusCalls++; return { available: true, selected }; },
-    documents: () => ({ documents: [
-      { id: 'first', title: 'First', source: 'first.html', sibling: 'first.html' },
-      { id: 'second', title: 'Second', source: 'second.html', sibling: 'second.html' },
-    ] }),
-    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
-    navigate: async () => { navigations++; await navigationGate; selected = 'commits'; throw new Error('navigation failed'); },
-    readDocument: () => ({ text: '', hash: 'one', version: 'one' }),
-  });
-  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
-  t.after(async () => { releaseNavigation(); await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
-  const page = await browser.newPage();
-  await page.setContent(`<div id="app"></div><script>globalThis.lavish={setAnnotationMode(value){if(value)return new Promise(resolve=>{globalThis.releaseMode=resolve})}};globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
-  await page.getByText('No commits in this range.').waitFor();
-  selected = 'first';
+  const toast = page.locator('#hub-toast');
+  await toast.getByText('Selected: Tasks').waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Commits', exact: true }).getAttribute('aria-current'), 'page');
+  await toast.getByRole('button', { name: 'Dismiss notification' }).click();
+  assert.equal(await toast.isVisible(), false);
+  documents = [{ id: 'note', title: 'Note', source: 'note.md', version: 'one', viewedVersion: null }];
   await page.getByRole('button', { name: 'Refresh' }).click();
-  await page.waitForFunction(() => typeof globalThis.releaseMode === 'function');
-  await page.getByRole('button', { name: 'Second', exact: true }).click();
-  await assertEventually(() => assert.equal(navigations, 1));
-  const before = statusCalls;
-  await page.evaluate(() => globalThis.releaseMode());
-  await page.waitForTimeout(2200);
-  assert.equal(statusCalls, before, 'polling remains paused while the newer navigation is pending');
-  releaseNavigation();
-  await assertEventually(() => assert.ok(statusCalls > before));
-  assert.equal(await page.locator('#connection').textContent(), 'navigation failed');
+  await toast.getByText('New: Note').waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Note', exact: true }).getAttribute('data-unseen'), 'true');
+  await toast.waitFor({ state: 'hidden', timeout: 8000 });
+  documents = [{ ...documents[0], version: 'two' }];
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await toast.getByText('Updated: Note').waitFor();
+  documents = [{ ...documents[0], attention: true }];
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await toast.getByText('Attention: Note').waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Commits', exact: true }).getAttribute('aria-current'), 'page');
+  await toast.getByRole('button', { name: 'Open', exact: true }).click();
+  await page.getByRole('button', { name: 'Note', exact: true }).waitFor();
+  await assertEventually(async () => assert.equal(await page.getByRole('button', { name: 'Note', exact: true }).getAttribute('aria-current'), 'page'));
 });
 
 test('document failure does not also display a renderer failure', { timeout: 30000 }, async t => {
@@ -676,7 +656,7 @@ test('entering a repository view requests a snapshot while a refresh is busy', {
   await assertEventually(() => assert.ok(snapshots >= 2), 1500);
 });
 
-test('a remote switch to a repository view asks for its snapshot in that poll', { timeout: 30000 }, async t => {
+test('a remote selection does not fetch a repository snapshot for another view', { timeout: 30000 }, async t => {
   let selected = 'tasks', snapshots = 0, hold = false;
   const parked = [];
   const transport = await createHubTransport({
@@ -690,14 +670,13 @@ test('a remote switch to a repository view asks for its snapshot in that poll', 
   const page = await pollingPage(browser, transport);
   await page.getByRole('heading', { name: 'Tasks' }).waitFor();
   assert.equal(snapshots, 0);
-  // Park a poll, switch the remote selection while it is in flight, then let that
-  // poll answer. Later polls stay parked, so only this one can bring the snapshot.
   hold = true;
   await assertEventually(() => assert.equal(parked.length, 1));
   selected = 'commits';
   parked.shift()();
-  await page.getByText('No commits in this range.').waitFor({ timeout: 4000 });
-  assert.equal(snapshots, 1);
+  await assertEventually(() => assert.equal(parked.length, 1));
+  assert.equal(await page.getByRole('heading', { name: 'Tasks' }).count(), 1);
+  assert.equal(snapshots, 0);
 });
 
 test('description drafts and save targets survive a gated view switch', { timeout: 30000 }, async t => {

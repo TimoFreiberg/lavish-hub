@@ -445,7 +445,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await browserPage.getByRole('button', { name: 'Focus check', exact: true }).waitFor();
   assert.equal(await browserPage.evaluate(() => document.activeElement === window.focusedHubButton && window.focusedHubButton.isConnected && document.querySelector('#view textarea') === window.mountedTaskDraft), true);
   await run(process.execPath, [cli, '--workspace', repo, '--view', 'inside'], { env });
-  await browserPage.getByText('Navigation paused: unsaved drafts remain on this page.').waitFor();
+  await browserPage.locator('#hub-toast').getByText('Selected: inside.html').waitFor();
   assert.equal(await taskDraft.inputValue(), 'Unsaved task');
   await browserPage.getByRole('button', { name: 'inside.html', exact: true }).click();
   await browserPage.getByRole('button', { name: 'Keep editing' }).click();
@@ -475,7 +475,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await diffBeforeUnload.dismiss();
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
   await run(process.execPath, [cli, '--workspace', repo, '--view', 'inside'], { env });
-  await diffPage.getByText('Navigation paused: unsaved drafts remain on this page.').waitFor();
+  await diffPage.locator('#hub-toast').getByText('Selected: inside.html').waitFor();
   assert.equal(await comment.inputValue(), 'Unqueued annotation');
   await diffPage.getByRole('button', { name: 'inside.html', exact: true }).click();
   await diffPage.getByRole('button', { name: 'Leave page' }).click();
@@ -495,14 +495,14 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     let releaseDestination, requests = 0;
     const gate = new Promise(resolve => { releaseDestination = resolve; });
     const destination = fromHub ? sibling : 'hub.html';
-    await slowPage.route(`**/${destination}`, async route => { requests++; await gate; await route.continue().catch(() => {}); });
+    await slowPage.route(url => url.pathname.endsWith(`/${destination}`), async route => { requests++; await gate; await route.continue().catch(() => {}); });
     await slowPage.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
     for (let i = 0; i < 200 && !requests; i++) await delay(30);
     assert.equal(requests, 1);
     await delay(2500);
     assert.equal(requests, 1, 'slow navigation must not restart');
     releaseDestination();
-    await slowPage.waitForURL(`**/${destination}`);
+    await slowPage.waitForURL(url => url.pathname.endsWith(`/${destination}`));
     await slowPage.close();
   }
   const otherHtml = path.join(repo, 'other.html');
@@ -585,7 +585,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     for (let i = 0; i < 200 && (await page.locator('#connection').textContent()).includes(notice); i++) await delay(30);
     assert.doesNotMatch(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
     await request('navigate', { id: 'other-html' });
-    await page.waitForURL(`**/${otherSibling}`);
+    await page.locator('#hub-toast').getByText('Selected: other.html').waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current'), 'page');
     await page.close();
   }
   for (const fromHub of [true, false]) for (const disableNavigationApi of [true, false]) {
@@ -603,7 +604,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     for (let i = 0; i < 200 && refreshesAfterCancel === baseline; i++) await delay(30);
     assert.ok(refreshesAfterCancel > baseline, 'polling resumes after cancellation');
     await delay(2300);
-    assert.ok(cancelled.url().endsWith(fromHub ? 'hub.html' : sibling));
+    assert.ok(new URL(cancelled.url()).pathname.endsWith(fromHub ? '/hub.html' : `/${sibling}`));
     if (!disableNavigationApi) await cancelled.getByText('Navigation cancelled. Select a destination to try again.').waitFor();
     await cancelled.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
     if (fromHub) {
@@ -630,7 +631,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await (await reloadDialog).dismiss();
     await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
     await cancelled.getByRole('button', { name: 'Leave page' }).click();
-    await cancelled.waitForURL(`**/${fromHub ? sibling : 'hub.html'}`);
+    await cancelled.waitForURL(url => url.pathname.endsWith(`/${fromHub ? sibling : 'hub.html'}`));
     await cancelled.close();
   }
   for (const fromHub of [true, false]) {
@@ -643,30 +644,22 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await (await dialog).dismiss();
     await page.getByText('Navigation cancelled. Select a destination to try again.').waitFor();
     await page.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
-    if (fromHub) {
-      await request('navigate', { id: 'changes' });
-      for (let i = 0; i < 200 && await page.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current') !== 'page'; i++) await delay(30);
-      assert.equal(await page.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current'), 'page');
-      await request('navigate', { id: 'inside' });
-      await page.waitForURL(`**/${sibling}`);
-    } else {
-      let attempts = 0;
-      await page.route('**/hub.html', async route => { attempts++; await route.abort(); });
-      await request('navigate', { id: 'changes' });
-      for (let i = 0; i < 200 && attempts < 1; i++) await delay(30);
-      assert.equal(attempts, 1, 'different selection with the same URL must be attempted');
-      await delay(2300);
-      await request('navigate', { id: 'tasks' });
-      for (let i = 0; i < 200 && attempts < 2; i++) await delay(30);
-      assert.equal(attempts, 2, 'original selection must be attempted again');
-    }
+    await request('navigate', { id: 'changes' });
+    await page.locator(fromHub ? '#hub-toast' : '#lavish-hub-toast').getByText('Selected: Changes').waitFor();
+    assert.equal(new URL(page.url()).pathname.endsWith(fromHub ? '/hub.html' : `/${sibling}`), true);
+    assert.equal(await page.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'Tasks' : 'inside.html', exact: true }).getAttribute('aria-current'), 'page');
     await page.close();
   }
   await request('navigate', { id: 'inside' });
+  const changesHref = new URL(await siblingPage.getByRole('link', { name: 'Changes', exact: true }).getAttribute('href'), siblingPage.url());
+  assert.equal(changesHref.pathname, '/hub.html');
+  assert.equal(changesHref.searchParams.get('__lavish_hub_view'), 'changes');
   await siblingPage.getByRole('link', { name: 'Changes', exact: true }).click();
   await siblingPage.getByRole('button', { name: 'Changes', exact: true }).waitFor();
   assert.equal((await request('status')).selected, 'changes');
   await run(process.execPath, [cli, '--workspace', repo, '--view', 'inside'], { env });
+  await siblingPage.locator('#hub-toast').getByText('Selected: inside.html').waitFor();
+  await siblingPage.getByRole('button', { name: 'inside.html', exact: true }).click();
   await siblingPage.getByLabel('Frame draft').fill('Authored draft');
   let refreshes = 0;
   siblingPage.on('request', request => {
