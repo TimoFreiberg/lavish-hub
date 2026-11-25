@@ -1,7 +1,7 @@
 # Workspace hub
 
-`lavish-hub listen [--workspace DIR] [--open] [--reopen]` runs a foreground
-owner for one jj workspace. It opens a stable Lavish page without starting the
+`lavish-hub listen [--workspace DIR] [--session ID] [--title TEXT] [--rev REV] [--base REV | --no-base] [--open] [--reopen]` runs a foreground
+owner for a jj workspace or repository-scoped session. It opens a stable Lavish page without starting the
 standalone feedback relay. The page shows commit descriptions and an annotated
 diff, and provides direct Markdown editors for tasks and
 registered Markdown documents. Description and file saves report conflicts and
@@ -30,12 +30,31 @@ Check their outcome before retrying.
 Open `/hubs` on the Lavish UI address to see active workspace hubs, or use the
 **Hubs** link in the Lavish header bar to return to it from any session. The page
 works through the same forwarded port and links to each session on that origin.
-It shows the workspace directory name and up to 240 characters of the first
-line of the current jj `@-` commit description. If the workspace cannot be read,
+A titled hub is labeled `<title> · <repo>`, and an untitled workspace hub uses its
+workspace directory name. The summary shows up to 240 characters of the first
+line of the tracked target's description (or its parent if empty), or the
+workspace's jj `@-` description when no target is set. If the workspace cannot be read,
 it shows an unavailable message.
 The list refreshes automatically; an owner that stops refreshing disappears after
 45 seconds. These labels and descriptions are visible to anyone who can access
 the Lavish server, so avoid putting secrets in them.
+
+## Sessions and targets
+
+By default, a hub is scoped to one jj workspace and tracks its working copy. To run concurrent reviews against the same repository, or to address one hub from the primary checkout and any child workspace, pass `--session ID` or set `LAVISH_HUB_SESSION` (the flag takes precedence). Using the same ID from any checkout of that repository addresses the same owner, while different IDs run independently. Session IDs start with an ASCII letter or digit and contain up to 128 ASCII letters, digits, `.`, `_`, or `-`.
+
+```sh
+lavish-hub listen --session review-a --title 'Review A' --rev feature --open
+# In another terminal, from the same repository or a child workspace:
+lavish-hub target --session review-a --title 'Review A updated'
+lavish-hub target --session review-a --base main
+```
+
+Because concurrent sessions share a repository, session-scoped `listen` requires `--title` even when restarting an existing session. For session-scoped or titled hubs, the sidebar in both the hub and published HTML shows the title above the repository name, and browser tabs show `<View> · <title>`. Untitled workspace-scoped hubs show the workspace name in the sidebar and tab title instead. Title changes made with `target --title` appear on the next poll.
+
+`--rev REV` on `listen` or `lavish-hub target REV` sets what the hub tracks. Bookmarks follow moves, and change IDs follow rewrites. Working-copy expressions such as `@` are resolved in the invoking workspace and pinned to that change so the hub can read it without snapshotting or contending with working-copy edits in other workspaces. For a new session with no `--rev` or saved target, startup picks `@` if it is described or non-empty. Otherwise it picks `@-`, falling back to `@` if `@-` is `root()`. The target, optional base, and title are saved in `target.json`. The target and optional base are reused on restart unless overridden, and a saved title is reused for workspace-scoped hubs (session-scoped `listen` still requires `--title`). `--base REV` chooses a base for the fork point with the target, while `--no-base` returns to the default based on `trunk()`. `target` updates only the supplied fields and needs at least one.
+
+Workspace-scoped hubs normally disable repository actions once their checkout disappears so a replacement checkout at the same path cannot receive actions meant for the old one. To keep a workspace-scoped hub usable after deleting its temporary workspace, run `lavish-hub target @` (or another revision) from that workspace before deletion. Repository operations then run against the primary repository, while source files inside the deleted or replaced workspace stay blocked and managed tasks and external documents remain accessible. Address the owner with its original `--workspace` path after deletion. If the primary repository itself is replaced at the same path, repository actions remain blocked.
 
 ## Design priorities
 
@@ -156,7 +175,7 @@ to `lavish-hub` or `publish` to open the existing review (or list
 it under Artifacts when available); on `publish`, `--open` also selects the
 published document. Plain `publish` leaves the active view unchanged and
 prints a direct `?view=ID` link. The browser tab title follows the active view
-and workspace name (`<View> · <workspace>` via Lavish's `setDocumentMeta()`). Selection
+and session title or workspace name (`<View> · <title or workspace>` via Lavish's `setDocumentMeta()`). Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. An open hub checks for selection, repository, and source changes about
 every two seconds after each completed check; slow or unavailable actions can delay
@@ -199,20 +218,23 @@ provably gone. An incomplete ownership record requires manual investigation;
 do not delete it while an owner might still be running.
 
 Diagnostics and the review URL go to stderr. Each feedback batch is one JSON
-line on stdout with `type: "agent-notification"`, `workspace`, `instance`,
-`page`, `prompts`, `context`, `snapshotPage`, `snapshotDocument`, `failures`,
-and `reply` fields. For a published HTML document, each annotation prompt has a
+line on stdout with `type: "agent-notification"`, `workspace`, `session` (for
+session-scoped hubs), `instance`, `page`, `prompts`, `context`, `snapshotPage`,
+`snapshotDocument`, `failures`, and `reply` fields. For a published HTML document, each annotation prompt has a
 `document` source path; `snapshotDocument` identifies the source of the snapshot,
 while `snapshotPage` retains Lavish's page identity. The snapshot document is null
 when no published HTML source matches. Poll failures are not retried because delivery may have occurred. Reply using the printed Lavish
 command. An explicitly ended review needs `--reopen` to open again.
 
 Workspace identity and owner metadata live under the private XDG data directory,
-scoped by workspace and Lavish state directory. The loopback endpoint requires a
+scoped by workspace and Lavish state directory, or by repository, session ID, and
+Lavish state directory for session-scoped hubs. The loopback endpoint requires a
 per-instance secret; do not share its runtime metadata. If a recorded workspace
 is removed, start its owner with the original explicit `--workspace` path to read
-surviving registered documents. Saves and repository actions remain disabled, including if
-a different checkout later appears at that path; the hub does not retarget it.
+surviving registered documents. Unless the hub was targeted to a revision with
+`lavish-hub target` before removal, saves and repository actions stay disabled
+even if a different checkout later appears at that path, because the hub does
+not retarget it automatically.
 Sources and HTML resources inside the unavailable workspace cannot be read, even
 if replacement files appear there; surviving sources outside it remain readable.
 Registrations, metadata, and managed task files persist across owner restarts;
