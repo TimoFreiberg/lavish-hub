@@ -1362,7 +1362,7 @@ export async function serve({
   });
 
   app.get("/", (_req, res) => {
-    res.type("html").send(createLandingHtml());
+    res.redirect(302, "/hubs");
   });
 
   app.get("/health", async (req, res) => {
@@ -3897,10 +3897,6 @@ function probeLavishHealth(host, port) {
 function wantsHtml(req) {
   const accept = String(req.get("accept") || "");
   return accept.toLowerCase().includes("text/html");
-}
-
-function createLandingHtml() {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lavish Editor</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f4ef;color:#25221f;font:16px/1.5 system-ui,sans-serif}.card{width:min(560px,calc(100% - 40px));padding:32px;border:1px solid #d9d0c5;border-radius:16px;background:#fffdf9;box-shadow:0 12px 40px #25221f18}h1{margin:0 0 12px;font-size:26px}p{margin:0}</style></head><body><main class="card"><h1>Lavish Editor is running</h1><p>Open the review session URL printed by your agent.</p></main></body></html>`;
 }
 
 function createDeniedHtml({ title, message, workingUrl }) {

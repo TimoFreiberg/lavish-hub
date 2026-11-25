@@ -16,6 +16,14 @@ const maxBody = 64 * 1024;
 // phase that can stall on local state.
 const defaultLimits = { actionMs: 120000, lookupMs: 10000, resourceMs: 20000, identityMs: 5000 };
 
+function validDisplayText(value, max, codePoints = false) {
+  return (
+    typeof value === "string" &&
+    (codePoints ? Array.from(value).length : value.length) <= max &&
+    !Array.from(value).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+  );
+}
+
 function equal(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
   const left = Buffer.from(a);
@@ -129,9 +137,13 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
       !assets.every((name) => typeof name === "string" && /^hub-asset-[a-f0-9]{64}\.js$/.test(name)) ||
       (display !== undefined &&
         (!display ||
-          typeof display.label !== "string" ||
-          display.label.length > 255 ||
-          !(display.summary === null || (typeof display.summary === "string" && display.summary.length <= 240))))
+          typeof display !== "object" ||
+          ![display.label, display.repo].some((value) => typeof value === "string" && value.length > 0) ||
+          !(display.label === undefined || validDisplayText(display.label, 255, true)) ||
+          !(display.title == null || validDisplayText(display.title, 240)) ||
+          !(display.repo == null || validDisplayText(display.repo, 255)) ||
+          !(display.workspace == null || validDisplayText(display.workspace, 255)) ||
+          !(display.summary == null || (typeof display.summary === "string" && display.summary.length <= 240))))
     ) {
       return res.status(400).json({ error: "Invalid registration" });
     }
@@ -159,7 +171,15 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
       targets.set(key, { port, capability, resourceKey, identityKey, assets });
     }
     const current = targets.get(key);
-    current.display = display ? { label: display.label, summary: display.summary } : null;
+    current.display = display
+      ? {
+          label: display.label || display.repo,
+          summary: display.summary === undefined ? '' : display.summary,
+          title: display.title ?? null,
+          repo: display.repo || display.label,
+          workspace: display.workspace ?? null,
+        }
+      : null;
     current.expires = Date.now() + 45000;
     return res.json({ ok: true });
   };
@@ -432,7 +452,7 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
           targets.delete(key);
           continue;
         }
-        hubs.push({ label: target.display.label, summary: target.display.summary, url: `/session/${key}` });
+        hubs.push({ ...target.display, url: `/session/${key}` });
       }
       res.set("Cache-Control", "no-store").json({ hubs });
     },
