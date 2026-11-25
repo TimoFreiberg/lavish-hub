@@ -64,6 +64,11 @@ the stamps with no new wire shape.
   reload with nothing delivered changes nothing and writes nothing.
 - **Done stamps delivered-and-not-done entries.** `addAgentReply` does it in the same write as the
   reply. An entry that was sent but never delivered is not marked done: the agent has not seen it.
+  When `POST /api/:key/agent-reply` supplies `batch_id` (a `lavish-hub` local patch), `addAgentReply`
+  scopes Done to that delivered batch's `delivery_seq` instead of every open delivered prompt in the
+  round, and presence clears `working` only once no unreplied prompt batch remains in the round.
+  Omitting `batch_id` keeps the unbound behavior, stamping all open delivered prompts and marking
+  their delivered batches replied.
 - **Working and Done stay inside one review round.** Reopening an ended session records the last
   take so far as `session.closed_delivery_seq`, and neither stamp lands on an entry delivered at or
   before it. A note `lavish-axi end` left at Seen stays Seen: a later round's edit or reply is about
