@@ -60,7 +60,7 @@ function siblingSidebarClient(c) {
     const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.textContent = '×'; dismiss.setAttribute('aria-label', 'Dismiss notification'); dismiss.addEventListener('click', hideToast);
     toast.replaceChildren(text, open, dismiss); toast.hidden = false; toastTimer = setTimeout(hideToast, 6000);
   }
-  function noteUpdates(state, list, generation) {
+  function noteUpdates(state, list) {
     let notice;
     for (const doc of list) {
       const previous = seenDocs.get(doc.id);
@@ -70,9 +70,10 @@ function siblingSidebarClient(c) {
       }
       seenDocs.set(doc.id, { version: doc.version, attention: Boolean(doc.attention) });
     }
-    if (notificationBaseline && !notice && !navigating && !leaving && generation === navGeneration && state.selectionRevision > lastSelectionRevision && state.selected && state.selected !== c.id) {
-      const title = ({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' })[state.selected] || list.find(doc => doc.id === state.selected)?.title || state.selected;
-      notice = { id: state.selected, label: 'Selected: ' + title };
+    const selectionTarget = state.selectionTarget ?? state.selected;
+    if (notificationBaseline && !notice && !leaving && state.selectionRevision > lastSelectionRevision && selectionTarget && selectionTarget !== c.id) {
+      const title = ({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' })[selectionTarget] || list.find(doc => doc.id === selectionTarget)?.title || selectionTarget;
+      notice = { id: selectionTarget, label: 'Selected: ' + title };
     }
     if (typeof state.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? state.selectionRevision, state.selectionRevision);
     notificationBaseline = true;
@@ -89,14 +90,20 @@ function siblingSidebarClient(c) {
   function leave(url) {
     pause(); leaving = true;
     const useNavigateFrame = Boolean(globalThis.lavish?.navigateFrame && window.self !== window.top);
-    if (!window.navigation || useNavigateFrame) leaveTimer = setTimeout(() => { leaving = false; navigationUncertain = true; resume(); }, 1000);
+    if (!window.navigation || useNavigateFrame) leaveTimer = setTimeout(() => {
+      leaving = false; navigationUncertain = true; resume();
+      if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
+    }, 1000);
     if (useNavigateFrame) globalThis.lavish.navigateFrame(url);
     else location.replace(url);
   }
   function applyUpdate(update) {
     if (update.samePage) {
       pause(); leaving = true;
-      if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; resume(); }, 1000);
+      if (!window.navigation) leaveTimer = setTimeout(() => {
+        navigationUncertain = true; resume();
+        if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
+      }, 1000);
       location.reload();
     } else leave(update.dest);
   }
@@ -187,8 +194,7 @@ function siblingSidebarClient(c) {
     try {
       let approved = false, approvedEdits = edits;
       if (dirty) { approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'); if (!approved) return; }
-      const result = await action('navigate', { id }, AbortSignal.timeout(10000));
-      if (typeof result?.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? result.selectionRevision, result.selectionRevision);
+      await action('navigate', { id }, AbortSignal.timeout(10000));
       syncDirty();
       if ((!approved || approvedEdits !== edits) && dirty && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'))) return;
       if (queuedUrlChange) return;
@@ -214,7 +220,8 @@ function siblingSidebarClient(c) {
     navigateTo(a.dataset.hubId, a.href, a.querySelector('.nav-label')?.textContent || a.textContent);
   });
   function handleUrlChange({ view, hash = '' }) {
-    if (navigating && !leaving) { queuedUrlChange = { view, hash }; return; }
+    if (leaving) { queuedUrlChange = { view, hash }; return; }
+    if (navigating) { queuedUrlChange = { view, hash }; return; }
     if (!view || view === c.id) { syncUrl({ view: c.id, hash, mode: 'replace' }); currentHash = hash; replaceFrameHash(hash); scrollToFragment(hash); return; }
     const a = [...nav.querySelectorAll('a[data-hub-id]')].find(link => link.dataset.hubId === view);
     const target = a ? new URL(a.href) : docUrl(null, view);
@@ -241,7 +248,7 @@ function siblingSidebarClient(c) {
         setTabTitle();
       }
       if (!acknowledged) acknowledgeCurrent();
-      noteUpdates(state, list.documents, generation);
+      noteUpdates(state, list.documents);
       syncDirty();
       const current = list.documents.find(d => d.id === c.id);
       if (current && c.version && current.version && current.version !== c.version) {

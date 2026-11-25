@@ -184,12 +184,12 @@ export async function main(args = process.argv.slice(2)) {
       const result = await callHub(options.hub === 'publish' ? 'publish' : 'attach', { ...options, body });
       console.log(options.hub === 'publish' ? JSON.stringify({ id: result.id, url: result.url ?? null, title: result.title, scope: result.scope ?? null }) : `Configured ${options.hub}.`);
       if (options.open) {
-        if (options.hub === 'publish') await callHub('navigate', { ...options, body: { id: result.id } });
+        if (options.hub === 'publish') await callHub('select', { ...options, body: { id: result.id } });
         await callHub('open', { ...options, ...(options.hub === 'publish' ? { body: { view: result.id } } : {}) });
       }
       return 0;
     }
-    if (options.hub === 'status' && options.view) await callHub('navigate', { ...options, body: { id: options.view } });
+    if (options.hub === 'status' && options.view) await callHub('select', { ...options, body: { id: options.view } });
     const result = await callHub(options.hub, options);
     if (options.open) await callHub('open', { ...options, ...(options.view ? { body: { view: options.view } } : {}) });
     console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}${result.session ? `; session: ${result.session}` : ''}${result.title ? `; title: ${result.title}` : ''}${result.target ? `; target: ${result.target}` : ''}${result.base ? `; base: ${result.base}` : ''}.`);

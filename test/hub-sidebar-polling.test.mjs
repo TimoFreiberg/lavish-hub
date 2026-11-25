@@ -185,6 +185,22 @@ test('published HTML sidebar defers reload while navigation is in flight or fail
   await page.waitForTimeout(200); assert.equal(await page.title(), 'repo');
 });
 
+test('published HTML queues URL changes during departure and replays them if it stays', { timeout: 30000 }, async () => {
+  const page = await browser.newPage();
+  const script = shippedSidebarScript();
+  const content = `<base href="http://lavish.test/"><div id="lavish-hub-sidebar"><nav><a href="hub.html" data-hub-id="tasks">Tasks</a></nav><div role="status"></div></div><div id="lavish-hub-toast" hidden></div><script>globalThis.updates=[]; globalThis.navigations=[]; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'doc', hash: '#back' } })); globalThis.leavingEventDelivered=true; }}; globalThis.fetch=async (_url, options) => { const {operation,id}=JSON.parse(options.body); if(operation==='navigate') navigations.push(id); return {ok:true,json:async()=>({result:operation==='status'?{selected:'doc'}:operation==='documents'?{documents:[]}: {}})}; };</script><script>${script}</script>`;
+  await page.route('http://lavish.test/**', route => route.fulfill({ contentType: 'text/html', body: route.request().url().endsWith('/published.html') ? content : '<iframe id="published-frame" src="/published.html"></iframe>' }));
+  await page.goto('http://lavish.test/');
+  const frame = page.frameLocator('#published-frame');
+  await frame.getByRole('link', { name: 'Tasks' }).click();
+  await page.waitForFunction(() => document.querySelector('#published-frame').contentWindow.leavingEventDelivered === true);
+  assert.deepEqual(await frame.locator('nav').evaluate(() => globalThis.updates.at(-1)), { view: 'tasks', hash: '', mode: 'push' });
+  assert.deepEqual(await frame.locator('nav').evaluate(() => globalThis.navigations), ['tasks']);
+  await page.waitForFunction(() => document.querySelector('#published-frame').contentWindow.updates.at(-1)?.hash === '#back');
+  assert.deepEqual(await frame.locator('nav').evaluate(() => globalThis.updates.at(-1)), { view: 'doc', hash: '#back', mode: 'replace' });
+  assert.deepEqual(await frame.locator('nav').evaluate(() => globalThis.navigations), ['tasks']);
+});
+
 test('published HTML sidebar guards updates when navigation may still be in progress', { timeout: 30000 }, async () => {
   const page = await updatePage(browser, undefined, { noNavigationApi: true });
   await page.route(url => url.pathname === '/hub.html', route => route.abort('aborted'));

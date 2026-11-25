@@ -18,8 +18,8 @@ async function until(fn, message = 'condition', timeout = 20000) {
   while (Date.now() < end) { const result = await fn(); if (result) return result; await delay(100); }
   throw new Error(`Timed out waiting for ${message}`);
 }
-async function request(operation) {
-  const response = await fetch(`${connection.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': connection.capability }, body: JSON.stringify({ operation }) });
+async function request(operation, body = {}) {
+  const response = await fetch(`${connection.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': connection.capability }, body: JSON.stringify({ operation, ...body }) });
   assert.equal(response.status, 200);
   return (await response.json()).result;
 }
@@ -88,6 +88,48 @@ test('initial load writes ?view=ID via replaceState and preserves explicit ?view
   assert.equal(await page.evaluate(() => history.length), 2);
   await open(page, '?view=tasks'); await current(page, 'tasks');
   assert.equal(new URL(page.url()).searchParams.get('view'), 'tasks');
+});
+
+test('browser navigation stays local while remote selection notifies other tabs', { timeout: 60000 }, async t => {
+  for (const [id, toastSelector] of [['tasks', '#hub-toast'], ['review', '#lavish-hub-toast']]) {
+    const observer = await browser.newPage(), actor = await browser.newPage();
+    t.after(async () => { await observer.close(); await actor.close(); });
+    await open(observer, `?view=${id}`); await ready(observer, id);
+    await open(actor, '?view=commits'); await ready(actor, 'commits');
+    const before = await request('status');
+    await select(actor, 'Changes', 'changes');
+    const after = await request('status');
+    assert.equal(after.selectionRevision, before.selectionRevision);
+    assert.equal(after.selected, 'changes');
+    const inherited = await browser.newPage(); t.after(() => inherited.close());
+    await open(inherited, ''); await current(inherited, 'changes');
+    await observer.bringToFront();
+    const statusPoll = response => response.request().postDataJSON()?.operation === 'status';
+    await observer.waitForResponse(statusPoll, { timeout: 10000 });
+    await observer.waitForResponse(statusPoll, { timeout: 10000 });
+    assert.equal(await frame(observer).locator(toastSelector).isVisible(), false);
+    let releaseStatus;
+    const statusGate = new Promise(resolve => { releaseStatus = resolve; });
+    t.after(() => releaseStatus());
+    await observer.route('**/action', async route => {
+      if (route.request().postDataJSON()?.operation === 'status') await statusGate;
+      await route.continue().catch(() => {});
+    });
+    await run(process.execPath, [cli, '--workspace', repo, '--view', 'note']);
+    await request('navigate', { id: 'changes' });
+    const remote = await request('status');
+    assert.equal(remote.selectionRevision, before.selectionRevision + 1);
+    assert.equal(remote.selected, 'changes');
+    assert.equal(remote.selectionTarget, 'note');
+    const poll = observer.waitForResponse(async response => {
+      if (!statusPoll(response)) return false;
+      const { result } = await response.json();
+      return result?.selectionTarget === 'note' && result?.selected === 'changes';
+    }, { timeout: 10000 });
+    releaseStatus();
+    await poll;
+    await frame(observer).locator(toastSelector).getByText('Selected: Note').waitFor({ timeout: 10000 });
+  }
 });
 
 test('sidebar navigation syncs top-level ?view=ID across built-ins, Markdown, and HTML siblings', { timeout: 60000 }, async t => {

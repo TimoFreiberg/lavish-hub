@@ -521,13 +521,13 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await page.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
     for (let i = 0; i < 200 && attempts === 0; i++) await delay(30);
     assert.equal(attempts, 1);
-    await request('navigate', { id: 'changes' });
+    await request('select', { id: 'changes' });
     for (let i = 0; i < 200 && polls < 2; i++) await delay(30);
     assert.ok(polls >= 2, 'polling resumes while the destination is slow');
     await delay(2300);
     assert.equal(attempts, 1, 'owner changes must not cancel an uncertain navigation');
     if (fromHub) {
-      await request('navigate', { id: 'other-html' });
+      await request('select', { id: 'other-html' });
       await delay(2300);
       assert.equal(attempts, 1, 'another HTML selection must not start a competing load');
     }
@@ -574,7 +574,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     assert.match(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
     workspaceUnavailable = false;
     const baseline = statusPolls;
-    await request('navigate', { id: 'other-html' });
+    await request('select', { id: 'other-html' });
     for (let i = 0; i < 200 && statusPolls < baseline + 2; i++) await delay(30);
     assert.ok(statusPolls >= baseline + 2, 'remote selection was polled');
     assert.equal(competing, 0, 'failed selection must not permit a competing navigation without a draft');
@@ -584,7 +584,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await page.getByRole('button', { name: 'Changes', exact: true }).waitFor();
     for (let i = 0; i < 200 && (await page.locator('#connection').textContent()).includes(notice); i++) await delay(30);
     assert.doesNotMatch(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
-    await request('navigate', { id: 'other-html' });
+    await request('select', { id: 'other-html' });
     await page.locator('#hub-toast').getByText('Selected: other.html').waitFor();
     assert.equal(await page.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current'), 'page');
     await page.close();
@@ -619,7 +619,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
       await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Changes', exact: true }).click({ noWaitAfter: true });
       await cancelled.getByRole('button', { name: 'Keep editing' }).click();
       await notice.waitFor();
-      await request('navigate', { id: fromHub ? 'other-html' : 'changes' });
+      await request('select', { id: fromHub ? 'other-html' : 'changes' });
       await delay(2300);
       assert.equal(competing, 0, 'cancelled selection must not permit a competing navigation');
       assert.equal(await (fromHub ? cancelled.getByRole('textbox', { name: 'Tasks Markdown' }) : cancelled.getByLabel('Frame draft')).inputValue(), 'Still here');
@@ -644,7 +644,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await (await dialog).dismiss();
     await page.getByText('Navigation cancelled. Select a destination to try again.').waitFor();
     await page.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
-    await request('navigate', { id: 'changes' });
+    await request('select', { id: 'changes' });
     await page.locator(fromHub ? '#hub-toast' : '#lavish-hub-toast').getByText('Selected: Changes').waitFor();
     assert.equal(new URL(page.url()).pathname.endsWith(fromHub ? '/hub.html' : `/${sibling}`), true);
     assert.equal(await page.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'Tasks' : 'inside.html', exact: true }).getAttribute('aria-current'), 'page');

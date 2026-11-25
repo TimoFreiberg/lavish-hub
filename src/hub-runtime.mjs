@@ -279,12 +279,12 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         await Promise.all(staged.map(item => rm(item.temp, { force: true })));
       }
     }
-    let selected = 'commits', selectionRevision = 0;
+    let selected = 'commits', selectionRevision = 0, selectionTarget = null;
     const hasView = id => ['commits', 'changes', 'tasks'].includes(id) || documents.list().documents.some(doc => doc.id === id);
-    const select = id => {
+    const select = (id, notify = false) => {
       if (!hasView(id)) throw new Error('Unknown view');
       selected = id;
-      selectionRevision++;
+      if (notify) { selectionTarget = id; selectionRevision++; }
       return { selected, selectionRevision };
     };
     let register, targetSerial = Promise.resolve();
@@ -295,6 +295,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         return batch;
       },
       navigate: body => select(body.id),
+      select: body => select(body.id, true),
       acknowledge: body => documents.acknowledge(body),
       open: async (body = {}) => {
         if (!reviewUrl) throw new Error('Hub review is not ready');
@@ -344,7 +345,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         targetSerial = update.catch(() => {});
         return update;
       },
-      status: async () => ({ workspace: identity.root, repoName, ...(identity.session ? { session: identity.session } : {}), ...(effectiveTitle() ? { title: effectiveTitle() } : {}), ...(currentTarget.rev ? { target: currentTarget.rev.input } : {}), ...(currentTarget.base ? { base: currentTarget.base.input } : {}), instance, selected, selectionRevision, ...(reviewUrl ? { url: reviewUrl } : {}), available: await isAvailable() }),
+      status: async () => ({ workspace: identity.root, repoName, ...(identity.session ? { session: identity.session } : {}), ...(effectiveTitle() ? { title: effectiveTitle() } : {}), ...(currentTarget.rev ? { target: currentTarget.rev.input } : {}), ...(currentTarget.base ? { base: currentTarget.base.input } : {}), instance, selected, selectionRevision, selectionTarget, ...(reviewUrl ? { url: reviewUrl } : {}), available: await isAvailable() }),
       snapshot: ({ force, knownVersion }) => jj.snapshot({ force: force === true, knownVersion }),
       diffFiles: body => jj.diffFiles(body),
       describe: body => jj.describe(body),

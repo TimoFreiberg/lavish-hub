@@ -238,7 +238,7 @@ function renderNav() {
   for (const b of existing.values()) b.remove();
   if (focused?.isConnected && document.activeElement !== focused) focused.focus();
 }
-let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0, pendingOwnerNavigation = 0;
+let navigationRevision = 0, leavingConfirmed = false, navigationPending = false, editRevision = 0;
 let lastSelectionRevision = null;
 let ownerNavigation = Promise.resolve(), refreshPaused = false, refreshPauseRevision = 0, navigationUncertain = false, leaveTimer;
 const seenDocs = new Map();
@@ -252,7 +252,7 @@ function showToast(id, label) {
   const dismiss = button('×', hideToast); dismiss.setAttribute('aria-label', 'Dismiss notification');
   toast.append(open, dismiss); toast.hidden = false; toastTimer = setTimeout(hideToast, 6000);
 }
-function noteUpdates(state, list, navigationAtStart, navigationPendingAtStart) {
+function noteUpdates(state, list) {
   let notice;
   for (const doc of list) {
     const previous = seenDocs.get(doc.id);
@@ -262,9 +262,10 @@ function noteUpdates(state, list, navigationAtStart, navigationPendingAtStart) {
     }
     seenDocs.set(doc.id, { version: doc.version, attention: Boolean(doc.attention) });
   }
-  if (notificationBaseline && !notice && !navigationPendingAtStart && !pendingOwnerNavigation && !navigationPending && navigationAtStart === navigationRevision && state.selectionRevision > lastSelectionRevision && state.selected && state.selected !== selected) {
-    const title = labelFor(state.selected) || list.find(doc => doc.id === state.selected)?.title || state.selected;
-    notice = { id: state.selected, label: `Selected: ${title}` };
+  const selectionTarget = state.selectionTarget ?? state.selected;
+  if (notificationBaseline && !notice && !leavingConfirmed && state.selectionRevision > lastSelectionRevision && selectionTarget && selectionTarget !== selected) {
+    const title = labelFor(selectionTarget) || list.find(doc => doc.id === selectionTarget)?.title || selectionTarget;
+    notice = { id: selectionTarget, label: `Selected: ${title}` };
   }
   if (typeof state.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? state.selectionRevision, state.selectionRevision);
   notificationBaseline = true;
@@ -309,7 +310,10 @@ document.addEventListener('visibilitychange', () => {
 function leavePage(url) {
   pauseRefresh(); leavingConfirmed = true;
   const useNavigateFrame = Boolean(globalThis.lavish?.navigateFrame && window.self !== window.top);
-  if (!window.navigation || useNavigateFrame) leaveTimer = setTimeout(() => { leavingConfirmed = false; navigationUncertain = true; status(connectionStatus); resumeRefresh(); }, 1000);
+  if (!window.navigation || useNavigateFrame) leaveTimer = setTimeout(() => {
+    leavingConfirmed = false; navigationUncertain = true; status(connectionStatus); resumeRefresh();
+    if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
+  }, 1000);
   if (useNavigateFrame) globalThis.lavish.navigateFrame(url);
   else location.replace(url);
 }
@@ -320,12 +324,8 @@ window.navigation?.addEventListener('navigate', event => {
 });
 window.addEventListener('pageshow', event => { if (event.persisted) { navigationUncertain = false; status(connectionStatus); resumeRefresh(); } });
 function synchronizeNavigation(id) {
-  pendingOwnerNavigation++;
-  const request = ownerNavigation.then(() => action('navigate', { id })).then(result => {
-    if (typeof result?.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? result.selectionRevision, result.selectionRevision);
-    return result;
-  });
-  ownerNavigation = request.catch(() => {}).finally(() => { pendingOwnerNavigation--; });
+  const request = ownerNavigation.then(() => action('navigate', { id }));
+  ownerNavigation = request.catch(() => {});
   return request;
 }
 for (const type of ['input', 'change']) document.addEventListener(type, event => { if (event.isTrusted) editRevision++; }, true);
@@ -395,8 +395,9 @@ async function select(id, { hash = '', fromPopstate = false } = {}) {
   }
 }
 function handleUrlChange({ view, hash = '' }) {
+  if (leavingConfirmed) { queuedUrlChange = { view, hash }; return; }
   lastReplaceUrl = null;
-  if ((!rendered || navigationPending) && !leavingConfirmed) { queuedUrlChange = { view, hash }; return; }
+  if (!rendered || navigationPending) { queuedUrlChange = { view, hash }; return; }
   const target = labelFor(view) || documents.some(doc => doc.id === view) ? view : selected;
   syncUrl({ view: target, hash, mode: 'replace' });
   if (target !== selected) select(target, { fromPopstate: true, hash });
@@ -435,7 +436,7 @@ async function refresh(force = false) {
   busy = true;
   // This run honours the owed follow-up; anything asked for while it runs is queued again.
   refreshRequested = false;
-  const navigationAtStart = navigationRevision, navigationPendingAtStart = pendingOwnerNavigation > 0;
+  const navigationAtStart = navigationRevision;
   let pauseRevision;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
@@ -467,8 +468,8 @@ async function refresh(force = false) {
       if (Object.hasOwn(labels, candidate) || documents.some(doc => doc.id === candidate)) requestedInitialView = candidate;
     }
     const targetSelection = requestedInitialView || state.selected;
-    if (!rendered && targetSelection && !navigationPending && !pendingOwnerNavigation && !navigationPendingAtStart && navigationAtStart === navigationRevision) selected = targetSelection;
-    noteUpdates(state, documents, navigationAtStart, navigationPendingAtStart);
+    if (!rendered && targetSelection) selected = targetSelection;
+    noteUpdates(state, documents);
     const selectedDoc = documents.find(item => item.id === selected);
     if (!rendered && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
       pauseRevision = pauseRefresh();

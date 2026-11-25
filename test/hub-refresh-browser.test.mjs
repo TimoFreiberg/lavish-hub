@@ -59,6 +59,26 @@ test('URL changes correct stale ready replacements and retry the resolved view',
   assert.deepEqual(await page.evaluate(() => globalThis.updates.at(-1)), { view: 'tasks', hash: '', mode: 'replace' });
 });
 
+test('URL changes are ignored after cross-page navigation is confirmed', { timeout: 30000 }, async t => {
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(() => browser.close());
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  const content = `<div id="app"></div><script>globalThis.hubConfig={url:'http://app.test',capability:'test',workspace:'test'}; globalThis.updates=[]; globalThis.navigations=[]; globalThis.fetch=async (_url,options) => { const {operation,id}=JSON.parse(options.body); if (operation==='navigate') navigations.push(id); const result=operation==='status'?{available:true,selected:'commits'}:operation==='documents'?{documents:[{id:'published',title:'Published',source:'index.html',sibling:'http://example.test/published.html'}]}:operation==='snapshot'?{base:'a'.repeat(40),head:'b'.repeat(40),commits:[]}:{}; return {ok:true,json:async()=>({result})}; }; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'tasks', hash: '#back' } })); globalThis.leavingEventDelivered = true; }};</script><script type="module">${script}</script>`;
+  await page.route('http://app.test/**', route => route.fulfill({ contentType: 'text/html', body: route.request().url().endsWith('/hub.html') ? content : '<iframe id="app-frame" src="/hub.html"></iframe>' }));
+  await page.goto('http://app.test/');
+  const app = page.frameLocator('#app-frame');
+  await app.getByText('No commits in this range.').waitFor();
+  await app.getByRole('button', { name: 'Published' }).click();
+  await page.waitForFunction(() => document.querySelector('#app-frame').contentWindow.leavingEventDelivered === true);
+  assert.deepEqual(await app.locator('#app').evaluate(() => globalThis.navigations), ['published']);
+  assert.deepEqual(await app.locator('#app').evaluate(() => globalThis.updates.at(-1)), { view: 'published', hash: '', mode: 'push' });
+  await page.waitForFunction(() => document.querySelector('#app-frame').contentWindow.updates.at(-1)?.hash === '#back');
+  assert.deepEqual(await app.locator('#app').evaluate(() => globalThis.updates.at(-1)), { view: 'tasks', hash: '#back', mode: 'replace' });
+  await page.waitForFunction(() => document.querySelector('#app-frame').contentWindow.navigations.includes('tasks'));
+  assert.deepEqual(await app.locator('#app').evaluate(() => globalThis.navigations), ['published', 'tasks']);
+});
+
 test('unchanged snapshot polls keep the rendered repository and manual refresh fetches it again', { timeout: 30000 }, async t => {
   const requests = [];
   const fullSnapshot = { version: 'initial', base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] };
