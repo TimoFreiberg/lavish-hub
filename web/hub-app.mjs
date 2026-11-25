@@ -80,7 +80,9 @@ async function requireBundle(name, globalName, view, generation) {
 let selected = 'commits', snapshot, documents = [], busy = false;
 const initialParams = new URLSearchParams(location.search);
 let initialView = initialParams.get('__lavish_hub_view') || initialParams.get('view') || '';
-const workspaceName = config.workspaceName || config.workspace?.split(/[\\/]/).filter(Boolean).pop() || '';
+const repoName = config.repoName || config.workspaceName || config.workspace?.split(/[\\/]/).filter(Boolean).pop() || '';
+let sessionTitle = config.sessionTitle || '';
+const identityName = () => config.session || sessionTitle ? repoName : (config.workspaceName || repoName);
 const frames = new Map();
 let refreshTimer, rendered = false, warmed = false, refreshRequested = false, snapshotForce = false, snapshotRequest = 0, snapshotApplied = 0, snapshotQueued = false, snapshotPreflightFailed = false, snapshotUnrendered = false;
 // Loading is an intent that belongs to a snapshot request, not to whichever refresh
@@ -118,7 +120,7 @@ function formatTabTitle(viewLabel, workspace) {
 }
 function updateTabTitle() {
   const viewLabel = labelFor(selected) || documents.find(doc => doc.id === selected)?.title || selected;
-  const title = formatTabTitle(viewLabel, workspaceName);
+  const title = formatTabTitle(viewLabel, sessionTitle || identityName());
   document.title = title;
   globalThis.lavish?.setDocumentMeta?.({ title });
 }
@@ -365,6 +367,15 @@ async function refresh(force = false) {
     // several jj runs, so only the warm attempt asked for in the background keeps going;
     // a refresh that is no longer being watched leaves it to the visibility catch-up.
     if (tabHidden && !warm) return;
+    const nextTitle = state.title || '';
+    if (nextTitle !== sessionTitle) {
+      sessionTitle = nextTitle;
+      const title = document.querySelector('.hub-session-title');
+      title.textContent = sessionTitle;
+      title.hidden = !sessionTitle;
+      document.querySelector('.hub-repo-name').textContent = identityName();
+      updateTabTitle();
+    }
     let oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSelectedDoc = JSON.stringify(documents.find(item => item.id === selected) || null);
     const oldSnapshot = snapshot, snapshotWasLoading = snapshotLoading();
     documents = list.documents;
@@ -526,8 +537,8 @@ async function renderView(focusChangeId) {
     view.append(bar);
     if (!(await requireBundle('diff', 'mountLavishDiff', view, generation))) return;
     view.append(diffContainer);
-    if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, loadDiffFiles: (operationId, fileIndex) => action('diffFiles', { operationId, fileIndex }) });
-    diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, kind: 'jj', to: snapshot.head });
+    if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, loadDiffFiles: (operationId, fileIndex, version) => action('diffFiles', { operationId, fileIndex, version }) });
+    diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, snapshotVersion: snapshot.version, kind: 'jj', to: snapshot.head });
     return;
   }
   view.append(el('h1', labelFor(id) || documents.find(doc => doc.id === id)?.title || id));
@@ -682,7 +693,11 @@ async function renderView(focusChangeId) {
   } else view.append(area, save);
   view.append(info);
 }
-app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><span id="hub-nav-desc-attention" hidden>Needs attention</span><span id="hub-nav-desc-new" hidden>New publication</span><nav id="navigation" aria-label="Workspace views"></nav><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
+app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><span id="hub-nav-desc-attention" hidden>Needs attention</span><span id="hub-nav-desc-new" hidden>New publication</span><div class="hub-sidebar"><div class="hub-identity"><div class="hub-session-title"></div><div class="hub-repo-name"></div></div><nav id="navigation" aria-label="Workspace views"></nav></div><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
 document.querySelector('#workspace').textContent = config.workspace;
+const titleElement = document.querySelector('.hub-session-title');
+titleElement.textContent = sessionTitle;
+titleElement.hidden = !sessionTitle;
+document.querySelector('.hub-repo-name').textContent = identityName();
 document.querySelector('#refresh').addEventListener('click', () => refresh(true));
 refresh();

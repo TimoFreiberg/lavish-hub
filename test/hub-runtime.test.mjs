@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveWorkspace, resolveHubSession } from '../src/hub-workspace.mjs';
+import { prepareTargetRequest } from '../src/hub-runtime.mjs';
 import { chromium } from 'playwright-core';
 import { modelPatch } from '../src/diff/model.mjs';
 import express from 'express';
@@ -79,6 +80,13 @@ test('concurrent repo-scoped sessions run independently against the same primary
   assert.equal((await a.request('status')).session, 'one');
   assert.equal((await b.request('status')).session, 'two');
   assert.deepEqual(new Set(f.labels.values()), new Set(['First session · repo', 'Second session · repo']));
+  const source = path.join(f.dir, 'review.html');
+  await writeFile(source, '<p>Review</p>');
+  const published = await a.request('publish', { id: 'review', file: source });
+  const doc = (await a.request('documents')).documents.find(item => item.id === 'review');
+  assert.ok(published); assert.ok(doc.sibling);
+  const html = await readFile(path.join(a.identity.directory, doc.sibling), 'utf8');
+  assert.match(html, /<div class="hub-identity"><div class="hub-session-title">First session<\/div><div class="hub-repo-name">repo<\/div><\/div><nav aria-label="Hub navigation">/);
   assert.match((await f.run(['status', '--session', 'one'], f.child)).stdout, /session: one/);
   assert.match((await f.run(['status', '--session', 'two'], f.repo)).stdout, /session: two/);
   await a.stop(); await b.stop();
@@ -102,8 +110,31 @@ test('session startup rejects target discovery against a replacement repository'
   assert.equal(operation(), before);
 });
 
+test('working-copy target preparation and startup reject a replaced child checkout', async t => {
+  const f = await sessionFixture(t), original = await f.start(f.child);
+  await original.stop();
+  await rename(f.child, path.join(f.dir, 'old-child'));
+  await mkdir(f.child); execFileSync('jj', ['git', 'init'], { cwd: f.child, stdio: 'ignore' });
+  await writeFile(path.join(f.child, 'untracked'), 'must not be snapshotted');
+  const op = () => execFileSync('jj', ['--ignore-working-copy', 'op', 'log', '-n', '1', '--no-graph', '-T', 'id'], { cwd: f.child, encoding: 'utf8' });
+  const before = op();
+  const binary = execFileSync('which', ['jj'], { encoding: 'utf8' }).trim();
+  const stub = path.join(f.dir, 'bin'), calls = path.join(f.dir, 'jj-calls');
+  await mkdir(stub);
+  await writeFile(path.join(stub, 'jj'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nexec '${binary}' "$@"\n`, { mode: 0o700 });
+  const oldPath = process.env.PATH;
+  process.env.PATH = f.env.PATH = `${stub}${path.delimiter}${oldPath}`;
+  t.after(() => { process.env.PATH = oldPath; });
+  for (const key of ['rev', 'base']) {
+    await assert.rejects(prepareTargetRequest({ workspace: f.child, env: f.env, [key]: '@' }), /unavailable or has changed/);
+    await assert.rejects(f.start(f.child, null, null, { [key]: '@' }), /unavailable or has changed/);
+    assert.equal(op(), before);
+  }
+  assert.doesNotMatch(await readFile(calls, 'utf8'), /^log /m);
+});
+
 test('repo-scoped session persists discovered target across restart', async t => {
-  const f = await sessionFixture(t), a = await f.start(f.child, 'persist', 'Persistence');
+  const f = await sessionFixture(t), a = await f.start(f.child, 'persist', 'Persistence', { base: 'root()' });
   const initial = await a.request('status');
   assert.ok(initial.target);
   const targetFile = path.join(a.identity.directory, 'target.json');
@@ -112,7 +143,9 @@ test('repo-scoped session persists discovered target across restart', async t =>
   await a.stop();
   execFileSync('jj', ['new'], { cwd: f.child, stdio: 'ignore' });
   const restarted = await f.start(f.child, 'persist', 'Persistence');
-  assert.equal((await restarted.request('status')).target, initial.target);
+  const status = await restarted.request('status');
+  assert.equal(status.target, initial.target);
+  assert.equal(initial.base, 'root()'); assert.equal(status.base, initial.base);
   assert.deepEqual(JSON.parse(await readFile(targetFile, 'utf8')), saved);
   await restarted.stop();
   await writeFile(targetFile, JSON.stringify({ rev: { input: '@', revset: '@', kind: 'revset' } }));
@@ -121,16 +154,27 @@ test('repo-scoped session persists discovered target across restart', async t =>
 
 test('lavish-hub target retargets active session and preserves or updates base and title', async t => {
   const f = await sessionFixture(t), a = await f.start(f.child, 'target', 'Original');
+  const initial = await a.request('status');
   const before = await a.request('snapshot');
-  await f.run(['target', '@-', '--base', 'root()', '--title', 'Updated', '--session', 'target'], f.child);
+  const source = path.join(f.dir, 'target-review.html');
+  await writeFile(source, '<p>Review</p>');
+  await a.request('publish', { id: 'review', file: source });
+  const sibling = (await a.request('documents')).documents.find(doc => doc.id === 'review').sibling;
+  await f.run(['target', '@', '--base', 'root()', '--title', 'Updated', '--session', 'target'], f.child);
   const status = await a.request('status');
   assert.equal(status.title, 'Updated'); assert.equal(status.base, 'root()');
+  assert.notEqual(status.target, initial.target);
+  assert.match(await readFile(path.join(a.identity.directory, sibling), 'utf8'), /hub-session-title">Updated<\/div>/);
   assert.ok([...f.labels.values()].includes('Updated · repo'));
   const after = await a.request('snapshot');
   assert.notEqual(before.version, after.version);
+  await f.run(['target', '@-', '--session', 'target'], f.child);
+  const revOnly = await a.request('status');
+  assert.notEqual(revOnly.target, status.target);
+  assert.equal(revOnly.base, status.base); assert.equal(revOnly.title, status.title);
   await f.run(['target', '--no-base', '--session', 'target']);
   const cleared = await a.request('status');
-  assert.equal(cleared.target, status.target); assert.equal(cleared.title, 'Updated'); assert.equal(cleared.base, undefined);
+  assert.equal(cleared.target, revOnly.target); assert.equal(cleared.title, 'Updated'); assert.equal(cleared.base, undefined);
   assert.match(await a.request('target', { rev: { revset: '@' } }, false), /Invalid target request/);
   assert.match(await a.request('target', { rev: '@' }, false), /Working-copy revisions/);
   await a.stop();
@@ -144,6 +188,9 @@ test('detaching a workspace-bound hub survives deleting the temporary workspace 
   await a.request('publish', { id: 'inside', file: inside });
   await a.request('publish', { id: 'outside', file: outside });
   await a.request('publish', { id: 'html', file: html });
+  const sibling = (await a.request('documents')).documents.find(doc => doc.id === 'html').sibling;
+  assert.match(await readFile(path.join(a.identity.directory, sibling), 'utf8'), /hub-repo-name">child<\/div>/);
+  assert.match(await readFile(path.join(a.identity.directory, 'hub.html'), 'utf8'), /<title>Workspace hub · child<\/title>/);
   const inDoc = await a.request('readDocument', { id: 'inside' });
   await f.run(['target', '@', '--base', 'main', '--workspace', f.child]);
   await rm(f.child, { recursive: true, force: true });

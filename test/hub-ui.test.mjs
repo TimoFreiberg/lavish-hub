@@ -21,6 +21,33 @@ async function assertEditButton(button, label) {
   await button.press('Enter');
 }
 
+test('sidebar uses workspace name until a session title is set', { timeout: 30000 }, async t => {
+  let title = '';
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits', title }), documents: () => ({ documents: [] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '', patch: '', commits: [] }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace/child', workspaceName: 'child', repoName: 'repo' })}; globalThis.lavish={setDocumentMeta: value => { globalThis.metaTitle=value.title; }};</script><script type="module">${script}</script>`);
+  await page.getByRole('heading', { name: 'Commits' }).waitFor();
+  assert.equal(await page.locator('.hub-repo-name').textContent(), 'child');
+  assert.equal(await page.locator('.hub-session-title').isVisible(), false);
+  await page.waitForFunction(() => document.title === 'Commits · child');
+  title = 'Review one';
+  await page.waitForFunction(() => document.querySelector('.hub-session-title').textContent === 'Review one');
+  assert.equal(await page.locator('.hub-session-title').isVisible(), true);
+  assert.equal(await page.locator('.hub-repo-name').textContent(), 'repo');
+  assert.equal(await page.title(), 'Commits · Review one');
+  assert.equal(await page.evaluate(() => globalThis.metaTitle), 'Commits · Review one');
+  title = '';
+  await page.waitForFunction(() => document.title === 'Commits · child');
+  assert.equal(await page.locator('.hub-repo-name').textContent(), 'child');
+  assert.equal(await page.locator('.hub-session-title').isVisible(), false);
+});
+
 test('published Markdown previews relative assets and retains conflicting edits', { timeout: 120000 }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-markdown-'));
   const source = path.join(dir, 'review.md');
