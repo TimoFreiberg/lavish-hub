@@ -86,19 +86,21 @@ function siblingSidebarClient(c) {
     if (!feedback.hasAttribute('data-error')) feedback.textContent = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : '';
     if (!polling) timer = setTimeout(refresh, 0);
   }
-  function leave(url, id) {
+  function leave(url) {
     pause(); leaving = true;
-    if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; resume(); }, 1000);
-    location.replace(url);
+    const useNavigateFrame = Boolean(globalThis.lavish?.navigateFrame && window.self !== window.top);
+    if (!window.navigation || useNavigateFrame) leaveTimer = setTimeout(() => { leaving = false; navigationUncertain = true; resume(); }, 1000);
+    if (useNavigateFrame) globalThis.lavish.navigateFrame(url);
+    else location.replace(url);
   }
   function applyUpdate(update) {
     if (update.samePage) {
       pause(); leaving = true;
       if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; resume(); }, 1000);
       location.reload();
-    } else leave(update.dest, c.id);
+    } else leave(update.dest);
   }
-  const docUrl = (doc, id = doc?.id, hash = '') => new URL((doc?.source?.toLowerCase().endsWith('.html') ? doc.sibling : 'hub.html?__lavish_hub_view=' + encodeURIComponent(id)) + hash, location.href);
+  const docUrl = (doc, id = doc?.id) => new URL(doc?.source?.toLowerCase().endsWith('.html') ? doc.sibling : 'hub.html?__lavish_hub_view=' + encodeURIComponent(id), location.href);
   const canAutoReload = generation => (generation === undefined || generation === navGeneration) && !navigating && !leaving && !navigationUncertain && !feedback.hasAttribute('data-error');
   function maybeApplyPendingUpdate(generation) {
     if (!pendingUpdate || dirty || !canAutoReload(generation)) return false;
@@ -178,21 +180,21 @@ function siblingSidebarClient(c) {
     action('acknowledge', { id: c.id, version: c.version }, AbortSignal.timeout(10000)).then(() => { acknowledged = true; }, () => {}).finally(() => { ackPending = false; });
   };
   if (readyToAck()) acknowledgeCurrent(); else document.addEventListener('DOMContentLoaded', acknowledgeCurrent, { once: true });
-  async function navigateTo(id, targetUrl, labelText, fromPopstate = false, hash = '') {
+  async function navigateTo(id, targetUrl, labelText, fromPopstate = false) {
     if (navigating || leaving) return;
     syncDirty(); navigating = true; pause(); navGeneration++;
     feedback.removeAttribute('data-error'); feedback.textContent = 'Opening ' + labelText + '…'; nav.setAttribute('aria-busy', 'true');
     try {
       let approved = false, approvedEdits = edits;
       if (dirty) { approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'); if (!approved) return; }
-      await action('navigate', { id }, AbortSignal.timeout(10000));
-      action('status', {}, AbortSignal.timeout(10000)).then(state => { if (state.selected === id && typeof state.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? state.selectionRevision, state.selectionRevision); }).catch(() => {});
+      const result = await action('navigate', { id }, AbortSignal.timeout(10000));
+      if (typeof result?.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? result.selectionRevision, result.selectionRevision);
       syncDirty();
       if ((!approved || approvedEdits !== edits) && dirty && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'))) return;
       if (queuedUrlChange) return;
       navigationUncertain = false;
-      if (!fromPopstate) syncUrl({ view: id, hash, mode: 'push' });
-      leave(targetUrl, id);
+      if (!fromPopstate) syncUrl({ view: id, hash: '', mode: 'push' });
+      leave(targetUrl);
     } catch { feedback.dataset.error = ''; feedback.textContent = 'Could not open ' + labelText + '. Select it again to retry.'; }
     finally {
       navigating = false;
@@ -213,11 +215,11 @@ function siblingSidebarClient(c) {
   });
   function handleUrlChange({ view, hash = '' }) {
     if (navigating && !leaving) { queuedUrlChange = { view, hash }; return; }
-    if (!view || view === c.id) { currentHash = hash; replaceFrameHash(hash); scrollToFragment(hash); return; }
+    if (!view || view === c.id) { syncUrl({ view: c.id, hash, mode: 'replace' }); currentHash = hash; replaceFrameHash(hash); scrollToFragment(hash); return; }
     const a = [...nav.querySelectorAll('a[data-hub-id]')].find(link => link.dataset.hubId === view);
     const target = a ? new URL(a.href) : docUrl(null, view);
     target.hash = hash;
-    navigateTo(view, target.href, a?.querySelector('.nav-label')?.textContent || view, true, hash);
+    navigateTo(view, target.href, a?.querySelector('.nav-label')?.textContent || view, true);
   }
   window.addEventListener('lavish:urlChange', e => handleUrlChange(e.detail));
   window.addEventListener('popstate', () => { if (window.self === window.top && !globalThis.lavish?.syncUrl) handleUrlChange({ view: new URLSearchParams(location.search).get('view') || '', hash: location.hash }); });

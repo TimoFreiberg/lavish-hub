@@ -129,7 +129,7 @@ for (const type of ['wheel', 'pointerdown', 'keydown', 'touchstart']) document.a
 document.addEventListener('click', event => {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const link = event.target.closest?.('#view a[href^="#"]');
-  if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
+  if (!link || link.closest('[data-lavish-action],[data-lavish-ui]') || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
   const hash = link.getAttribute('href'); event.preventDefault(); pendingHash = hash; currentViewHash = hash;
   replaceFrameHash(hash); syncUrl({ view: selected, hash, mode: 'push' }); scrollToFragment(hash);
 });
@@ -306,10 +306,12 @@ document.addEventListener('visibilitychange', () => {
   if (busy) { queueRefresh(); return; }
   refresh();
 });
-function leavePage(url, id) {
+function leavePage(url) {
   pauseRefresh(); leavingConfirmed = true;
-  if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; status(connectionStatus); resumeRefresh(); }, 1000);
-  location.replace(url);
+  const useNavigateFrame = Boolean(globalThis.lavish?.navigateFrame && window.self !== window.top);
+  if (!window.navigation || useNavigateFrame) leaveTimer = setTimeout(() => { leavingConfirmed = false; navigationUncertain = true; status(connectionStatus); resumeRefresh(); }, 1000);
+  if (useNavigateFrame) globalThis.lavish.navigateFrame(url);
+  else location.replace(url);
 }
 window.navigation?.addEventListener('navigate', event => {
   if (leavingConfirmed) event.signal.addEventListener('abort', () => {
@@ -320,7 +322,7 @@ window.addEventListener('pageshow', event => { if (event.persisted) { navigation
 function synchronizeNavigation(id) {
   pendingOwnerNavigation++;
   const request = ownerNavigation.then(() => action('navigate', { id })).then(result => {
-    action('status').then(state => { if (state.selected === id && typeof state.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? state.selectionRevision, state.selectionRevision); }).catch(() => {});
+    if (typeof result?.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? result.selectionRevision, result.selectionRevision);
     return result;
   });
   ownerNavigation = request.catch(() => {}).finally(() => { pendingOwnerNavigation--; });
@@ -333,11 +335,11 @@ function hasUnsavedDrafts() {
 window.addEventListener('beforeunload', event => {
   if (!leavingConfirmed && hasUnsavedDrafts()) { event.preventDefault(); event.returnValue = ''; }
 });
-async function select(id, { historyMode = 'push', hash = '', fromPopstate = false } = {}) {
+async function select(id, { hash = '', fromPopstate = false } = {}) {
   const currentHash = currentViewHash;
   const doc = documents.find(item => item.id === id);
   const leavesPage = doc?.sibling && doc.source?.toLowerCase().endsWith('.html');
-  if (navigationPending) return;
+  if (navigationPending || leavingConfirmed) return;
   navigationError = ''; status(connectionStatus);
   navigationPending = true;
   if (leavesPage) pauseRefresh();
@@ -350,7 +352,7 @@ async function select(id, { historyMode = 'push', hash = '', fromPopstate = fals
     }
     if (!leavesPage) {
       selected = id; currentViewHash = hash; pendingHash = hash || (fromPopstate ? '' : null); replaceFrameHash(hash);
-      if (!fromPopstate) syncUrl({ view: id, hash, mode: historyMode });
+      if (!fromPopstate) syncUrl({ view: id, hash, mode: 'push' });
       renderNav();
       // A stale snapshot keeps rendering, but the view marks it as refreshing until
       // the request below replaces it, and a missing one shows its loading state.
@@ -371,17 +373,15 @@ async function select(id, { historyMode = 'push', hash = '', fromPopstate = fals
     }
     await synchronizeNavigation(id);
     if (revision !== navigationRevision) return;
-    if (leavesPage) {
-      if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
-      const modeEditRevision = editRevision;
-      if (modeView && startsInExplore(modeView)) await globalThis.lavish?.setAnnotationMode?.(true);
-      if (revision !== navigationRevision) return;
-      if (modeEditRevision !== editRevision && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
-      if (queuedUrlChange) return;
-      navigationUncertain = false; status(connectionStatus);
-      if (!fromPopstate) syncUrl({ view: id, hash, mode: historyMode });
-      leavePage(new URL(doc.sibling + hash, location.href).href, id); return;
-    }
+    if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
+    const modeEditRevision = editRevision;
+    if (modeView && startsInExplore(modeView)) await globalThis.lavish?.setAnnotationMode?.(true);
+    if (revision !== navigationRevision) return;
+    if (modeEditRevision !== editRevision && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
+    if (queuedUrlChange) return;
+    navigationUncertain = false; status(connectionStatus);
+    if (!fromPopstate) syncUrl({ view: id, hash, mode: 'push' });
+    leavePage(new URL(doc.sibling + hash, location.href).href); return;
   } catch (error) { if (revision === navigationRevision) { navigationError = error.message; status(connectionStatus); } }
   finally {
     if (revision === navigationRevision) {
@@ -398,6 +398,7 @@ function handleUrlChange({ view, hash = '' }) {
   lastReplaceUrl = null;
   if ((!rendered || navigationPending) && !leavingConfirmed) { queuedUrlChange = { view, hash }; return; }
   const target = labelFor(view) || documents.some(doc => doc.id === view) ? view : selected;
+  syncUrl({ view: target, hash, mode: 'replace' });
   if (target !== selected) select(target, { fromPopstate: true, hash });
   else { currentViewHash = hash; pendingHash = hash; replaceFrameHash(hash); scrollToFragment(hash); }
 }
@@ -472,12 +473,10 @@ async function refresh(force = false) {
     if (!rendered && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
       pauseRevision = pauseRefresh();
       if (requestedInitialView && requestedInitialView !== state.selected) await action('navigate', { id: requestedInitialView }).catch(() => {});
-      if (modeView && startsInExplore(modeView)) await globalThis.lavish?.setAnnotationMode?.(true);
-      if (!rendered && queuedUrlChange) { selected = oldSelected; if (pauseRevision === refreshPauseRevision) resumeRefresh(); return; }
-      if (navigationAtStart !== navigationRevision || navigationPending || pendingOwnerNavigation || hasUnsavedDrafts()) { selected = navigationAtStart === navigationRevision ? oldSelected : selected; if (pauseRevision === refreshPauseRevision) resumeRefresh(); return; }
-      if (!rendered) syncUrl({ view: selectedDoc.id, hash: pendingHash || '', mode: 'replace' });
+      if (queuedUrlChange) { selected = oldSelected; if (pauseRevision === refreshPauseRevision) resumeRefresh(); return; }
+      syncUrl({ view: selectedDoc.id, hash: pendingHash || '', mode: 'replace' });
       selected = oldSelected;
-      leavePage(new URL(selectedDoc.sibling + (pendingHash || ''), location.href).href, selectedDoc.id); return;
+      leavePage(new URL(selectedDoc.sibling + (pendingHash || ''), location.href).href); return;
     }
     if (!rendered && requestedInitialView && requestedInitialView !== state.selected) synchronizeNavigation(requestedInitialView).catch(() => {});
     // Ask for the snapshot only on the views that render it, and only for the

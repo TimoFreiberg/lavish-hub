@@ -67,7 +67,7 @@ before(async () => {
   ownerExit = new Promise(resolve => owner.once('exit', resolve));
   connection = await until(async () => { try { return JSON.parse(await readFile(runtime, 'utf8')); } catch { return null; } }, 'owner');
   const md = path.join(dir, 'note.md'), html = path.join(dir, 'review.html');
-  await writeFile(md, '# Note\n\n[Go to section](#section)\n\n' + 'Paragraph of text.\n\n'.repeat(100) + '## Section\n\nTarget.\n\n' + 'More text.\n\n'.repeat(80));
+  await writeFile(md, '# Note\n\n[Go to section](#section)\n\n' + 'Paragraph of text.\n\n'.repeat(100) + '```js\nconst example = 42;\n```\n\n## Section\n\nTarget.\n\n' + 'More text.\n\n'.repeat(80));
   await writeFile(html, '<!doctype html><html><head><title>Review</title><base href="./"></head><body><h1>Review page</h1><a href="#section">Go to section</a><input aria-label="Frame draft"><div style="height:1800px"></div><h2 id="section">Section</h2><div style="height:1200px"></div></body></html>');
   await run(process.execPath, [cli, 'publish', md, '--id', 'note', '--title', 'Note', '--workspace', repo]);
   await run(process.execPath, [cli, 'publish', html, '--id', 'review', '--title', 'Review', '--workspace', repo]);
@@ -108,6 +108,9 @@ test('browser Back and Forward step once per view across hub.html, Markdown, HTM
 
 test('direct ?view=ID#fragment link opens Markdown and published HTML siblings and scrolls to target without scroll-restore clobber', { timeout: 60000 }, async t => {
   const page = await browser.newPage(); t.after(() => page.close());
+  await open(page, '?view=review'); await current(page, 'review'); await ready(page, 'review');
+  await frame(page).locator('body').evaluate(() => window.scrollTo(0, 300));
+  await until(() => page.evaluate(() => Object.keys(sessionStorage).some(key => key.startsWith('lavish-axi:review-state:') && JSON.parse(sessionStorage.getItem(key)).pages?.some(record => record.scroll.y === 300))), 'saved non-fragment scroll');
   for (const id of ['note', 'review']) { await open(page, `?view=${id}#section`); await current(page, id, '#section'); await targetVisible(page); await page.reload(); await current(page, id, '#section'); await targetVisible(page); }
 });
 
@@ -132,4 +135,16 @@ test('Back/Forward across hub.html and HTML sibling prompts when dirty and resto
   await frame(page).getByRole('dialog', { name: 'Leave with unsaved edits?' }).getByRole('button', { name: 'Keep editing' }).click({ timeout: 8000 });
   await current(page, 'review');
   assert.equal(await frame(page).getByRole('textbox', { name: 'Frame draft' }).inputValue(), 'Unsaved');
+});
+
+test('Back from a dirty hub draft to a sibling prompts and preserves the draft on cancel', { timeout: 60000 }, async t => {
+  const page = await browser.newPage(); t.after(() => page.close()); await open(page, '?view=review'); await current(page, 'review'); await ready(page, 'review');
+  await select(page, 'Tasks', 'tasks');
+  await frame(page).getByRole('button', { name: 'Edit Tasks Markdown' }).click();
+  const editor = frame(page).getByRole('textbox', { name: 'Tasks Markdown' });
+  await editor.fill('Unsaved hub draft');
+  await page.evaluate(() => history.back());
+  await frame(page).getByRole('dialog', { name: 'Leave with unsaved edits?' }).getByRole('button', { name: 'Keep editing' }).click({ timeout: 8000 });
+  await current(page, 'tasks');
+  assert.equal(await editor.inputValue(), 'Unsaved hub draft');
 });

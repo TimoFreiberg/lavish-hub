@@ -224,9 +224,12 @@ async function createChromeHarness({
       addEventListener(type, handler) {
         listeners.set(type, handler);
       },
+      removeEventListener(type, handler) {
+        if (listeners.get(type) === handler) listeners.delete(type);
+      },
       dispatch(type, event = {}) {
         const handler = listeners.get(type);
-        if (handler) handler(event);
+        if (handler) { event.currentTarget = this; handler(event); }
       },
       querySelectorAll(selector) {
         if (id === "queuedLog" && selector === ".queued-remove") {
@@ -351,6 +354,17 @@ async function createChromeHarness({
 
   element("lavish-session").textContent = JSON.stringify(sessionData);
   const frame = element("artifact");
+  frame.sandbox = "allow-scripts allow-forms";
+  const frameParent = element("frame-parent");
+  frameParent.appendChild(frame);
+  frame.cloneNode = () => {
+    const clone = element("artifact-clone");
+    clone.id = frame.id;
+    clone.sandbox = frame.sandbox;
+    clone.dataset = { ...frame.dataset };
+    clone.contentWindow = { postMessage() {} };
+    return clone;
+  };
   frame.dataset.artifactSrc = artifactSrc;
   const frameLocation = {
     href: artifactSrc,
@@ -608,6 +622,7 @@ async function createChromeHarness({
   return {
     element,
     frame,
+    currentFrame: () => frameParent.children[0],
     location,
     historyCalls,
     postedToFrame,
@@ -8124,6 +8139,18 @@ test("chrome-client validates view, sanitizes hash on lavish:syncUrl, and queues
   chrome.sendFrameMessage({ ...activation, type: "lavish:syncUrl", view: "foreign", mode: "push" });
   for (const handler of chrome.messageHandlers()) handler({ source: chrome.createForeignWindow().source, data: { ...activation, type: "lavish:syncUrl", view: "foreign", mode: "push" } });
   await send({ type: "lavish:syncUrl", view: "foreign", document_id: "wrong", mode: "push" });
+  const originalFrame = chrome.currentFrame();
+  const originalSrc = originalFrame.src;
+  const originalLoads = chrome.replacedDestinations.length;
+  chrome.sendFrameMessage({ ...activation, type: "lavish:navigateFrame", target: "/artifact/abc/other.html" });
+  for (const handler of chrome.messageHandlers()) handler({ source: chrome.createForeignWindow().source, data: { ...activation, type: "lavish:navigateFrame", target: "/artifact/abc/other.html" } });
+  await send({ type: "lavish:navigateFrame", target: "/artifact/abc/other.html", document_id: "wrong" });
+  for (const target of ["https://evil.test/artifact/abc/other.html", "/artifact/other/other.html", "javascript:alert(1)"]) {
+    await send({ type: "lavish:navigateFrame", target });
+  }
+  assert.equal(chrome.currentFrame(), originalFrame);
+  assert.equal(originalFrame.src, originalSrc);
+  assert.equal(chrome.replacedDestinations.length, originalLoads);
   await send({ type: "lavish:syncUrl", view: "bad view", mode: "push" });
   await send({ type: "lavish:syncUrl", view: "x".repeat(65), mode: "push" });
   assert.equal(chrome.historyCalls.length, 0);
@@ -8137,12 +8164,36 @@ test("chrome-client validates view, sanitizes hash on lavish:syncUrl, and queues
   await send({ type: "lavish:syncUrl", hash: "#" + "x".repeat(511), mode: "push" });
   assert.equal(chrome.historyCalls.length, count);
 
+  await send({ type: "lavish:revisions", revisions: [{ id: "r1", label: "Round 1" }], marks: [] });
+  assert.equal(chrome.element("revisionsWrap").hidden, false);
+  assert.equal(JSON.parse(chrome.storage.get("lavish-axi:destination:abc")).available, true);
+  const previousLoad = originalFrame.listeners.get("load");
+  await send({ type: "lavish:navigateFrame", target: "/artifact/abc/other.html#next" });
+  const next = chrome.currentFrame();
+  assert.notEqual(next, originalFrame);
+  assert.equal(next.id, originalFrame.id);
+  assert.equal(next.sandbox, originalFrame.sandbox);
+  assert.equal(next.src, "/artifact/abc/other.html#next");
+  assert.equal(originalFrame.listeners.has("load"), false);
+  assert.equal(next.listeners.get("load"), previousLoad);
+  assert.equal(chrome.element("revisionsWrap").hidden, true);
+  assert.equal(JSON.parse(chrome.storage.get("lavish-axi:destination:abc")).available, false);
+  await send({ type: "lavish:syncUrl", view: "retired", mode: "push" });
+  assert.equal(chrome.historyCalls.length, count, "retired binding cannot change the URL");
+  previousLoad({ currentTarget: originalFrame });
+  assert.equal(chrome.currentFrame(), next);
+
   const legacy = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html" });
   await flushPromises();
   legacy.location.href = "http://lavish.test/session/abc?view=changes#back";
   legacy.dispatchWindowEvent("popstate");
   const token = legacy.artifactLoadToken();
   assert.ok(token);
+  const legacyFrame = legacy.currentFrame(), legacySrc = legacyFrame.src, legacyLoads = legacy.replacedDestinations.length;
+  legacy.sendFrameMessage({ type: "lavish:navigateFrame", target: "/artifact/abc/other.html", artifact_load_token: token });
+  assert.equal(legacy.currentFrame(), legacyFrame);
+  assert.equal(legacyFrame.src, legacySrc);
+  assert.equal(legacy.replacedDestinations.length, legacyLoads);
   legacy.sendFrameMessage({ type: "lavish:syncUrl", view: "tasks", mode: "replace", artifact_load_token: token });
   assert.equal(legacy.historyCalls.length, 0);
   legacy.sendFrameMessage({ type: "lavish:syncUrl", view: "tasks", mode: "push", artifact_load_token: token });

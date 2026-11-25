@@ -92,9 +92,22 @@ try {
   await hub.locator('.hub-diff [data-file="worker-check.js"]').waitFor({ timeout: 30000 });
   await hub.locator('.hub-diff [data-content] [data-line]').filter({ hasText: 'rendered change' }).waitFor({ timeout: 30000 });
   const hubFrame = page.frameLocator('#artifact').owner();
-  const frame = await (await hubFrame.elementHandle()).contentFrame();
+  let frame = await (await hubFrame.elementHandle()).contentFrame();
   await until(() => assets.filter(item => item.url.endsWith('.js')).length >= 3);
   const cold = assets.filter(item => item.url.endsWith('.js')).slice(-3).map(item => ({ ...item }));
+  await hub.getByRole('button', { name: 'Review', exact: true }).click();
+  await page.frameLocator('#artifact').getByRole('heading', { name: 'Published hub review' }).waitFor({ timeout: 20000 });
+  const warmStart = assets.length;
+  await page.frameLocator('#artifact').getByRole('link', { name: 'Changes', exact: true }).click();
+  await page.frameLocator('#artifact').locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
+  await until(() => assets.slice(warmStart).filter(item => item.url.endsWith('.js')).length >= 2);
+  const warm = assets.slice(warmStart).filter(item => item.url.endsWith('.js'));
+  const evidence = list => list.map(({ url, status, sizes, headers }) => ({ name: new URL(url).pathname.split('/').pop(), status, sizes, cacheControl: headers['cache-control'] }));
+  console.log('Chromium hub asset cold:', JSON.stringify(evidence(cold)));
+  console.log('Chromium hub asset warm:', JSON.stringify(evidence(warm)));
+  // Cross-document hub navigation replaces the iframe, so observe its new
+  // DevTools target on a reload rather than the detached previous target.
+  frame = await (await hubFrame.elementHandle()).contentFrame();
   const cdp = await page.context().newCDPSession(frame);
   await cdp.send('Network.enable');
   const network = new Map();
@@ -107,16 +120,8 @@ try {
   });
   cdp.on('Network.requestServedFromCache', event => { const item = network.get(event.requestId); if (item) item.cache = true; });
   cdp.on('Network.loadingFinished', event => { const item = network.get(event.requestId); if (item) item.transferred = event.encodedDataLength; });
-  await hub.getByRole('button', { name: 'Review', exact: true }).click();
-  await page.frameLocator('#artifact').getByRole('heading', { name: 'Published hub review' }).waitFor({ timeout: 20000 });
-  const warmStart = assets.length;
-  await page.frameLocator('#artifact').getByRole('link', { name: 'Changes', exact: true }).click();
-  await page.frameLocator('#artifact').locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
-  await until(() => assets.slice(warmStart).filter(item => item.url.endsWith('.js')).length >= 2);
-  const warm = assets.slice(warmStart).filter(item => item.url.endsWith('.js'));
-  const evidence = list => list.map(({ url, status, sizes, headers }) => ({ name: new URL(url).pathname.split('/').pop(), status, sizes, cacheControl: headers['cache-control'] }));
-  console.log('Chromium hub asset cold:', JSON.stringify(evidence(cold)));
-  console.log('Chromium hub asset warm:', JSON.stringify(evidence(warm)));
+  await frame.evaluate(() => location.reload());
+  await hub.locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
   await until(() => [...network.values()].filter(item => item.transferred !== undefined).length >= 2);
   const transfers = [...network.values()];
   assert.equal(transfers.length, 2);

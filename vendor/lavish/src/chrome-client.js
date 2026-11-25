@@ -123,7 +123,7 @@ function isModeToggleHotkeyEvent(event) {
   return Boolean(event.metaKey || event.ctrlKey) && String(event.key || "").toLowerCase() === MODE_TOGGLE_HOTKEY_KEY;
 }
 
-const frame = /** @type {HTMLIFrameElement} */ (document.getElementById("artifact"));
+let frame = /** @type {HTMLIFrameElement} */ (document.getElementById("artifact"));
 const diffCommentOverlay = /** @type {HTMLDivElement} */ (document.getElementById("diffCommentOverlay"));
 let diffAnchorSignature = "[]";
 let diffAnchorGeneration = 0;
@@ -5032,9 +5032,11 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   if (!selectedDestination) return recoverLater();
   let frameDestination = selectedDestination;
   if (useInitialView && pendingInitialView) {
-    const [path, fragment] = selectedDestination.split("#", 2);
+    const hashIndex = selectedDestination.indexOf("#");
+    const path = hashIndex < 0 ? selectedDestination : selectedDestination.slice(0, hashIndex);
+    const fragment = hashIndex < 0 ? "" : selectedDestination.slice(hashIndex);
     const sep = path.includes("?") ? "&" : "?";
-    frameDestination = `${path}${sep}__lavish_hub_view=${encodeURIComponent(pendingInitialView)}${location.hash || (fragment ? `#${fragment}` : "")}`;
+    frameDestination = `${path}${sep}__lavish_hub_view=${encodeURIComponent(pendingInitialView)}${location.hash || fragment}`;
     pendingInitialView = "";
   } else if (location.hash && !frameDestination.includes("#")) {
     frameDestination += location.hash;
@@ -6277,6 +6279,30 @@ function handleArtifactMessage(event, binding = null) {
   }
   if (msg.type === "lavish:documentMeta") applyDocumentMeta(msg);
   if (msg.type === "lavish:syncUrl") syncOuterUrl(msg);
+  if (msg.type === "lavish:navigateFrame" && modernArtifactProtocol && binding) {
+    const destination = typeof msg.target === "string" ? normalizeArtifactDestination(msg.target) : "";
+    if (destination) {
+      // A new browsing context keeps earlier outer history entries from restoring
+      // an old iframe document before the current page can guard its drafts.
+      const previous = frame;
+      const next = /** @type {HTMLIFrameElement} */ (previous.cloneNode(false));
+      next.src = destination;
+      next.addEventListener("load", onArtifactFrameLoad);
+      markDestinationUnavailable();
+      resetRevisionLegend();
+      retireArtifactBinding();
+      latestReadyDocumentId = "";
+      pendingReadyLoadDocumentId = "";
+      if (artifactChallengeAttempt) {
+        clearTimeout(artifactChallengeAttempt.timeout);
+        artifactChallengeAttempt.port.close();
+        artifactChallengeAttempt = null;
+      }
+      frame = next;
+      previous.removeEventListener("load", onArtifactFrameLoad);
+      previous.replaceWith(next);
+    }
+  }
   if (msg.type === "lavish:scroll") {
     setScrollPosition(Number(msg.x) || 0, Number(msg.y) || 0, binding ? binding.page : undefined);
   }
@@ -6903,7 +6929,8 @@ document.addEventListener(
   },
   true,
 );
-frame.addEventListener("load", () => {
+function onArtifactFrameLoad(event) {
+  if (event?.currentTarget && event.currentTarget !== frame) return;
   clearDiffPlacements();
   diffAnchorGeneration++;
   diffAnchorSignature = "[]";
@@ -6940,7 +6967,8 @@ frame.addEventListener("load", () => {
     inlineWhiteboardChannels.delete(whiteboardChannelKey(overlayContext));
     postToFrame({ type: "lavish:suspendWhiteboard", diagramIndex: overlayIndex, page: overlayContext.page });
   }
-});
+}
+frame.addEventListener("load", onArtifactFrameLoad);
 
 if (modernArtifactProtocol) {
   // A top-level reload tears down the child iframe too. Snapshot the already

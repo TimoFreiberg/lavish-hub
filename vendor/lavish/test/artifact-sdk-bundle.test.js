@@ -444,6 +444,7 @@ test("artifact-sdk forwards syncUrl and dispatches lavish:urlChange", () => {
   assert.equal(message.hash, "#notes");
   assert.equal(message.mode, "push");
   assert.equal(message.artifact_load_token, "load-token");
+  assert.equal(sdk.api.navigateFrame, undefined);
   let event;
   sdk.onWindowEvent("lavish:urlChange", (value) => { event = value; });
   sdk.sendChromeMessage({ type: "lavish:urlChange", view: "changes", hash: "#section" });
@@ -793,6 +794,13 @@ test("the protocol-1 SDK sends scoped uploads and authored destinations over its
   const revisions = await revisionsPromise;
   assert.equal(revisions.page, "sub/page.html");
   assert.equal(revisions.document_sequence, 7);
+
+  const navigationPromise = nextPortMessage(channel.port1, "lavish:navigateFrame");
+  sdk.api.navigateFrame("/artifact/abc/sibling.html");
+  const navigation = await navigationPromise;
+  assert.equal(navigation.target, "/artifact/abc/sibling.html");
+  assert.equal(navigation.page, "sub/page.html");
+  assert.equal(navigation.document_sequence, 7);
 
   const destinationPromise = nextPortMessage(channel.port1, "lavish:documentDestination");
   sdk.dispatchWindowEvent("hashchange");

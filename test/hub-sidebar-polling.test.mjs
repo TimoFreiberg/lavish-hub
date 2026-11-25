@@ -149,6 +149,21 @@ test('published HTML stays put on remote selection and shows toast while keeping
   assert.equal(await page.title(), 'Reloaded');
 });
 
+test('published HTML toast auto-dismisses and Open navigates to the selected view', { timeout: 30000 }, async () => {
+  const page = await updatePage(browser);
+  await page.waitForFunction(() => globalThis.__polls >= 1);
+  const toast = page.locator('#lavish-hub-toast');
+  await page.evaluate(() => { globalThis.__selected = 'tasks'; globalThis.__revision++; document.dispatchEvent(new Event('visibilitychange')); });
+  await toast.getByText('Selected: Tasks').waitFor();
+  await toast.waitFor({ state: 'hidden', timeout: 8000 });
+  await page.evaluate(() => { globalThis.__selected = 'changes'; globalThis.__revision++; document.dispatchEvent(new Event('visibilitychange')); });
+  await toast.getByText('Selected: Changes').waitFor();
+  const navigation = page.waitForEvent('framenavigated');
+  await toast.getByRole('button', { name: 'Open' }).click();
+  await navigation;
+  assert.match(page.url(), /hub\.html\?__lavish_hub_view=changes/);
+});
+
 test('published HTML sidebar defers reload while navigation is in flight or failed', { timeout: 30000 }, async t => {
   const page = await updatePage(browser); await page.locator('#draft').fill('unsaved'); await advance(page);
   await page.getByRole('button', { name: 'Reload updated document' }).waitFor();

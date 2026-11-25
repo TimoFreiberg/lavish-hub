@@ -37,6 +37,28 @@ test('navigation renders before snapshot and serializes delayed owner updates', 
   assert.equal(selected, 'commits');
 });
 
+test('URL changes correct stale ready replacements and retry the resolved view', { timeout: 30000 }, async t => {
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits', selectionRevision: 1 }),
+    documents: () => ({ documents: [] }),
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: ({ id }) => ({ selected: id, selectionRevision: 2 }),
+    readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}; globalThis.updates=[]; globalThis.lavish={syncUrl: update => updates.push(update)};</script><script type="module">${script}</script>`);
+  await page.getByText('No commits in this range.').waitFor();
+  await page.evaluate(() => { window.dispatchEvent(new Event('lavish:ready')); window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'tasks', hash: '#top' } })); });
+  await page.getByRole('heading', { name: 'Tasks' }).waitFor();
+  await page.evaluate(() => window.dispatchEvent(new Event('lavish:ready')));
+  assert.deepEqual(await page.evaluate(() => globalThis.updates.slice(-2)), [{ view: 'tasks', hash: '#top', mode: 'replace' }, { view: 'tasks', hash: '#top', mode: 'replace' }]);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'unknown', hash: '' } })));
+  assert.deepEqual(await page.evaluate(() => globalThis.updates.at(-1)), { view: 'tasks', hash: '', mode: 'replace' });
+});
+
 test('unchanged snapshot polls keep the rendered repository and manual refresh fetches it again', { timeout: 30000 }, async t => {
   const requests = [];
   const fullSnapshot = { version: 'initial', base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] };
@@ -101,7 +123,7 @@ test('remote selection or publication does not switch views and shows auto-dismi
     status: () => ({ available: true, selected, selectionRevision: revision }),
     documents: () => ({ documents }),
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
-    navigate: ({ id }) => { selected = id; revision++; return { selected }; },
+    navigate: ({ id }) => { selected = id; revision++; return { selected, selectionRevision: revision }; },
     readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });

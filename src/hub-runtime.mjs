@@ -285,7 +285,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       if (!hasView(id)) throw new Error('Unknown view');
       selected = id;
       selectionRevision++;
-      return { selected };
+      return { selected, selectionRevision };
     };
     let register, targetSerial = Promise.resolve();
     transport = await createHubTransport({

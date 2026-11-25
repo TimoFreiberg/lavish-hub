@@ -2975,6 +2975,11 @@ export function createArtifactSdk(
     postArtifactMessage("lavish:syncUrl", { ...update });
   }
 
+  /** @param {string} target */
+  function navigateFrame(target) {
+    postArtifactMessage("lavish:navigateFrame", { target });
+  }
+
   let annotationRequestId = 0;
   const annotationRequests = new Map();
   /** @type {Window & { lavish?: unknown }} */ (window).lavish = {
@@ -2996,6 +3001,7 @@ export function createArtifactSdk(
     setStatus: (message) => postArtifactMessage("lavish:status", { message: String(message) }),
     setDocumentMeta,
     syncUrl,
+    navigateFrame: transportPort && binding ? navigateFrame : undefined,
     setAnnotationMode: (enabled) => {
       if (typeof enabled !== "boolean") return Promise.resolve(false);
       const requestId = ++annotationRequestId;
