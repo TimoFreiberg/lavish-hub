@@ -717,6 +717,7 @@ export async function serve({
           dom_snapshot: result.dom_snapshot || "",
           snapshot_page: result.snapshot_page ?? null,
           snapshot_page_proof: result.snapshot_page_proof || "",
+          batch_id: result.batch_id,
           prompts,
           ...(result.feedback_batch ? { feedback_batch: result.feedback_batch } : {}),
           ...(Array.isArray(result.artifact_failures) ? { artifact_failures: result.artifact_failures } : {}),
@@ -1376,6 +1377,7 @@ export async function serve({
       app: "lavish-axi",
       version,
       lavish_hub_page_reviews: 1,
+      lavish_hub_batch_replies: 1,
       // The hub page fetches its renderer bundles from the opaque-origin artifact
       // frame, which needs the origin grant on this route. A server of the same
       // release started from an earlier build cannot serve them, and its version
@@ -1469,8 +1471,8 @@ export async function serve({
     }
   });
 
-  async function publishAgentReply(key, text, { requireOpen = false } = {}) {
-    const session = await store.addAgentReply(key, text, { requireOpen });
+  async function publishAgentReply(key, text, { requireOpen = false, batchId = null } = {}) {
+    const session = await store.addAgentReply(key, text, { requireOpen, batchId });
     if (!session || (requireOpen && session.status === "ended")) return session;
     const lastEntry = session.chat?.at(-1);
     const entry = serializeChat([
@@ -1478,9 +1480,11 @@ export async function serve({
     ])[0];
     events.emit("agent-reply", key, entry);
     events.emit("chat-sync", key, session);
-    // The reply concludes the delivered-feedback "working" state. Human sends remain available
-    // while working because the server queues them for the next poll.
-    clearFeedbackDelivery(key, activePolls, deliveredFeedback, events);
+    const pendingBatch = (session.delivered_batches || []).some(
+      (entry) =>
+        entry.delivery_seq !== null && entry.delivery_seq > (Number(session.closed_delivery_seq) || 0) && !entry.replied_at,
+    );
+    if (batchId === null || !pendingBatch) clearFeedbackDelivery(key, activePolls, deliveredFeedback, events);
     return session;
   }
 
@@ -1960,9 +1964,15 @@ export async function serve({
   });
 
   app.post("/api/:key/agent-reply", async (req, res, next) => {
+    const batchId = req.body?.batch_id;
+    if (batchId !== undefined && (typeof batchId !== "string" || !batchId.trim() || batchId.length > 128)) {
+      res.status(400).json({ status: "error", code: "VALIDATION_ERROR", error: "batch_id must be a non-empty string" });
+      return;
+    }
     try {
       const session = await publishAgentReply(req.params.key, String(req.body?.text || ""), {
         requireOpen: true,
+        batchId: batchId ?? null,
       });
       if (!session) {
         res.status(404).json({ error: "session not found" });
@@ -1974,6 +1984,15 @@ export async function serve({
       }
       res.json({ status: "sent" });
     } catch (error) {
+      if (error?.code === "BATCH_NOT_FOUND" || error?.code === "BATCH_ALREADY_REPLIED") {
+        res.status(error.statusCode).json({
+          status: "error",
+          code: error.code,
+          error: error.message,
+          ...(error.repliedAt ? { replied_at: error.repliedAt } : {}),
+        });
+        return;
+      }
       next(error);
     }
   });

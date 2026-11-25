@@ -155,6 +155,7 @@ export class SessionStore {
       // reading the path. Every field this constructor omits is silently dropped, so
       // any new session field must be added here too.
       delivered_attachments: Array.isArray(existing.delivered_attachments) ? existing.delivered_attachments : [],
+      delivered_batches: Array.isArray(existing.delivered_batches) ? existing.delivered_batches : [],
       dom_snapshot: existing.dom_snapshot || "",
       snapshot_page: Object.hasOwn(existing, "snapshot_page") ? normalizeStoredPage(existing.snapshot_page) : null,
       snapshot_page_proof: String(existing.snapshot_page_proof || ""),
@@ -281,8 +282,18 @@ export class SessionStore {
     const deliverySeq = restoring ? normalizeRevision(payload.delivery_seq) : 0;
     const unstamped = deliverySeq > 0 && unstampDelivery(session.chat, deliverySeq);
     if (unstamped) session.chat_revision = normalizeRevision(session.chat_revision) + 1;
+    let removedBatch = false;
+    if (restoring && Array.isArray(session.delivered_batches)) {
+      const batches = session.delivered_batches;
+      session.delivered_batches = batches.filter(
+        (entry) =>
+          !(payload.batch_id && entry.id === payload.batch_id) &&
+          !(deliverySeq > 0 && entry.delivery_seq === deliverySeq),
+      );
+      removedBatch = session.delivered_batches.length !== batches.length;
+    }
     if (rejected.length) {
-      if (unstamped) await this.writeState(state);
+      if (unstamped || removedBatch) await this.writeState(state);
       return {
         rejected: rejected.slice(0, MAX_REPORTED_ATTACHMENT_REJECTIONS),
         caps: {
@@ -882,8 +893,10 @@ export class SessionStore {
       // The sequence lets a closed-poll restore undo this take's stamps. Receipt identities
       // restrict stamping to the prompts in this batch, not pending prompts on other pages.
       const deliverySeq = normalizeRevision(session.delivery_seq) + 1;
+      const batchId = batch?.id || crypto.randomUUID();
       const result = {
         status: "feedback",
+        batch_id: batchId,
         dom_snapshot: session.dom_snapshot || "",
         snapshot_page: session.dom_snapshot ? normalizeStoredPage(session.snapshot_page) : null,
         snapshot_page_proof: session.dom_snapshot ? String(session.snapshot_page_proof || "") : "",
@@ -909,6 +922,16 @@ export class SessionStore {
       // Delivery clears pending prompts, so retain the attachment ids for a bounded
       // grace window while the polling agent opens the absolute paths it received.
       const deliveredNow = Date.now();
+      session.delivered_batches = [
+        ...(Array.isArray(session.delivered_batches) ? session.delivered_batches : []),
+        {
+          id: batchId,
+          delivery_seq: prompts.length > 0 ? deliverySeq : null,
+          page: batch?.page ?? result.snapshot_page ?? null,
+          delivered_at: new Date(deliveredNow).toISOString(),
+          replied_at: null,
+        },
+      ].slice(-50);
       const deliveredIds = new Set();
       for (const prompt of prompts) {
         for (const attachment of prompt.attachments || []) {
@@ -976,7 +999,7 @@ export class SessionStore {
     });
   }
 
-  async addAgentReply(key, text, { requireOpen = false } = {}) {
+  async addAgentReply(key, text, { requireOpen = false, batchId = null } = {}) {
     return this.runExclusive(async () => {
       const state = await this.readState();
       const session = state.sessions[key];
@@ -985,10 +1008,30 @@ export class SessionStore {
       }
       if (requireOpen && session.status === "ended") return session;
       const at = new Date().toISOString();
-      // Done (docs/delivery-acks.md): the reply answers what the agent has seen. Stamped in the same
-      // write as the reply, with the reply's own time, and never on an entry no poll has delivered.
-      stampDone(session.chat, at, normalizeRevision(session.closed_delivery_seq));
-      session.chat = [...(session.chat || []), { role: "agent", text: String(text || ""), at }];
+      let reply = { role: "agent", text: String(text || ""), at };
+      if (batchId !== null) {
+        const batch = (session.delivered_batches || []).find((entry) => entry.id === batchId);
+        if (!batch) throw Object.assign(new Error("batch not found"), { statusCode: 404, code: "BATCH_NOT_FOUND" });
+        if (batch.replied_at) {
+          throw Object.assign(new Error("batch already replied"), {
+            statusCode: 409,
+            code: "BATCH_ALREADY_REPLIED",
+            repliedAt: batch.replied_at,
+          });
+        }
+        if (batch.delivery_seq !== null) {
+          stampDone(session.chat, at, normalizeRevision(session.closed_delivery_seq), batch.delivery_seq);
+        }
+        batch.replied_at = at;
+        reply = { ...reply, batch_id: batchId, ...(batch.page ? { page: batch.page } : {}) };
+      } else {
+        const closedSeq = normalizeRevision(session.closed_delivery_seq);
+        stampDone(session.chat, at, closedSeq);
+        for (const entry of session.delivered_batches || []) {
+          if (entry.delivery_seq !== null && entry.delivery_seq > closedSeq && !entry.replied_at) entry.replied_at = at;
+        }
+      }
+      session.chat = [...(session.chat || []), reply];
       applyTranscriptBound(session);
       session.chat_revision = normalizeRevision(session.chat_revision) + 1;
       session.updated_at = at;

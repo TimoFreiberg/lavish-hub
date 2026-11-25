@@ -628,12 +628,11 @@ export function stampWorking(chat, at, closedSeq = 0) {
   return changed;
 }
 
-// An agent reply answers everything the agent has seen this round. An entry that was sent but never
-// delivered is not done - the agent has not read it - and stays for the next poll.
-export function stampDone(chat, at, closedSeq = 0) {
+// A reply answers delivered entries from this round, optionally restricted to one delivery.
+export function stampDone(chat, at, closedSeq = 0, deliverySeq = null) {
   let changed = false;
   for (const entry of Array.isArray(chat) ? chat : []) {
-    if (!isOpenDelivery(entry, closedSeq)) continue;
+    if (!isOpenDelivery(entry, closedSeq) || (deliverySeq !== null && entry.delivered_seq !== deliverySeq)) continue;
     entry.done_at = String(at);
     changed = true;
   }

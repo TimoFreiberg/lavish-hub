@@ -6413,7 +6413,9 @@ test("a disconnect during immediate feedback take requeues the batch without wor
     }
 
     // The restore re-appended nothing and took the failed take's Seen stamps off again.
-    assert.deepEqual(JSON.parse(await readFile(stateFile, "utf8")).sessions[key].chat, beforeState.chat);
+    const restoredState = JSON.parse(await readFile(stateFile, "utf8")).sessions[key];
+    assert.deepEqual(restoredState.chat, beforeState.chat);
+    assert.deepEqual(restoredState.delivered_batches, []);
 
     const next = await fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=0`);
     const feedback = await next.json();
@@ -7503,6 +7505,200 @@ test("retrying an acknowledged prompt does not wake an unrelated poll", async ()
     assert.equal(delivered.status, "feedback");
     assert.equal(delivered.prompts.length, 1);
     assert.equal(delivered.prompts[0].prompt, "Fresh feedback");
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a rejected feedback restore removes the provisional batch and Seen stamp", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-batches-"));
+  const artifact = path.join(dir, "artifact.html");
+  await writeFile(artifact, "<!doctype html><html><body></body></html>");
+  try {
+    const store = new SessionStore(path.join(dir, "state.json"));
+    const { key } = await store.upsertSession(artifact, "");
+    await store.queuePrompts(key, {
+      prompts: [{ prompt: "with image", tag: "message", attachments: [{ id: "image" }] }],
+    }, { resolveAttachment: async () => ({ id: "image", bytes: 1 }) });
+    const feedback = await store.takeFeedback(key);
+    assert.ok((await store.findByKey(key)).chat[0].delivered_at);
+    const rejected = await store.queuePrompts(key, feedback, {
+      restore: true, resolveAttachment: async () => null,
+    });
+    assert.equal(rejected.rejected[0].reason, "not-found");
+    const saved = await store.findByKey(key);
+    assert.deepEqual(saved.delivered_batches, []);
+    assert.equal(saved.chat[0].delivered_at, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("batch replies retain their page and only finish that page's delivered notes", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-batches-"));
+  const artifact = path.join(dir, "artifact.html");
+  const stateFile = path.join(dir, "state.json");
+  await writeFile(artifact, "<!doctype html><html><body></body></html>");
+  try {
+    const store = new SessionStore(stateFile);
+    const { key } = await store.upsertSession(artifact, "");
+    const send = (page) => store.queuePrompts(key, {
+      page_protocol: 1,
+      prompts: [{ prompt: page, tag: "message", selector: "body", text: "", page }],
+    });
+    await send("first.html");
+    const first = await store.takeFeedback(key);
+    await send("second.html");
+    const second = await store.takeFeedback(key);
+    assert.notEqual(first.batch_id, second.batch_id);
+    const reopened = await new SessionStore(stateFile).upsertSession(artifact, "");
+    assert.equal(reopened.delivered_batches.length, 2);
+    const replied = await store.addAgentReply(key, "Done", { batchId: first.batch_id });
+    assert.ok(replied.chat[0].done_at);
+    assert.equal(replied.chat[1].done_at, undefined);
+    assert.equal(replied.chat[2].page, "first.html");
+    assert.equal(replied.chat[2].batch_id, first.batch_id);
+    for (let i = 0; i < 50; i++) {
+      await send(`page-${i}.html`);
+      await store.takeFeedback(key);
+    }
+    const saved = await store.findByKey(key);
+    assert.equal(saved.delivered_batches.length, 50);
+    assert.equal(saved.delivered_batches.some((batch) => batch.id === first.batch_id), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("batch-bound replies isolate delivered notes and preserve current-round presence", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-batches-"));
+  const artifact = path.join(dir, "artifact.html");
+  const stateFile = path.join(dir, "state.json");
+  await writeFile(artifact, "<!doctype html><html><body></body></html>");
+  const server = await serve({ port: 0, stateFile, version: "9.9.9-test" });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { "content-type": "application/json" };
+    const { key } = await fetch(`${base}/api/sessions`, {
+      method: "POST", headers, body: JSON.stringify({ file: artifact }),
+    }).then((res) => res.json());
+    const poll = () => fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=0`).then((res) => res.json());
+    const send = (text) => fetch(`${base}/api/${key}/prompts`, {
+      method: "POST", headers: { ...headers, origin: base },
+      body: JSON.stringify({ prompts: [{ prompt: text, tag: "message", selector: "body", text: "" }] }),
+    });
+    const reply = (batch_id) => fetch(`${base}/api/${key}/agent-reply`, {
+      method: "POST", headers, body: JSON.stringify({ text: "Answered", batch_id }),
+    });
+    const state = async () => JSON.parse(await readFile(stateFile, "utf8")).sessions[key];
+    const presence = async () => {
+      const stream = await startPresenceStream(base, key);
+      try { return await stream.next(); } finally { await stream.close(); }
+    };
+    assert.equal((await fetch(`${base}/health`).then((res) => res.json())).lavish_hub_batch_replies, 1);
+    assert.equal((await send("first")).status, 200);
+    const first = await poll();
+    assert.ok(first.batch_id);
+    assert.equal(first.delivery_seq, undefined);
+    assert.equal(first.receipt_ids, undefined);
+    assert.equal(first.feedback_batch, undefined);
+    assert.equal((await send("second")).status, 200);
+    const second = await poll();
+    assert.ok(second.batch_id);
+    assert.notEqual(first.batch_id, second.batch_id);
+    assert.equal(await presence(), "working");
+    assert.equal((await reply(first.batch_id)).status, 200);
+    let saved = await state();
+    assert.ok(saved.chat[0].done_at);
+    assert.ok(saved.chat[1].delivered_at);
+    assert.equal(saved.chat[1].done_at, undefined);
+    assert.equal(saved.chat[2].batch_id, first.batch_id);
+    assert.equal(saved.chat[2].page, undefined);
+    assert.equal(await presence(), "working");
+    const duplicate = await reply(first.batch_id);
+    assert.equal(duplicate.status, 409);
+    const duplicateBody = await duplicate.json();
+    assert.equal(duplicateBody.code, "BATCH_ALREADY_REPLIED");
+    assert.equal(duplicateBody.replied_at, saved.chat[2].at);
+    const unknown = await reply("missing");
+    assert.equal(unknown.status, 404);
+    assert.equal((await unknown.json()).code, "BATCH_NOT_FOUND");
+    for (const invalid of [null, "", "   ", 42, "x".repeat(129)]) {
+      const response = await reply(invalid);
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), { status: "error", code: "VALIDATION_ERROR", error: "batch_id must be a non-empty string" });
+    }
+    assert.equal((await reply(second.batch_id)).status, 200);
+    assert.equal(await presence(), "waiting");
+
+    await send("legacy first");
+    const legacy = await poll();
+    assert.equal((await reply(undefined)).status, 200);
+    await send("bound second");
+    const bound = await poll();
+    assert.equal((await reply(bound.batch_id)).status, 200);
+    assert.equal(await presence(), "waiting");
+    const legacyDuplicate = await reply(legacy.batch_id);
+    assert.equal(legacyDuplicate.status, 409);
+    assert.equal((await legacyDuplicate.json()).code, "BATCH_ALREADY_REPLIED");
+
+    // A later round must not be held working by an unreplied batch from the ended round.
+    await send("old round");
+    const old = await poll();
+    const store = new SessionStore(stateFile);
+    await store.endSession(key);
+    const reopened = await store.upsertSession(artifact, "");
+    assert.ok(reopened.delivered_batches.some((batch) => batch.id === old.batch_id));
+    await send("new round");
+    const current = await poll();
+    assert.equal((await reply(current.batch_id)).status, 200);
+    saved = await state();
+    assert.equal(saved.chat.find((entry) => entry.text === "old round").done_at, undefined);
+    assert.ok(saved.chat.find((entry) => entry.text === "new round").done_at);
+    assert.equal(await presence(), "waiting");
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a reply to an artifact-failure batch does not finish later prompts", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-batches-"));
+  const artifact = path.join(dir, "artifact.html");
+  const stateFile = path.join(dir, "state.json");
+  await writeFile(artifact, "<!doctype html><html><body></body></html>");
+  const server = await serve({ port: 0, stateFile, version: "9.9.9-test" });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { "content-type": "application/json" };
+    const { key } = await fetch(`${base}/api/sessions`, {
+      method: "POST", headers, body: JSON.stringify({ file: artifact }),
+    }).then((res) => res.json());
+    const load = await beginArtifactLoad(base, key);
+    assert.equal((await fetch(`${base}/api/${key}/artifact-failures`, {
+      method: "POST", headers, body: JSON.stringify({
+        ...artifactMutation(load), failures: [{ kind: "artifact-asset-unavailable", detail: "asset unavailable" }],
+      }),
+    })).status, 200);
+    const poll = () => fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=0`).then((res) => res.json());
+    const failure = await poll();
+    assert.ok(failure.batch_id);
+    assert.equal(failure.prompts.length, 0);
+    assert.equal(failure.artifact_failures.length, 1);
+    await fetch(`${base}/api/${key}/prompts`, {
+      method: "POST", headers: { ...headers, origin: base },
+      body: JSON.stringify({ prompts: [{ prompt: "later", tag: "message", selector: "body", text: "" }] }),
+    });
+    const later = await poll();
+    assert.ok(later.batch_id);
+    assert.equal((await fetch(`${base}/api/${key}/agent-reply`, {
+      method: "POST", headers, body: JSON.stringify({ text: "Failure noted", batch_id: failure.batch_id }),
+    })).status, 200);
+    const session = JSON.parse(await readFile(stateFile, "utf8")).sessions[key];
+    assert.equal(session.delivered_batches.find((batch) => batch.id === failure.batch_id).delivery_seq, null);
+    assert.ok(session.chat[0].delivered_at);
+    assert.equal(session.chat[0].done_at, undefined);
   } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true });
