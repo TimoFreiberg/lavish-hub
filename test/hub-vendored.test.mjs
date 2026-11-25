@@ -20,6 +20,54 @@ async function warmDeps(dir, env) {
   // Dependency installation and bundling are not part of hub startup checks.
   await run(process.execPath, ['--input-type=module', '-e', `import { ensureHubAssets } from ${JSON.stringify(deps)}; await ensureHubAssets();`], { env: { ...env, PATH: `${dir}:${env.PATH}`, FIXTURE: path.resolve('node_modules') }, timeout: 30000 });
 }
+test('published HTML reload preserves scroll and annotation drafts and protects authored edits', { timeout: 120000 }, async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-reload-'));
+  const repo = path.join(dir, 'repo'), state = path.join(dir, 'state');
+  await mkdir(repo); await mkdir(state); await run('jj', ['git', 'init', repo]);
+  const socket = net.createServer(); await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
+  const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
+  const env = { ...process.env, LAVISH_AXI_ALLOWED_HOSTS: '', LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
+  delete env.HC_TERMINAL_ID;
+  await warmDeps(dir, env);
+  const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
+  const child = spawn(process.execPath, [path.resolve('bin/lavish-hub'), 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk; }); child.stdout.resume();
+  t.after(async () => {
+    if (child.exitCode === null) { child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); }
+    try { await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) }); } catch {}
+    await rm(dir, { recursive: true, force: true });
+  });
+  for (let i = 0; i < 400; i++) { try { await stat(runtime); break; } catch { if (child.exitCode !== null) throw new Error(stderr); await delay(50); } }
+  const url = stderr.match(/ready: (https?:\/\/\S+)/)?.[1]; assert.ok(url, stderr);
+  const source = path.join(dir, 'review.html');
+  const publish = async version => {
+    await writeFile(source, `<!doctype html><html><body><div style="height:500px"></div><p id="note-target">Annotate this paragraph</p><p id="version-marker">${version}</p><label>Draft <input id="draft-field" value="initial"></label><div style="height:1500px"></div></body></html>`);
+    await run(process.execPath, [path.resolve('bin/lavish-hub'), 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
+  };
+  await publish('v1');
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true }); t.after(() => browser.close());
+  const page = await browser.newPage(); const direct = new URL(url); direct.searchParams.set('view', 'review'); await page.goto(direct.href);
+  const frame = page.frameLocator('#artifact'); await frame.locator('#version-marker').waitFor({ timeout: 20000 });
+  const showAnyway = page.getByRole('button', { name: 'Show anyway' }); if (await showAnyway.isVisible()) await showAnyway.click();
+  if (await page.locator('#annotation').getAttribute('aria-pressed') !== 'true') await page.locator('#annotation').click();
+  await frame.locator('#note-target').evaluate(() => window.scrollTo(0, 500));
+  await frame.locator('#note-target').click();
+  const card = frame.locator('.lavish-annotation-card'); await card.locator('textarea').fill('keep this note');
+  await delay(500); await publish('v2');
+  await frame.locator('#version-marker').filter({ hasText: 'v2' }).waitFor({ timeout: 15000 });
+  await card.locator('textarea').waitFor({ timeout: 10000 });
+  assert.equal(await card.locator('textarea').inputValue(), 'keep this note');
+  assert.ok(Math.abs(await frame.locator('#note-target').evaluate(() => window.scrollY) - 500) < 80);
+  await frame.locator('#draft-field').fill('unsaved'); await publish('v3');
+  const reload = frame.getByRole('button', { name: 'Reload updated document' }); await reload.waitFor({ timeout: 15000 });
+  assert.equal(await frame.locator('#version-marker').textContent(), 'v2');
+  assert.equal(await frame.locator('#draft-field').inputValue(), 'unsaved');
+  assert.equal(await frame.locator('a[aria-current] .nav-badge-new').count(), 0);
+  await frame.locator('#draft-field').fill('initial'); await frame.locator('#version-marker').filter({ hasText: 'v3' }).waitFor({ timeout: 15000 });
+  await frame.locator('#draft-field').fill('unsaved-2'); await publish('v4'); await reload.waitFor({ timeout: 15000 });
+  await reload.click(); await frame.locator('#version-marker').filter({ hasText: 'v4' }).waitFor({ timeout: 15000 });
+});
+
 test('hub opens with the vendored server rather than PATH and polls its protocol', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-vendored-'));
   const repo = path.join(dir, 'repo'), state = path.join(dir, 'state');
@@ -145,6 +193,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await card.getByRole('button', { name: 'Queue' }).click();
   const replacement = path.join(dir, 'replacement.html');
   await writeFile(replacement, '<!doctype html><title>Replacement</title><p>Replacement document</p>');
+  await page.frameLocator('#artifact').getByLabel('Authored draft').fill('Keep this form');
   await run(process.execPath, [path.resolve('bin/lavish-hub'), 'publish', replacement, '--id', 'review', '--title', 'Review', '--workspace', repo], { env });
   await page.getByRole('button', { name: 'Send to Agent', exact: true }).click();
   for (let i = 0; i < 200 && !stdout.includes('\n'); i++) await delay(50);
@@ -161,7 +210,6 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   assert.equal(notification.snapshotPage, notification.prompts[0].page);
   assert.match(notification.context, /Published review/);
   const frame = page.frameLocator('#artifact');
-  await frame.getByLabel('Authored draft').fill('Keep this form');
   const commitsLink = frame.getByRole('link', { name: 'Commits', exact: true });
   await commitsLink.click();
   const dialog = frame.getByRole('dialog', { name: 'Leave with unsaved edits?' });
