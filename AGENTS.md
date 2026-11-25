@@ -39,11 +39,15 @@ files stay local and outside the reviewed repository.
 - Finish every task by integrating it into `main`. Orchestrators must personally
   run integration, not delegate it. Serialize integration with the shared lock
   file `<primary-checkout>/.workspaces/integration-mutex`, never a workspace-local
-  copy. Acquire it atomically with exclusive creation, record your agent session
-  ID and workspace as owner, and wait if held. Never bypass an existing owner.
-  If policy prevents acquiring the lock or recording its owner, stop and ask the
-  operator; do not integrate. Clear a stale lock only after operator confirmation
-  that its owner is no longer integrating. Release only a lock you own.
+  copy. Acquire it atomically with exclusive creation and record your agent
+  session ID, workspace, and acquisition timestamp as owner (do not record a
+  shell or child PID, since subshell PIDs exit immediately and look falsely
+  stale). If the lock is held, wait for up to 10 minutes total; if it is still
+  held after 10 minutes, stop waiting and ask the operator whether the owning
+  session is still integrating. Never bypass an existing owner. If policy
+  prevents acquiring the lock or recording its owner, stop and ask the operator;
+  do not integrate. Clear a stale lock only after operator confirmation that its
+  owner is no longer integrating. Release only a lock you own.
 - While holding the lock, fetch `origin` and default to rebasing all local
   changes onto `main@origin` for linear history, including unpublished ancestor
   commits and local `main` commits, not just the current task's commits. Their
