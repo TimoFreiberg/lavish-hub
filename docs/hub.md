@@ -134,10 +134,12 @@ Keep editing or press Escape to keep the current page and its edits. Choose Leav
 page to discard them. If the browser cannot tell whether a slow navigation is still
 in progress, the page shows a notice and pauses automatic page switches. Select a
 destination to continue. These guards do not persist drafts: leaving the page, a
-browser crash, or forced closure can discard them. Published pages with custom
-editors that do not emit trusted input or change events may not be detected. A
-published page remains marked edited even if its own save control has saved the
-data.
+browser crash, or forced closure can discard them. Reverting authored form controls
+or `contenteditable` regions to their initial values, or resetting a form, clears
+the edited state. Lavish annotation cards do not count as authored edits. Custom
+editors that do not emit trusted `input` or `change` events may not be detected, and
+a page's own save control leaves the page marked edited unless it resets the form or
+updates the control's default.
 
 The diff and Markdown views fetch their renderer the first time they need it,
 while the same render reads the document. A loaded renderer stays for the page.
@@ -202,8 +204,12 @@ page-leaving pause has begun is kept and shown when that page comes back. Clean
 Markdown documents update automatically, while unsaved drafts remain in the page.
 Published HTML is generated when the owner starts or that document is published;
 publishing another document does not rewrite it. Its navigation updates while the
-owner is running. Republish after changing its source, then reload to see the new
-version. If a source is unavailable, the owner leaves its last generated copy in
+owner is running. Republish after changing its source. An open page without authored
+edits reloads automatically, preserving Lavish's scroll position and open annotation
+card draft. With unsaved authored edits, it stays in place and shows a green reload
+button on the active sidebar entry. Click the button to discard those edits and load
+the update, or revert the edits to load it automatically. If a source is unavailable,
+the owner leaves its last generated copy in
 place and reports the error. It refuses to overwrite a generated copy edited on
 disk, including after an abrupt owner termination; preserve or remove that copy
 before starting the owner or publishing again. Document registrations are retained
