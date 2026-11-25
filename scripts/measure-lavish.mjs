@@ -1,5 +1,5 @@
 // Transport-only RSS comparison, including this process, Lavish, and all CLI
-// poll children. No herdr, review browser, renderer, or shared relay is started.
+// poll children. No review browser, renderer, or shared relay is started.
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -22,7 +22,6 @@ if (!process.argv[2]) {
   const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_AXI_PORT: String(port), LAVISH_AXI_STATE_DIR: path.join(dir, 'state'), LAVISH_AXI_HOST: '127.0.0.1', LAVISH_AXI_NO_OPEN: '1' };
   // Keep all state private, including config that can affect startup behavior.
   for (const name of ['CONFIG', 'DATA', 'STATE']) env[`XDG_${name}_HOME`] = path.join(dir, name.toLowerCase());
-  delete env.HC_TERMINAL_ID;
   const binary = await realpath(execFileSync('which', ['lavish-axi'], { encoding: 'utf8' }).trim());
   const children = [];
   const start = args => { const child = spawn(binary, args, { env, stdio: 'ignore' }); const done = new Promise(resolve => child.once('exit', resolve)); children.push({ child, done }); return child; };

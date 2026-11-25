@@ -1,7 +1,7 @@
-// Run with a working hc service: node test/hub-e2e.mjs
+// Run: node test/hub-e2e.mjs
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { request as httpRequest } from 'node:http';
@@ -12,13 +12,12 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 import { resolveWorkspace } from '../src/hub-workspace.mjs';
-import { cleanupTerminals } from './hub-e2e-cleanup.mjs';
 import { buildSelfContainedHtml } from '../vendor/lavish/src/export-bundle.js';
 
 const exec = promisify(execFile), cli = path.resolve('bin/lavish-hub');
-const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-hc-e2e-'));
+const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-e2e-'));
 const repo = path.join(dir, 'repo'), state = path.join(dir, 'state');
-const terminals = []; let browser, primaryError, port;
+let owner, ownerExit, browser, primaryError, port;
 const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
 const run = async (name, args, options = {}) => (await exec(name, args, { env, timeout: 30000, maxBuffer: 4 * 1024 * 1024, ...options })).stdout;
 const until = async fn => {
@@ -32,14 +31,16 @@ try {
   const socket = net.createServer(); await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   port = socket.address().port; await new Promise(resolve => socket.close(resolve)); env.LAVISH_AXI_PORT = String(port);
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
-  const variables = ['LAVISH_AXI_STATE_DIR', 'LAVISH_AXI_PORT', 'XDG_DATA_HOME', 'XDG_STATE_HOME'].map(key => `${key}=${env[key]}`);
-  const result = JSON.parse(await run('hc', ['run', '--bg', '--no-parent', '--no-notify', '--json', '--cwd', repo, 'env', ...variables, process.execPath, cli, 'listen', '--workspace', repo]));
-  assert.ok(result.address); terminals.push(result.address);
+  owner = spawn(process.execPath, [cli, 'listen', '--workspace', repo], { cwd: repo, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let ownerStdout = '', ownerStderr = '';
+  owner.stdout.setEncoding('utf8'); owner.stdout.on('data', chunk => { ownerStdout += chunk; });
+  owner.stderr.setEncoding('utf8'); owner.stderr.on('data', chunk => { ownerStderr += chunk; });
+  ownerExit = new Promise(resolve => owner.once('exit', (code, signal) => resolve({ code, signal })));
   const record = await until(async () => { try { return JSON.parse(await readFile(runtime, 'utf8')); } catch { return null; } });
   const source = path.join(dir, 'review.html');
   await writeFile(source, '<!doctype html><title>Review</title><h1>Published hub review</h1>');
   const publishOut = await run(process.execPath, [cli, 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo]);
-  const screen = await until(async () => { const text = await run('hc', ['read', result.address]); return text.match(/ready: (https?:\/\/\S+)/) ? text : null; });
+  const screen = await until(() => ownerStderr.match(/ready: (https?:\/\/\S+)/) ? ownerStderr : null);
   const url = screen.match(/ready: (https?:\/\/\S+)/)[1];
   assert.ok(publishOut.includes(`${url}?view=review`), publishOut);
   browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
@@ -70,10 +71,10 @@ try {
   await page.mouse.move(frameBox.x + box.x + 2, frameBox.y + box.y + box.height / 2); await page.mouse.down();
   await page.mouse.move(frameBox.x + box.x + box.width - 2, frameBox.y + box.y + box.height / 2, { steps: 20 }); await page.mouse.up();
   const card = page.frameLocator('#artifact').locator('.lavish-annotation-card');
-  await card.locator('textarea').fill('Hub hc feedback'); await card.getByRole('button', { name: 'Queue' }).click();
+  await card.locator('textarea').fill('Hub e2e feedback'); await card.getByRole('button', { name: 'Queue' }).click();
   await page.getByRole('button', { name: 'Send to Agent', exact: true }).click();
-  const notice = await until(async () => { const text = await run('hc', ['read', result.address]); return text.includes('Hub hc feedback') && text.includes('agent-notification') ? text : null; });
-  const notification = notice.split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }).find(item => item.type === 'agent-notification' && JSON.stringify(item.prompts).includes('Hub hc feedback'));
+  const notice = await until(() => ownerStdout.includes('Hub e2e feedback') && ownerStdout.includes('agent-notification') ? ownerStdout : null);
+  const notification = notice.split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }).find(item => item.type === 'agent-notification' && JSON.stringify(item.prompts).includes('Hub e2e feedback'));
   assert.ok(notification, notice);
   assert.equal(notification.workspace, identity.root);
   assert.equal(notification.page, record.page);
@@ -83,8 +84,8 @@ try {
   assert.equal(notification.hasDomContext, true);
   assert.equal('context' in notification, false);
   assert.equal('reply' in notification, false);
-  await run(process.execPath, [cli, 'reply', '--batch', notification.batchId, 'Hub hc reply', '--workspace', repo], { env });
-  await page.getByText('Hub hc reply', { exact: false }).first().waitFor({ timeout: 20000 });
+  await run(process.execPath, [cli, 'reply', '--batch', notification.batchId, 'Hub e2e reply', '--workspace', repo], { env });
+  await page.getByText('Hub e2e reply', { exact: false }).first().waitFor({ timeout: 20000 });
   await page.frameLocator('#artifact').getByRole('link', { name: 'Changes', exact: true }).click();
   const hub = page.frameLocator('#artifact');
   await hub.locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
@@ -238,18 +239,34 @@ try {
   await page.frameLocator('#artifact').getByRole('button', { name: 'Edit Document Markdown' }).click();
   const editor = page.frameLocator('#artifact').getByRole('textbox', { name: 'Document Markdown' });
   await editor.waitFor({ timeout: 20000 });
-  await editor.fill('# Edited in hc\n');
+  await editor.fill('# Edited in e2e\n');
   await page.frameLocator('#artifact').getByRole('button', { name: 'Save', exact: true }).click();
-  await until(async () => (await readFile(markdown, 'utf8')) === '# Edited in hc\n');
+  await until(async () => (await readFile(markdown, 'utf8')) === '# Edited in e2e\n');
   await run(process.execPath, [cli, 'stop', '--workspace', repo]);
   await until(async () => { try { await readFile(runtime); return false; } catch (error) { if (error.code === 'ENOENT') return true; throw error; } });
-  console.log('PASS: hc owner received scoped annotation and browser displayed reply; owner stopped');
+  await ownerExit;
+  console.log('PASS: hub owner received scoped annotation and browser displayed reply; owner stopped');
 } catch (error) { primaryError = error; }
 finally {
   const errors = [];
   try { await browser?.close(); } catch (error) { errors.push(error); }
+  if (owner && owner.exitCode === null && owner.signalCode === null) {
+    try { owner.kill('SIGTERM'); } catch {}
+    await Promise.race([ownerExit, delay(5000)]);
+    if (owner.exitCode === null && owner.signalCode === null) {
+      try { owner.kill('SIGKILL'); } catch {}
+      await Promise.race([ownerExit, delay(2000)]);
+    }
+  }
   if (port) { try { await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) }); } catch {} }
-  try { await cleanupTerminals({ journal: path.join(dir, 'terminal.json'), terminals, dir, run, errors }); }
-  catch (error) { if (primaryError) throw new AggregateError([primaryError, error], 'E2E and cleanup failed'); throw error; }
+  if (!errors.length) {
+    try { await rm(dir, { recursive: true, force: true }); }
+    catch (error) { errors.push(error); }
+  }
+  if (errors.length) {
+    const cleanupError = new AggregateError(errors, `Cleanup failed; scratch evidence retained at ${dir}`);
+    if (primaryError) throw new AggregateError([primaryError, cleanupError], 'E2E and cleanup failed');
+    throw cleanupError;
+  }
 }
 if (primaryError) throw primaryError;

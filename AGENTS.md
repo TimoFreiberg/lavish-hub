@@ -27,9 +27,8 @@ For UI work, read [docs/ui-conventions.md](docs/ui-conventions.md).
 
 When changing delivery, keep the guarantees in
 [docs/feedback-routing.md](docs/feedback-routing.md#delivery-guarantees): each
-save or action keeps the target it arrived with, and Create PR records its
-launch attempt before calling herdr. Generated pages and worker files stay
-local and outside the reviewed repository.
+save or action keeps the target it arrived with. Generated pages and worker
+files stay local and outside the reviewed repository.
 
 ## Development process
 
@@ -58,7 +57,7 @@ local and outside the reviewed repository.
   affect runtime behavior or tests. When runtime, UI, or test files change, run
   the relevant checks (or full `just check` for broad or cross-cutting changes).
   `just check` installs dependencies exclusively, generates and audits the full
-  screenshot matrix first, then runs the full test and real-`hc` e2e suites with
+  screenshot matrix first, then runs the full test and e2e suites with
   separate temporary state and ports. Once it prints `Screenshots ready`,
   visually inspect the PNGs in the announced artifact directory at original size
   while the remaining checks run. Eight primary wide/dark images represent the
@@ -70,10 +69,8 @@ local and outside the reviewed repository.
   commands or `npm ci` in one checkout. The public commands enforce a shared
   `.checks/lock` because dependency installation and standalone `shots/` output
   are mutable. Direct test invocations bypass that lock and must not overlap.
-  Missing prerequisites for the required checks (including a working `hc`
-  service when running e2e) block integration. Automated tests mock `herdr-app`
-  and do not require its desktop application. Any code fixes require fresh QA on
-  the exact commits to be pushed.
+  Missing prerequisites for the required checks block integration. Any code
+  fixes require fresh QA on the exact commits to be pushed.
 - After QA passes, move local `main` to the tested task tip and push only
   `main` to `origin`, never force-push. If remote `main` advances, fetch,
   rebase onto the new `main@origin`, and repeat all QA before moving local

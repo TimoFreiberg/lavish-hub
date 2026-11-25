@@ -89,7 +89,7 @@ refuse to choose between them. The private listener is not for browser access.
 Run `just check` (or `node scripts/check.mjs all`) for the entire pipeline.
 It can run in the background: `just check > check.log 2>&1 &`. It installs with
 `npm ci` once, generates all screenshots first, then overlaps the full test and
-real-`hc` e2e suites. Every invocation announces a unique ignored
+e2e suites. Every invocation announces a unique ignored
 `.checks/<run>/` directory containing stage logs and atomic `status.json` updates.
 After screenshot generation **and cleanup**, `screenshots-ready.json` appears
 and the CLI prints `Screenshots ready`. Open that run's `shots/index.html` and
@@ -166,26 +166,22 @@ exploration only when required behavioral coverage remains.
 
 ## `just test-e2e`
 
-Runs `test/hub-e2e.mjs` through the isolated runner. It requires a working
-`hc` installation, but not the herdr desktop app. The runner starts and stops
-only its own private `HC_SESSION`, with a short private socket directory under
-`/tmp` to fit macOS socket-path limits. It never stops the user's service.
-It creates a scratch jj repository and isolated terminals
-(`hc run --bg --no-parent --no-notify`) with synthetic space labels, and checks:
+Runs `test/hub-e2e.mjs` through the isolated runner. It creates a scratch jj
+repository, spawns a foreground `lavish-hub listen` owner directly, opens the
+review in headless Chromium, and checks:
 
-- a foreground hub owner in a real hc terminal receives HTML annotation feedback,
+- a foreground hub owner receives HTML annotation feedback,
 - the notification identifies the workspace, page, and published document,
 - the printed reply command delivers a response visible in the browser,
+- diff view navigation, asset caching, opaque-origin grants, and offline export work,
 - editing and saving a published Markdown document writes the expected bytes,
 - the owner stops and removes its runtime record.
 
 Hub integration tests separately cover stale saves. They do not exercise the
 removed relay or retarget workflow.
 
-It ends its pages and removes only its own workers, logs, terminals, and temporary
-files. It never sends to the terminal you run it from. Don't point tests at
-terminals they didn't create. Automated tests mock the desktop app; actual GUI
-integration and phone artifact behavior require manual desktop testing.
+It stops its owner process, shuts down its private Lavish server, and removes
+its temporary files.
 
 ## `just shots`
 
@@ -195,7 +191,7 @@ just shots
 # Open shots/index.html in a browser
 ```
 
-Runs `scripts/shots.mjs` with `HC_TERMINAL_ID` unset, headless Chromium, and
+Runs `scripts/shots.mjs` with headless Chromium and
 real Lavish sessions on a private Lavish server (temporary state, config, and
 data directories, its own port, no workers). It replaces the gitignored
 `shots/` directory with:
@@ -258,8 +254,8 @@ These are single-run comparisons, not thresholds. The base had 162 passing
 tests and one opt-in registry skip. All original tests remain, with added
 pipeline and process-audit regression tests. The earlier baseline retained all 60 viewport
 cases and additional full-page/scroll captures, real Lavish diagnostics, accessibility,
-and geometry checks. The e2e suite still exercises real `hc`, browser save/watch,
-and moved-session delivery. The main
+and geometry checks. The e2e suite still exercises a real hub owner and browser
+save/watch. The main
 gains come from overlapping independent real browser/subprocess work and taking
 one process snapshot instead of launching `ps` once per host process. Build
 and dependency tools are unchanged because their measured cost did not justify

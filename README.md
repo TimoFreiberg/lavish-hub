@@ -1,6 +1,6 @@
 # lavish-hub
 
-lavish-hub is a personal workspace review tool built around [Lavish](https://github.com/kunchenguid/lavish-axi) and herdr. A foreground hub brings jj commits, changes, tasks, PR drafts, and published Markdown or HTML together in one review.
+lavish-hub is a personal workspace review tool built around [Lavish](https://github.com/kunchenguid/lavish-axi). A foreground hub brings jj commits, changes, tasks, PR drafts, and published Markdown or HTML together in one review.
 
 ## Install
 
@@ -17,4 +17,4 @@ Run `mise install` after editing your configuration. See [installation and relea
 
 Run `lavish-hub listen --open` in a long-running terminal or agent job in a jj workspace. The foreground owner prints feedback as JSON and a command for replying. Short `lavish-hub` commands connect to that owner; they do not start one. See the [hub guide](docs/hub.md), [command reference](docs/cli.md), and [workflow gaps](docs/hub-gaps.md).
 
-`hc` and `herdr-app` are useful for herdr integration, but the hub can run outside herdr. See the [documentation index](docs/README.md) and [testing guide](TESTING.md).
+See the [documentation index](docs/README.md) and [testing guide](TESTING.md).

@@ -116,7 +116,6 @@ for (const failure of ['end', 'state', 'partial-open']) {
     t.after(async () => { if (!teardown) await closeVisualResources(undefined, lavish); });
     const file = path.join(lavish.dir, 'clean.html');
     await cp(path.join(import.meta.dirname, 'visual/fixtures/clean.html'), file);
-    assert.equal(lavish.env.HC_TERMINAL_ID, undefined);
     if (failure === 'partial-open') assert.throws(() => lavish.open(file), /failure after server startup/);
     else lavish.open(file);
     const browser = failure === 'end' ? { close: async () => { throw new Error('Injected browser-close failure'); } } : undefined;

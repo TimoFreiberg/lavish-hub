@@ -12,6 +12,6 @@ Start with the [README](../README.md) for installation and the [hub guide](hub.m
 | [files-and-logs.md](files-and-logs.md) | Local state and diagnostics |
 | [lavish-http.md](lavish-http.md) | Patched Lavish HTTP boundary |
 | [releasing.md](releasing.md) | Package production, releases, and mise installation |
-| [maintenance.md](maintenance.md) | Maintenance and vendored Lavish provenance |
+| [maintenance.md](maintenance.md) | Vendored Lavish provenance and upgrade review |
 | [interactive-preview.md](interactive-preview.md) | Fixture preview and hosting |
 | [TESTING.md](../TESTING.md) | Automated and visual checks, and the `just demo` hub |

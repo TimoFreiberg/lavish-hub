@@ -105,7 +105,6 @@ test('offline feedback queues in Lavish, delivers on hub reconnect, and updates 
     XDG_DATA_HOME: data,
     XDG_STATE_HOME: xdgState,
   };
-  delete env.HC_TERMINAL_ID;
 
   const base = await startLavishServer(t, env, port);
   const identity = await resolveWorkspace(repo, env);

@@ -14,7 +14,7 @@ if (mode === 'test') {
   if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error('LAVISH_HUB_TEST_JOBS must be an integer from 1 to 8');
   const files = (await readdir('test')).filter(name => name.endsWith('.test.mjs')).sort();
   // Approximate baseline seconds, used only to balance groups, never to skip tests.
-  const weights = { 'maintenance-finalization': 3, 'maintenance-integration': 14, markdown: 19, 'visual-checks': 17 };
+  const weights = { markdown: 19, 'visual-checks': 17 };
   const groups = Array.from({ length: Math.min(count, files.length) }, () => ({ files: [], weight: 0 }));
   for (const file of files.sort((a, b) => (weights[b.replace('.test.mjs', '')] || 1) - (weights[a.replace('.test.mjs', '')] || 1))) {
     const group = groups.reduce((a, b) => a.weight <= b.weight ? a : b);
@@ -43,14 +43,6 @@ const port = await new Promise((resolve, reject) => {
 const runId = randomUUID();
 const marker = [process.env.LAVISH_HUB_TEST_RUN, runId].filter(Boolean).join(',');
 const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_HUB_TEST_RUN: marker, TMPDIR: root, LAVISH_AXI_STATE_DIR: path.join(root, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'), XDG_STATE_HOME: path.join(root, 'state') };
-delete env.HC_TERMINAL_ID;
-// Use a short directory to keep socket paths within macOS Unix socket limits.
-let hcRoot;
-if (mode === 'e2e') {
-  hcRoot = await mkdtemp('/tmp/lk-hc-');
-  env.HC_SESSION = `lk-${runId.slice(0, 8)}`;
-  env.HC_SOCKET = path.join(hcRoot, 'core.sock');
-}
 let status = 0;
 if (mode === 'test-worker') {
   for (const file of process.argv.slice(3)) {
@@ -71,10 +63,6 @@ if (mode === 'test-worker') {
     child.once('error', error => { cleanup(); reject(error); });
     child.once('exit', (code, signal) => { cleanup(); resolve(code ?? (signal ? 1 : 0)); });
   });
-}
-if (hcRoot) {
-  try { execFileSync('hc', ['server', 'stop'], { env, encoding: 'utf8', timeout: 15000 }); }
-  catch (error) { console.error(`Test audit: cannot stop private hc service: ${error.message}`); status = 1; }
 }
 try {
   const listing = execFileSync(process.execPath, [path.resolve('vendor/lavish/dist/cli.mjs')], { env, encoding: 'utf8', timeout: 10000 });
@@ -97,6 +85,5 @@ try {
 if (controller.signal.aborted) status = 1;
 if (status === 0) {
   await rm(root, { recursive: true, force: true });
-  if (hcRoot) await rm(hcRoot, { recursive: true, force: true });
-} else console.error(`Test audit: retained ${root}${hcRoot ? ` and ${hcRoot}` : ''} for inspection`);
+} else console.error(`Test audit: retained ${root} for inspection`);
 process.exitCode = status;

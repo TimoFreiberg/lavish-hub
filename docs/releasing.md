@@ -40,7 +40,7 @@ smoke jobs.
    Report failures and any partially created release rather than overwriting it.
 
 CI builds its own archive. It does not prove byte equality with a local build,
-and its smoke tests do not replace local visual inspection or real-hc checks.
+and its smoke tests do not replace local visual inspection or e2e checks.
 
 ## Installation with mise
 

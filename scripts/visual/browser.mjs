@@ -24,7 +24,6 @@ export async function isolatedLavish({ tempRoot = os.tmpdir(), portAllocator = a
     throw error;
   }
   const env = { ...process.env, LAVISH_AXI_STATE_DIR: path.join(dir, 'lavish'), LAVISH_AXI_PORT: String(port), XDG_CONFIG_HOME: path.join(dir, 'config'), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'state') };
-  delete env.HC_TERMINAL_ID;
   const files = new Set(); let serverProcess;
   const command = (name, args, options = {}) => exec(name, args, { encoding: 'utf8', timeout: 30000, ...options });
   const run = args => command('lavish-axi', args, { env });

@@ -204,7 +204,7 @@ test('HTTP preserves feedback, listener errors, cancellation, and non-consuming 
   assert.equal(await readFile(path.join(x.state, 'state.json'), 'utf8'), before);
   const fallback = [], run = lavishHttpRun({ env: x.env, encode, fetch: async () => Response.json(x.health), run: async (...args) => { fallback.push(args); return { stdout: 'cli' }; } });
   assert.deepEqual(decode((await run('lavish-axi', [])).stdout), { sessions: [{ file: x.file, status: 'open' }] });
-  await run('hc', ['ls']); assert.deepEqual(fallback, [['hc', ['ls']]]);
+  await run('echo', ['ok']); assert.deepEqual(fallback, [['echo', ['ok']]]);
 });
 
 test('real pinned Lavish accepts HTTP feedback, exclusive polls, reply, and end', { timeout: 45000 }, async t => {

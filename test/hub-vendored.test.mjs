@@ -27,7 +27,6 @@ test('published HTML reload preserves scroll and annotation drafts and protects 
   const socket = net.createServer(); await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
   const env = { ...process.env, LAVISH_AXI_ALLOWED_HOSTS: '', LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
-  delete env.HC_TERMINAL_ID;
   await warmDeps(dir, env);
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const child = spawn(process.execPath, [path.resolve('bin/lavish-hub'), 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -80,7 +79,6 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   const trap = path.join(dir, 'lavish-axi');
   await writeFile(trap, `#!/bin/sh\ntouch "$PATH_TRAP"\nexit 1\n`); await chmod(trap, 0o700);
   const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, PATH_TRAP: path.join(dir, 'used'), LAVISH_AXI_ALLOWED_HOSTS: '', LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
-  delete env.HC_TERMINAL_ID;
   try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
   const child = spawn(process.execPath, [path.resolve('bin/lavish-hub'), 'listen', '--workspace', repo], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -506,7 +504,6 @@ test('hub asset route grants narrow CORS to registered verified bundles', async 
   await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
   const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
-  delete env.HC_TERMINAL_ID;
   try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   const cli = path.resolve('bin/lavish-hub');
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');
@@ -609,7 +606,6 @@ test('CLI recovers published HTML after SIGKILL and refuses edited generated fil
   await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
   const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg') };
-  delete env.HC_TERMINAL_ID;
   try { await warmDeps(dir, env); } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   const cli = path.resolve('bin/lavish-hub');
   const identity = await resolveWorkspace(repo, env), runtime = path.join(identity.directory, 'owner', 'runtime.json');

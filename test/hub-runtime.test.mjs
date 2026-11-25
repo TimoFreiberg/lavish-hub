@@ -48,7 +48,7 @@ async function sessionFixture(t) {
   const server = http.createServer(app); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.closeAllConnections() || server.close());
   const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(server.address().port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg-state') };
-  delete env.LAVISH_HUB_SESSION; delete env.HC_TERMINAL_ID;
+  delete env.LAVISH_HUB_SESSION;
   const execute = promisify(execFile);
   const run = (args, cwd = repo) => execute(process.execPath, [cli, ...args], { env, cwd, timeout: 10000 });
   const start = async (workspace, session, title, extra = {}) => {
@@ -294,7 +294,6 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const opener = path.join(dir, process.platform === 'darwin' ? 'open' : 'xdg-open');
   await writeFile(opener, `#!/bin/sh\nprintf '%s\\n' "$1" >> "${dir}/opened"\n`); await chmod(opener, 0o700);
   const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(server.address().port), XDG_DATA_HOME: data, XDG_STATE_HOME: path.join(dir, 'xdg-state') };
-  delete env.HC_TERMINAL_ID;
   const npm = path.join(dir, 'npm');
   await writeFile(npm, '#!/bin/sh\nln -s "$FIXTURE" node_modules\n'); await chmod(npm, 0o700);
   const execute = promisify(execFile);

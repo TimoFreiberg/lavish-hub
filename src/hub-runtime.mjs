@@ -301,7 +301,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         if (!reviewUrl) throw new Error('Hub review is not ready');
         if (body.view !== undefined && !hasView(body.view)) throw new Error('Unknown view');
         const target = body.view ? directUrl(body.view) : reviewUrl;
-        return presentReview(page, target, { title: 'Workspace hub', open: true, log: console.error });
+        return presentReview(page, target, { open: true, log: console.error });
       },
       executeCommand: body => commands.execute(body),
       commandStatus: body => commands.status(body),
@@ -387,7 +387,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     if (!(await register())) return 0;
     registeredPage = page;
     await atomicJson(path.join(lock, 'runtime.json'), { pid: process.pid, instance, url: transport.url, capability: transport.capability, page });
-    await presentReview(page, review.url, { title: 'Workspace hub', open: options.open, log: console.error });
+    await presentReview(page, review.url, { open: options.open, log: console.error });
     console.error(`Hub owner running for ${identity.root}; stop with lavish-hub stop.`);
     while (!stopping) {
       if (!(await register())) break;
