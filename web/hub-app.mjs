@@ -110,17 +110,8 @@ function truncateCodeUnits(text, limit) {
   }
   return out;
 }
-function formatTabTitle(viewLabel, workspace) {
-  const shortWorkspace = workspace ? truncateCodeUnits(workspace, 60) : '';
-  if (!shortWorkspace) return truncateCodeUnits(viewLabel, 120);
-  const suffix = ` · ${shortWorkspace}`;
-  const maxView = 120 - suffix.length;
-  const shortView = viewLabel.length > maxView ? `${truncateCodeUnits(viewLabel, Math.max(1, maxView - 1)).trimEnd()}…` : viewLabel;
-  return `${shortView}${suffix}`;
-}
 function updateTabTitle() {
-  const viewLabel = labelFor(selected) || documents.find(doc => doc.id === selected)?.title || selected;
-  const title = formatTabTitle(viewLabel, sessionTitle || identityName());
+  const title = truncateCodeUnits(sessionTitle || repoName, 120);
   document.title = title;
   globalThis.lavish?.setDocumentMeta?.({ title });
 }

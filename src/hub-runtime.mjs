@@ -13,6 +13,9 @@ import { HubError } from './hub-errors.mjs';
 import { ensureHubAssets } from './deps.mjs';
 import { composeHubHtml, renderSiblingNavigation } from './hub-html.mjs';
 import { themeCss } from './orangebox.mjs';
+import { createTitleResolver, validateSessionTitle } from './hub-title.mjs';
+
+export { validateSessionTitle };
 
 const startup = 'Start one with lavish-hub listen --workspace DIR';
 const readJson = async file => JSON.parse(await readFile(file, 'utf8'));
@@ -72,9 +75,6 @@ async function checkInvocationCheckout(identity, directory) {
   if (!matches) throw new Error('Workspace is unavailable or has changed');
 }
 
-export { validateSessionTitle } from './hub-title.mjs';
-import { validateSessionTitle } from './hub-title.mjs';
-
 async function readTarget(directory) {
   let target;
   try { target = await readJson(path.join(directory, 'target.json')); }
@@ -133,12 +133,7 @@ async function release(lock, instance) {
 
 export async function runHubOwner(options = {}, { prepare = prepareReview } = {}) {
   const identity = await resolveHubIdentity(options);
-  if (identity.session) {
-    const missing = [];
-    if (options.title === undefined) missing.push('--title');
-    if (options.rev === undefined) missing.push('--rev');
-    if (missing.length) throw new Error(`listen with --session requires ${missing.join(' and ')}`);
-  }
+  if (identity.session && options.rev === undefined) throw new Error('listen with --session requires --rev');
   const title = options.title === undefined ? undefined : validateSessionTitle(options.title);
   const primaryRoot = primaryRootForRepo(identity.repo), repoName = path.basename(primaryRoot);
   const instance = randomUUID();
@@ -156,6 +151,13 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
   for (const signal of signals) process.once(signal, stop);
   try {
     let currentTarget = await readTarget(identity.directory);
+    const titleResolver = options.titleResolver || createTitleResolver({ env: options.env });
+    let providerTitle = null;
+    const refreshProviderTitle = async () => {
+      try { providerTitle = await titleResolver.resolve({ session: identity.session, workspaceRoot: identity.root, primaryRoot }); }
+      catch { providerTitle = null; }
+    };
+    const effectiveTitle = () => currentTarget.title || providerTitle || null;
     const isDetached = () => Boolean(identity.session || currentTarget.rev);
     const isAvailable = () => isDetached() ? repoMatches(identity) : workspaceMatches(identity);
     const repoOk = await repoMatches(identity);
@@ -236,8 +238,8 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         const destinations = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, href: 'hub.html', attention: false, unseen: false })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : 'hub.html', attention: Boolean(item.attention), unseen: item.id !== doc.id && item.viewedVersion !== item.version }))];
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope">${scope}</aside>` : '';
-        const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id, version: doc.version, title: doc.title, workspaceName, repoName, session: Boolean(identity.session), sessionTitle: currentTarget.title || '' }).replaceAll('<', '\\u003c');
-        const navigation = renderSiblingNavigation({ destinations, doc, currentTarget, identity, repoName, workspaceName, reviewedScope, confirmNavigation, navConfig });
+        const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id, version: doc.version, workspaceName, repoName, session: Boolean(identity.session), sessionTitle: effectiveTitle() || '' }).replaceAll('<', '\\u003c');
+        const navigation = renderSiblingNavigation({ destinations, doc, sessionTitle: effectiveTitle() || '', identity, repoName, workspaceName, reviewedScope, confirmNavigation, navConfig });
         authored = composeHubHtml(authored, base, navigation);
         const name = siblingName(doc);
         const target = path.join(identity.directory, name);
@@ -342,7 +344,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         targetSerial = update.catch(() => {});
         return update;
       },
-      status: async () => ({ workspace: identity.root, repoName, ...(identity.session ? { session: identity.session } : {}), ...(currentTarget.title ? { title: currentTarget.title } : {}), ...(currentTarget.rev ? { target: currentTarget.rev.input } : {}), ...(currentTarget.base ? { base: currentTarget.base.input } : {}), instance, selected, selectionRevision, ...(reviewUrl ? { url: reviewUrl } : {}), available: await isAvailable() }),
+      status: async () => ({ workspace: identity.root, repoName, ...(identity.session ? { session: identity.session } : {}), ...(effectiveTitle() ? { title: effectiveTitle() } : {}), ...(currentTarget.rev ? { target: currentTarget.rev.input } : {}), ...(currentTarget.base ? { base: currentTarget.base.input } : {}), instance, selected, selectionRevision, ...(reviewUrl ? { url: reviewUrl } : {}), available: await isAvailable() }),
       snapshot: ({ force, knownVersion }) => jj.snapshot({ force: force === true, knownVersion }),
       diffFiles: body => jj.diffFiles(body),
       describe: body => jj.describe(body),
@@ -351,8 +353,9 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const web = new URL('../web/', import.meta.url);
     const dist = await ensureHubAssets();
     const [script, style, diffScript, diffStyle, markdownScript, documentStyle] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8'), readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'), readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8')]);
+    await refreshProviderTitle();
     await writeSiblings();
-    const config = JSON.stringify({ url: browserUrl, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root, workspaceName, repoName, session: Boolean(identity.session), sessionTitle: currentTarget.title || '' }).replaceAll('<', '\\u003c');
+    const config = JSON.stringify({ url: browserUrl, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root, workspaceName, repoName, session: Boolean(identity.session), sessionTitle: effectiveTitle() || '' }).replaceAll('<', '\\u003c');
     async function asset(content, extension) {
       const name = `hub-asset-${digest(content)}.${extension}`;
       const target = path.join(identity.directory, name);
@@ -369,7 +372,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     ]);
     transport.assets = [diffAsset, markdownAsset, appAsset];
     // Media references stay unloaded until requested and export as data URLs without executing scripts.
-    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(`Workspace hub · ${currentTarget.title || (identity.session ? repoName : workspaceName)}`)}</title><link rel="stylesheet" href="${cssAsset}"></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><audio preload="none" data-hub-bundle="diff" src="${diffAsset}"></audio><audio preload="none" data-hub-bundle="markdown" src="${markdownAsset}"></audio><script src="${appAsset}"></script></body></html>`;
+    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(effectiveTitle() || repoName)}</title><link rel="stylesheet" href="${cssAsset}"></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><audio preload="none" data-hub-bundle="diff" src="${diffAsset}"></audio><audio preload="none" data-hub-bundle="markdown" src="${markdownAsset}"></audio><script src="${appAsset}"></script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);
     const review = await prepare(page, { reopen: options.reopen, log: console.error, vendored: true });
@@ -377,9 +380,12 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     reviewUrl = review.url;
     const client = createLavishClient({ signal: abort.signal, vendored: true });
     register = async () => {
+      await refreshProviderTitle();
       let summary = null;
       try { summary = await jj.summary(); } catch { /* The workspace may be unavailable. */ }
-      return client.registerHub(page, transport, { label: currentTarget.title ? `${currentTarget.title} · ${repoName}` : path.basename(identity.root), summary });
+      const title = effectiveTitle();
+      const label = Array.from(title ? `${title} · ${repoName}` : workspaceName !== repoName ? `${repoName} (${workspaceName})` : repoName).slice(0, 255).join('');
+      return client.registerHub(page, transport, { title, repo: repoName, workspace: workspaceName !== repoName ? workspaceName : null, summary, label });
     };
     if (!(await register())) return 0;
     registeredPage = page;

@@ -19,10 +19,10 @@ import { buildSelfContainedHtml } from '../vendor/lavish/src/export-bundle.js';
 
 const cli = path.resolve('bin/lavish-hub');
 
-async function sessionFixture(t) {
+async function sessionFixture(t, repoName = 'repo') {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-sessions-')));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const repo = path.join(dir, 'repo'), child = path.join(dir, 'child'), state = path.join(dir, 'state');
+  const repo = path.join(dir, repoName), child = path.join(dir, 'child'), state = path.join(dir, 'state');
   await mkdir(repo); await mkdir(state);
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
   await writeFile(path.join(repo, 'base.txt'), 'base\n');
@@ -35,9 +35,9 @@ async function sessionFixture(t) {
   execFileSync('jj', ['describe', '-m', 'Second'], { cwd: repo, stdio: 'ignore' });
   await writeFile(path.join(repo, 'second.txt'), 'second\n');
   execFileSync('jj', ['workspace', 'add', child], { cwd: repo, stdio: 'ignore' });
-  const labels = new Map(), app = express();
+  const displays = new Map(), app = express();
   const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json() });
-  app.post('/api/hub-proxy/register', proxy.control, (req, res, next) => { labels.set(req.body.key, req.body.display.label); next(); }, proxy.register);
+  app.post('/api/hub-proxy/register', proxy.control, (req, res, next) => { displays.set(req.body.key, req.body.display); next(); }, proxy.register);
   app.post('/api/hub-proxy/unregister', proxy.control, proxy.unregister);
   app.use('/hub-proxy', (req, res, next) => { if (req.headers.origin) req.headers.origin = 'null'; next(); }, proxy.handle);
   app.use((req, res) => {
@@ -71,7 +71,7 @@ async function sessionFixture(t) {
     const stop = async () => { const done = new Promise(resolve => owner.once('exit', resolve)); await request('stop'); await done; };
     return { identity, request, stop, owner, connection };
   };
-  return { dir, repo, child, state, env, run, start, labels };
+  return { dir, repo, child, state, env, run, start, displays };
 }
 
 test('publish derives IDs and scope, and accepts explicit PR metadata', async t => {
@@ -104,13 +104,65 @@ test('publish derives IDs and scope, and accepts explicit PR metadata', async t 
   await hub.stop();
 });
 
+test('provider titles refresh without persistence and explicit titles take precedence', async t => {
+  const f = await sessionFixture(t);
+  const records = path.join(f.env.XDG_DATA_HOME, 'polytoken', 'sessions-v1', 'provider');
+  await mkdir(records, { recursive: true });
+  const record = path.join(records, 'record.json');
+  const setTitle = title => writeFile(record, JSON.stringify({ session_title: title }));
+  await setTitle('Provider first');
+  const hub = await f.start(f.child, 'provider', undefined, { rev: '@' });
+  const targetFile = path.join(hub.identity.directory, 'target.json');
+  const original = await readFile(targetFile, 'utf8');
+  assert.equal((await hub.request('status')).title, 'Provider first');
+  assert.equal(JSON.parse(original).title, undefined);
+  assert.match(await readFile(path.join(hub.identity.directory, 'hub.html'), 'utf8'), /<title>Provider first<\/title>/);
+  const source = path.join(f.dir, 'provider.html');
+  await writeFile(source, '<p>Review</p>');
+  await hub.request('publish', { id: 'provider-doc', file: source });
+  const sibling = (await hub.request('documents')).documents.find(doc => doc.id === 'provider-doc').sibling;
+  await hub.stop();
+  const restarted = await f.start(f.child, 'provider', undefined, { rev: '@' });
+  assert.match(await readFile(path.join(restarted.identity.directory, sibling), 'utf8'), /hub-session-title">Provider first<\/div>/);
+  await setTitle('Provider updated');
+  let status;
+  for (let i = 0; i < 100; i++) {
+    status = await restarted.request('status');
+    if (status.title === 'Provider updated' && [...f.displays.values()].some(display => display.title === 'Provider updated')) break;
+    await delay(50);
+  }
+  assert.equal(status.title, 'Provider updated');
+  const display = [...f.displays.values()].find(item => item.title === 'Provider updated');
+  assert.ok(display);
+  assert.equal(display.repo, 'repo');
+  assert.equal(display.workspace, null);
+  assert.equal(display.label, 'Provider updated · repo');
+  assert.equal(JSON.parse(await readFile(targetFile, 'utf8')).title, undefined);
+  await restarted.request('target', { title: 'Explicit' });
+  await setTitle('Ignored');
+  await delay(200);
+  assert.equal((await restarted.request('status')).title, 'Explicit');
+  assert.equal(JSON.parse(await readFile(targetFile, 'utf8')).title, 'Explicit');
+  assert.ok([...f.displays.values()].some(item => item.title === 'Explicit'));
+  await restarted.stop();
+  const longTitle = 'x'.repeat(240), longRepo = 'repository-name-that-exceeds-the-label-limit';
+  const g = await sessionFixture(t, longRepo);
+  const long = await g.start(g.repo, 'long-title', longTitle, { rev: '@' });
+  assert.equal((await long.request('status')).title, longTitle);
+  const longDisplay = [...g.displays.values()].find(item => item.title === longTitle);
+  assert.ok(longDisplay);
+  assert.equal(Array.from(longDisplay.label).length, 255);
+  assert.equal(longDisplay.label, Array.from(`${longTitle} · ${longRepo}`).slice(0, 255).join(''));
+  await long.stop();
+});
+
 test('concurrent repo-scoped sessions run independently against the same primary repo', async t => {
   const f = await sessionFixture(t), a = await f.start(f.repo, 'one', 'First session', { rev: '@' }), b = await f.start(f.child, 'two', 'Second session', { rev: '@-' });
   await assert.rejects(f.start(f.repo, 'missing-rev', 'No rev'), /listen with --session requires --rev/);
   assert.notEqual(a.identity.directory, b.identity.directory);
   assert.equal((await a.request('status')).session, 'one');
   assert.equal((await b.request('status')).session, 'two');
-  assert.deepEqual(new Set(f.labels.values()), new Set(['First session · repo', 'Second session · repo']));
+  assert.deepEqual(new Set([...f.displays.values()].map(display => display.label)), new Set(['First session · repo', 'Second session · repo']));
   const source = path.join(f.dir, 'review.html');
   await writeFile(source, '<p>Review</p>');
   const published = await a.request('publish', { id: 'review', file: source });
@@ -139,6 +191,8 @@ test('session startup rejects a replacement repository without snapshotting it',
 
 test('working-copy target preparation and startup reject a replaced child checkout', async t => {
   const f = await sessionFixture(t), original = await f.start(f.child);
+  const display = [...f.displays.values()][0];
+  assert.deepEqual({ repo: display.repo, workspace: display.workspace, label: display.label }, { repo: 'repo', workspace: 'child', label: 'repo (child)' });
   await original.stop();
   await rename(f.child, path.join(f.dir, 'old-child'));
   await mkdir(f.child); execFileSync('jj', ['git', 'init'], { cwd: f.child, stdio: 'ignore' });
@@ -193,7 +247,7 @@ test('lavish-hub target retargets active session and preserves or updates base a
   assert.equal(status.title, 'Updated'); assert.equal(status.base, 'root()');
   assert.notEqual(status.target, initial.target);
   assert.match(await readFile(path.join(a.identity.directory, sibling), 'utf8'), /hub-session-title">Updated<\/div>/);
-  assert.ok([...f.labels.values()].includes('Updated · repo'));
+  assert.ok([...f.displays.values()].some(display => display.label === 'Updated · repo'));
   const after = await a.request('snapshot');
   assert.notEqual(before.version, after.version);
   await f.run(['target', '@-', '--session', 'target'], f.child);
@@ -218,7 +272,7 @@ test('detaching a workspace-bound hub survives deleting the temporary workspace 
   await a.request('publish', { id: 'html', file: html });
   const sibling = (await a.request('documents')).documents.find(doc => doc.id === 'html').sibling;
   assert.match(await readFile(path.join(a.identity.directory, sibling), 'utf8'), /hub-repo-name">child<\/div>/);
-  assert.match(await readFile(path.join(a.identity.directory, 'hub.html'), 'utf8'), /<title>Workspace hub · child<\/title>/);
+  assert.match(await readFile(path.join(a.identity.directory, 'hub.html'), 'utf8'), /<title>repo<\/title>/);
   const inDoc = await a.request('readDocument', { id: 'inside' });
   await f.run(['target', '@', '--base', 'main', '--workspace', f.child]);
   await rm(f.child, { recursive: true, force: true });

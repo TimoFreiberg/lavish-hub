@@ -11,7 +11,7 @@ import { themeCss, syntaxTheme, diffThemeCss } from './orangebox.mjs';
 
 const usage = `usage: lavish-hub [listen|stop|status|url] [--workspace DIR] [--session ID] [--open] [--reopen] [--view ID]
        lavish-hub listen [--rev REV] [--base REV | --no-base] [--title TEXT]
-       lavish-hub listen --session ID --title TEXT --rev REV [--base REV | --no-base] [--workspace DIR] [--open] [--reopen]
+       lavish-hub listen --session ID [--title TEXT] --rev REV [--base REV | --no-base] [--workspace DIR] [--open] [--reopen]
        lavish-hub target [REV] [--base REV | --no-base] [--title TEXT] [--session ID] [--workspace DIR]
        lavish-hub publish FILE [--id ID] [--title T] [--metadata-file JSON] [--repo REPO] [--base-commit HEX] [--head-commit HEX] [--source-url URL] [--no-scope] [--workspace DIR] [--session ID] [--attention] [--open]
        lavish-hub tasks --file FILE [--workspace DIR] [--session ID]
@@ -45,10 +45,7 @@ agent-notification JSON lines. Use reply --batch <batchId> to respond to a notif
 See docs/hub.md for configuration and workflow details.`;
 class UsageError extends Error { constructor(message) { super(message); this.name = 'UsageError'; } }
 function assertSessionListenOptions(options) {
-  const missing = [];
-  if (options.title === undefined) missing.push('--title');
-  if (options.rev === undefined) missing.push('--rev');
-  if (missing.length) throw new UsageError(`listen with --session requires ${missing.join(' and ')}`);
+  if (options.rev === undefined) throw new UsageError('listen with --session requires --rev');
 }
 
 export function parseArgs(args) {

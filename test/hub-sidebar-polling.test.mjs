@@ -21,7 +21,7 @@ async function sidebarPage(browser, { hidden = false, identity = false } = {}) {
   // A real origin keeps the sidebar's relative hrefs resolvable.
   await page.route('http://lavish.test/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>blank</title>' }));
   await page.goto('http://lavish.test/published.html');
-  const script = shippedSidebarScript(identity ? { title: 'Document', repoName: 'repo', sessionTitle: 'Original' } : {});
+  const script = shippedSidebarScript(identity ? { repoName: 'repo', sessionTitle: 'Original' } : {});
   const header = identity ? '<div class="hub-identity"><div class="hub-session-title">Original</div><div class="hub-repo-name">repo</div></div>' : '';
   const sidebar = `<div id="lavish-hub-sidebar" data-lavish-action>${header}<nav aria-label="Hub navigation"><a href="hub.html" data-hub-id="doc">Document</a></nav><div role="status" aria-live="polite"></div></div>`;
   // The stub counts status polls, parks one while __hold is set, answers with an
@@ -44,8 +44,8 @@ async function updatePage(browser, controls = '<label>Draft <input id="draft" va
   const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
   await page.route('http://lavish.test/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Reloaded</title>' }));
   await page.goto('http://lavish.test/published.html');
-  const config = JSON.stringify({ url: 'http://lavish.test/hub-proxy/test', capability: 'c'.repeat(64), id: 'doc', version: 'v1', title: 'Document', workspaceName: 'workspace' });
-  const navigation = renderSiblingNavigation({ destinations: [{ id: 'doc', title: 'Document', href: 'published.html' }], doc: { id: 'doc' }, currentTarget: {}, identity: {}, repoName: 'repo', workspaceName: 'workspace', reviewedScope: '', confirmNavigation: 'globalThis.confirmDraftNavigation = async () => true;', navConfig: config });
+  const config = JSON.stringify({ url: 'http://lavish.test/hub-proxy/test', capability: 'c'.repeat(64), id: 'doc', version: 'v1', workspaceName: 'workspace', repoName: 'repo' });
+  const navigation = renderSiblingNavigation({ destinations: [{ id: 'doc', title: 'Document', href: 'published.html' }], doc: { id: 'doc' }, identity: {}, repoName: 'repo', workspaceName: 'workspace', reviewedScope: '', confirmNavigation: 'globalThis.confirmDraftNavigation = async () => true;', navConfig: config });
   const stub = `<script>${noNavigationApi ? "Object.defineProperty(window, 'navigation', { value: undefined });" : ''}globalThis.__doc={id:'doc',title:'Document',source:'doc.html',sibling:'published.html',version:'v1'};globalThis.__selected='doc';globalThis.fetch=async (_url,options)=>({ok:true,json:async()=>({result:JSON.parse(options.body).operation==='status'?{selected:globalThis.__selected}:JSON.parse(options.body).operation==='documents'?{documents:[globalThis.__doc]}:{}})});</script>`;
   await page.setContent(`<!doctype html><html lang="en" data-theme="orangebox"><head><title>Document</title><style>${themeCss}</style></head><body>${stub}${navigation}<main>${controls}</main></body></html>`);
   return page;
@@ -120,7 +120,7 @@ test('published HTML sidebar tracks formatting and removed controls', { timeout:
   assert.equal(await page.locator('#editable').textContent(), 'initial');
   assert.notEqual(await page.locator('#editable').innerHTML(), 'initial');
   await advance(page); await page.getByRole('button', { name: 'Reload updated document' }).waitFor();
-  assert.equal(await page.title(), 'Document · workspace');
+  assert.equal(await page.title(), 'repo');
   await page.evaluate(() => document.querySelector('#editable').remove());
   const navigation = page.waitForEvent('framenavigated');
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await navigation;
@@ -132,7 +132,7 @@ test('published HTML sidebar gives remote selection precedence and respects erro
   const page = await updatePage(browser);
   await page.evaluate(() => { document.querySelector('[role=status]').dataset.error = ''; });
   await advance(page); await page.getByRole('button', { name: 'Reload updated document' }).waitFor();
-  assert.equal(await page.title(), 'Document · workspace');
+  assert.equal(await page.title(), 'repo');
   await page.evaluate(() => { delete document.querySelector('[role=status]').dataset.error; globalThis.__selected = 'tasks'; });
   const navigation = page.waitForEvent('framenavigated'); await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await navigation;
   assert.equal(page.url(), 'http://lavish.test/hub.html');
@@ -144,7 +144,7 @@ test('published HTML sidebar keeps pending edits during remote selection and yie
   await page.getByRole('link', { name: 'Tasks' }).waitFor();
   assert.equal(await page.locator('#draft').inputValue(), 'unsaved');
   await page.locator('#draft').fill('initial');
-  assert.equal(await page.title(), 'Document · workspace');
+  assert.equal(await page.title(), 'repo');
   const navigation = page.waitForEvent('framenavigated');
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await navigation;
   assert.equal(page.url(), 'http://lavish.test/hub.html');
@@ -164,11 +164,11 @@ test('published HTML sidebar defers reload while navigation is in flight or fail
   await page.getByRole('link', { name: 'Document' }).click();
   await page.waitForFunction(() => typeof globalThis.__finishNavigation === 'function');
   await page.locator('#draft').fill('initial');
-  assert.equal(await page.title(), 'Document · workspace');
+  assert.equal(await page.title(), 'repo');
   await page.evaluate(() => globalThis.__finishNavigation());
   await page.getByText('Could not open Document. Select it again to retry.').waitFor();
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-  await page.waitForTimeout(200); assert.equal(await page.title(), 'Document · workspace');
+  await page.waitForTimeout(200); assert.equal(await page.title(), 'repo');
 });
 
 test('published HTML sidebar guards updates when navigation may still be in progress', { timeout: 30000 }, async () => {
@@ -178,11 +178,11 @@ test('published HTML sidebar guards updates when navigation may still be in prog
   await page.getByRole('link', { name: 'Tasks' }).click();
   await page.getByText('Navigation may still be in progress; select a destination to continue').waitFor();
   await advance(page); await page.getByRole('button', { name: 'Reload updated document' }).waitFor();
-  assert.equal(await page.title(), 'Document · workspace');
+  assert.equal(await page.title(), 'repo');
   await page.locator('#draft').fill('unsaved'); await page.locator('#draft').fill('initial');
-  await page.waitForTimeout(300); assert.equal(await page.title(), 'Document · workspace');
+  await page.waitForTimeout(300); assert.equal(await page.title(), 'repo');
   await advance(page, { version: 'v3' });
-  await page.waitForTimeout(300); assert.equal(await page.title(), 'Document · workspace');
+  await page.waitForTimeout(300); assert.equal(await page.title(), 'repo');
 });
 
 test('published HTML sidebar waits for recent Lavish input before auto-reload', { timeout: 30000 }, async () => {
@@ -190,7 +190,7 @@ test('published HTML sidebar waits for recent Lavish input before auto-reload', 
   await page.locator('#note').fill('annotation');
   const navigation = page.waitForEvent('framenavigated'); await advance(page);
   await page.getByRole('button', { name: 'Reload updated document' }).waitFor();
-  assert.equal(await page.title(), 'Document · workspace');
+  assert.equal(await page.title(), 'repo');
   await navigation; assert.equal(await page.title(), 'Reloaded');
 });
 
@@ -210,13 +210,13 @@ test('published HTML sidebar updates session title and tab title on status poll'
   const page = await sidebarPage(browser, { identity: true });
   assert.equal(await page.locator('.hub-repo-name').textContent(), 'repo');
   assert.equal(await page.locator('.hub-session-title').textContent(), 'Original');
-  assert.equal(await page.title(), 'Document · Original');
+  assert.equal(await page.title(), 'Original');
   await page.evaluate(() => { globalThis.__title = 'Updated'; });
   await page.waitForFunction(() => document.querySelector('.hub-session-title').textContent === 'Updated');
-  assert.equal(await page.title(), 'Document · Updated');
-  assert.equal(await page.evaluate(() => globalThis.__metaTitle), 'Document · Updated');
+  assert.equal(await page.title(), 'Updated');
+  assert.equal(await page.evaluate(() => globalThis.__metaTitle), 'Updated');
   await page.evaluate(() => { globalThis.__title = ''; });
-  await page.waitForFunction(() => document.title === 'Document · repo');
+  await page.waitForFunction(() => document.title === 'repo');
   assert.equal(await page.locator('.hub-session-title').isVisible(), false);
 });
 

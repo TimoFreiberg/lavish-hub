@@ -28,10 +28,10 @@ test('publish help and conflicting scope flags', () => {
   assert.match(result.stderr, /lavish-hub: \[USAGE_ERROR\] action=fix_args — --no-scope cannot be combined/);
 });
 
-test('session CLI flags, mandatory title and rev, and LAVISH_HUB_SESSION parsing and URL prediction', async t => {
-  assert.throws(() => parseArgs(['listen', '--session', 'x']), /listen with --session requires --title and --rev/);
+test('session CLI flags, mandatory rev, and LAVISH_HUB_SESSION parsing and URL prediction', async t => {
+  assert.throws(() => parseArgs(['listen', '--session', 'x']), /listen with --session requires --rev/);
   assert.throws(() => parseArgs(['listen', '--session', 'x', '--title', 'X']), /listen with --session requires --rev/);
-  assert.throws(() => parseArgs(['listen', '--session', 'x', '--rev', '@']), /listen with --session requires --title/);
+  assert.deepEqual(parseArgs(['listen', '--session', 'x', '--rev', '@']), { hub: 'listen', session: 'x', rev: '@' });
   for (const args of [['listen', '--session', '../x', '--title', 'X', '--rev', '@'], ['listen', '--title', '  '], ['status', '--session', 'a/b']]) assert.throws(() => parseArgs(args));
   assert.deepEqual(parseArgs(['listen']), { hub: 'listen' });
   assert.deepEqual(parseArgs(['listen', '--session', 's', '--title', '  Review  ', '--rev', '@', '--base', 'main']), { hub: 'listen', session: 's', title: 'Review', rev: '@', base: 'main' });
@@ -47,9 +47,8 @@ test('session CLI flags, mandatory title and rev, and LAVISH_HUB_SESSION parsing
   assert.notEqual(await hubUrl({ workspace: repo, session: 'other', env }, deps), url);
   await assert.rejects(stat(path.join(dir, 'data')), { code: 'ENOENT' });
   for (const [args, session, pattern] of [
-    [['listen', '--workspace', repo], 'abc', /listen with --session requires --title and --rev/],
+    [['listen', '--workspace', repo], 'abc', /listen with --session requires --rev/],
     [['listen', '--workspace', repo, '--title', 'Review'], 'abc', /listen with --session requires --rev/],
-    [['listen', '--workspace', repo, '--rev', '@'], 'abc', /listen with --session requires --title/],
     [['status', '--workspace', repo], 'bad/session', /Invalid session ID/],
     [['reply', '--batch', 'id', 'text', '--workspace', repo], 'bad/session', /Invalid session ID/],
     [['context', '--batch', 'id', '--workspace', repo], 'bad/session', /Invalid session ID/],

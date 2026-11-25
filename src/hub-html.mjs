@@ -6,14 +6,8 @@ const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<
 function siblingSidebarClient(c) {
   c.url = new URL(c.url, location.href).href;
   const cut = (text, limit) => { let out = ''; for (const ch of text) { if (out.length + ch.length > limit) break; out += ch; } return out; };
-  const formatTitle = (view, workspace) => {
-    const ws = workspace ? cut(workspace, 60) : '';
-    if (!ws) return cut(view, 120);
-    const suffix = ' · ' + ws, max = 120 - suffix.length;
-    return (view.length > max ? cut(view, Math.max(1, max - 1)).trimEnd() + '…' : view) + suffix;
-  };
   const setTabTitle = () => {
-    const title = formatTitle(c.title || '', c.sessionTitle || (c.session ? c.repoName : c.workspaceName) || c.repoName || '');
+    const title = cut(c.sessionTitle || c.repoName || c.workspaceName || '', 120);
     document.title = title;
     globalThis.lavish?.setDocumentMeta?.({ title });
   };
@@ -244,7 +238,7 @@ export function siblingSidebarScript(navConfigJson) {
   return `(${siblingSidebarClient.toString()})(${navConfigJson});`;
 }
 
-export function renderSiblingNavigation({ destinations, doc, currentTarget, identity, repoName, workspaceName, reviewedScope, confirmNavigation, navConfig }) {
+export function renderSiblingNavigation({ destinations, doc, sessionTitle = '', identity, repoName, workspaceName, reviewedScope, confirmNavigation, navConfig }) {
   const items = destinations.map(item => {
     const kind = item.attention ? 'attention' : item.unseen ? 'new' : '';
     return `<div class="nav-row"${item.id === doc.id ? ' data-current' : ''}><a href="${escapeHtml(item.href)}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}${kind ? ` title="${kind === 'attention' ? 'Needs attention' : 'New publication'}" aria-describedby="lavish-hub-desc-${kind}" data-${kind === 'attention' ? 'attention' : 'unseen'}="true"` : ''}><span class="nav-label">${escapeHtml(item.title)}</span>${kind ? `<span class="nav-badge nav-badge-${kind}" aria-hidden="true">${kind === 'attention' ? 'Attention' : 'New'}</span>` : ''}</a></div>`;
@@ -274,7 +268,7 @@ html { padding-left: 200px; box-sizing: border-box; }
 #lavish-hub-sidebar [role=status] { margin: 12px 10px; color: var(--ob-muted); }
 #lavish-hub-sidebar [role=status][data-error] { color: var(--ob-red); }
 #lavish-hub-sidebar aside { margin: 16px 10px; overflow-wrap: anywhere; color: var(--ob-muted); }
-</style><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-attention" hidden>Needs attention</span><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${currentTarget.title ? '' : ' hidden'}>${escapeHtml(currentTarget.title || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || currentTarget.title ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${siblingSidebarScript(navConfig)}</script>`;
+</style><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-attention" hidden>Needs attention</span><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${siblingSidebarScript(navConfig)}</script>`;
 }
 
 // Edit only parser-located tags, leaving authored scripts, doctype and formatting intact.
