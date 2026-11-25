@@ -1,28 +1,45 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { saveDocument, textHash } from './save.mjs';
+import { HubError } from './hub-errors.mjs';
+
+const invalid = (message, cause) => new HubError('VALIDATION_ERROR', 'fix_args', message, cause);
 
 const maxMetadata = 16 * 1024;
 const builtins = new Set(['commits', 'changes', 'tasks']);
 
+export function deriveDocumentId(resolvedFile, existingDocuments) {
+  let slug = path.basename(resolvedFile, path.extname(resolvedFile)).toLowerCase().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '');
+  if (!/^[a-zA-Z0-9]/.test(slug)) slug = `doc-${slug}`;
+  if (builtins.has(slug)) slug += '-doc';
+  slug = slug.slice(0, 64);
+  if (Object.hasOwn(existingDocuments, slug) && existingDocuments[slug].source !== resolvedFile) {
+    slug = `${slug.slice(0, 55)}-${createHash('sha256').update(resolvedFile).digest('hex').slice(0, 8)}`;
+    if (Object.hasOwn(existingDocuments, slug) && existingDocuments[slug].source !== resolvedFile) throw invalid('Derived document ID is already used by another source; pass --id');
+  }
+  return slug;
+}
+
 export function validateMetadata(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Metadata must be a JSON object');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalid('Metadata must be a JSON object');
   for (const [key, item] of Object.entries(value)) {
-    if (!['reviewedRepository', 'baseCommit', 'headCommit', 'sourceUrl'].includes(key) || typeof item !== 'string') throw new Error('Invalid metadata field');
-    if (key === 'reviewedRepository' && !item.trim()) throw new Error('Invalid reviewed repository');
-    if ((key === 'baseCommit' || key === 'headCommit') && !/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(item)) throw new Error('Invalid full commit ID');
+    if (!['reviewedRepository', 'baseCommit', 'headCommit', 'sourceUrl'].includes(key) || typeof item !== 'string') throw invalid('Invalid metadata field');
+    if (key === 'reviewedRepository' && !item.trim()) throw invalid('Invalid reviewed repository');
+    if ((key === 'baseCommit' || key === 'headCommit') && !/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(item)) throw invalid('Invalid full commit ID');
     if (key === 'sourceUrl') {
       let url;
-      try { url = new URL(item); } catch { throw new Error('Invalid source URL'); }
-      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid source URL');
+      try { url = new URL(item); } catch { throw invalid('Invalid source URL'); }
+      if (!['http:', 'https:'].includes(url.protocol)) throw invalid('Invalid source URL');
     }
   }
   return value;
 }
 
 export async function readMetadata(file) {
-  const handle = await open(file, 'r');
+  let handle;
+  try { handle = await open(file, 'r'); }
+  catch (error) { throw invalid(`Cannot read metadata file: ${error.message}`, error); }
   try {
     const data = Buffer.alloc(maxMetadata + 1);
     let size = 0;
@@ -31,8 +48,11 @@ export async function readMetadata(file) {
       if (!bytesRead) break;
       size += bytesRead;
     }
-    if (size > maxMetadata) throw new Error('Metadata exceeds 16 KiB');
+    if (size > maxMetadata) throw invalid('Metadata exceeds 16 KiB');
     return validateMetadata(JSON.parse(data.subarray(0, size).toString('utf8')));
+  } catch (error) {
+    if (error instanceof HubError) throw error;
+    throw invalid(`Cannot read metadata file: ${error.message}`, error);
   } finally { await handle.close(); }
 }
 
@@ -70,17 +90,21 @@ export async function createHubDocuments(directory, { guardSource = async () => 
     list: () => ({ documents: Object.values(state.documents), attachments: { ...state.attachments } }),
     refreshPublished: generate => locked(() => generate(Object.values(state.documents))),
     publish: (body, generate = async (_documents, commit) => commit()) => locked(async () => {
-      if (typeof body.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(body.id) || builtins.has(body.id)) throw new Error('Invalid document ID');
+      if (body.id !== undefined && (typeof body.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(body.id) || builtins.has(body.id))) throw new Error('Invalid document ID');
       if (body.title !== undefined && (typeof body.title !== 'string' || !body.title.trim() || body.title.length > 512)) throw new Error('Invalid document title');
-      const file = await source(body.file, ['.md', '.markdown', '.html']);
+      let file;
+      try { file = await source(body.file, ['.md', '.markdown', '.html']); }
+      catch (error) { if (error.code === 'ENOENT') throw invalid(`Source file not found: ${body.file}`, error); throw error; }
+      const existing = Object.values(state.documents).find(doc => doc.source === file);
+      const id = body.id === undefined ? (existing?.id ?? deriveDocumentId(file, state.documents)) : body.id;
       const metadata = body.metadata === undefined ? {} : validateMetadata(body.metadata);
       if (Buffer.byteLength(JSON.stringify(metadata)) > maxMetadata) throw new Error('Metadata exceeds 16 KiB');
-      const previous = Object.hasOwn(state.documents, body.id) ? state.documents[body.id] : null;
+      const previous = Object.hasOwn(state.documents, id) ? state.documents[id] : null;
       const attention = body.attention === true ? true : Boolean(previous?.attention);
       const viewedVersion = previous && Object.hasOwn(previous, 'viewedVersion') ? previous.viewedVersion : null;
-      const document = { id: body.id, title: body.title || path.basename(file), source: file, metadata, version: randomUUID(), publishedAt: new Date().toISOString(), attention, viewedVersion };
-      const next = { ...state, documents: { ...state.documents, [body.id]: document } };
-      await generate(Object.values(next.documents), () => persist(next));
+      const document = { id, title: body.title || path.basename(file), source: file, metadata, version: randomUUID(), publishedAt: new Date().toISOString(), attention, viewedVersion };
+      const next = { ...state, documents: { ...state.documents, [id]: document } };
+      await generate(Object.values(next.documents), () => persist(next), id);
       return document;
     }),
     acknowledge: body => locked(async () => {

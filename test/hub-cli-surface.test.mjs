@@ -14,6 +14,20 @@ import { runtimeEnv, lavishCli } from '../src/runtime.mjs';
 
 const cli = path.resolve('bin/lavish-hub');
 
+test('publish help and conflicting scope flags', () => {
+  const help = spawnSync(process.execPath, [cli, 'publish', '--help'], { encoding: 'utf8' });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /lavish-hub publish review\.html\n/);
+  assert.match(help.stdout, /--repo org\/repo --base-commit <hex> --head-commit <hex> --source-url https:\/\/github\.com\/org\/repo\/pull\/123/);
+  assert.match(help.stdout, /lavish-hub publish notes\.html --no-scope/);
+  for (const flag of ['--metadata-file', '--repo', '--base-commit', '--head-commit', '--source-url']) {
+    assert.throws(() => parseArgs(['publish', 'review.html', '--no-scope', flag, 'value']), /--no-scope cannot be combined/);
+  }
+  const result = spawnSync(process.execPath, [cli, 'publish', 'review.html', '--no-scope', '--repo', 'value'], { encoding: 'utf8' });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /lavish-hub: \[USAGE_ERROR\] action=fix_args — --no-scope cannot be combined/);
+});
+
 test('session CLI flags, mandatory title, and LAVISH_HUB_SESSION parsing and URL prediction', async t => {
   for (const args of [['listen', '--session', 'x'], ['listen', '--session', '../x', '--title', 'X'], ['listen', '--title', '  '], ['status', '--session', 'a/b']]) assert.throws(() => parseArgs(args));
   assert.deepEqual(parseArgs(['listen', '--session', 's', '--title', '  Review  ', '--rev', '@', '--base', 'main']), { hub: 'listen', session: 's', title: 'Review', rev: '@', base: 'main' });
@@ -28,7 +42,7 @@ test('session CLI flags, mandatory title, and LAVISH_HUB_SESSION parsing and URL
   assert.equal(await hubUrl({ workspace: child, env }, deps), url);
   assert.notEqual(await hubUrl({ workspace: repo, session: 'other', env }, deps), url);
   await assert.rejects(stat(path.join(dir, 'data')), { code: 'ENOENT' });
-  for (const [args, session] of [[['listen', '--workspace', repo], 'abc'], [['status', '--workspace', repo], 'bad/session']]) {
+  for (const [args, session] of [[['listen', '--workspace', repo], 'abc'], [['status', '--workspace', repo], 'bad/session'], [['reply', '--batch', 'id', 'text', '--workspace', repo], 'bad/session'], [['context', '--batch', 'id', '--workspace', repo], 'bad/session']]) {
     const result = spawnSync(process.execPath, [cli, ...args], { env: { ...env, LAVISH_HUB_SESSION: session }, encoding: 'utf8' });
     assert.equal(result.status, 2, result.stderr);
   }
@@ -52,6 +66,15 @@ test('hub-only CLI rejects removed commands', () => {
 });
 
 test('reply parsing preserves argument boundaries', () => {
+  for (const flag of ['--unknown-flag', '--help']) {
+    assert.throws(() => parseArgs(['reply', '--batch', 'id', flag]), /unknown argument/);
+    const result = spawnSync(process.execPath, [cli, 'reply', '--batch', 'id', flag], { encoding: 'utf8' });
+    assert.equal(result.status, 2, result.stderr);
+  }
+  for (const prefix of [['--'], ['--text'], ['--agent-reply']]) {
+    assert.equal(parseArgs(['reply', '--batch', 'id', ...prefix, '--literal']).text, '--literal');
+  }
+  assert.equal(parseArgs(['reply', '--batch', 'id', '- item']).text, '- item');
   const text = 'spaces, quotes " and $characters\nsecond line';
   assert.deepEqual(parseArgs(['reply', 'page-id', '--agent-reply', text]), { reply: true, page: 'page-id', text });
   for (const args of [['reply'], ['reply', 'page', '--agent-reply'], ['reply', 'page', '--agent-reply', 'x', 'extra']]) {

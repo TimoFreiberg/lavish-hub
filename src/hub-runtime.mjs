@@ -307,7 +307,14 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       commandStatus: body => commands.status(body),
       cancelCommand: body => commands.cancel(body),
       documents: () => { const list = documents.list(); return { ...list, documents: list.documents.map(doc => ({ ...doc, sibling: siblingName(doc) })) }; },
-      publish: async body => { const document = await documents.publish(body, (docs, commit) => writeSiblings(docs, commit, body.id)); return { ...document, ...(reviewUrl ? { url: directUrl(document.id) } : {}) }; },
+      publish: async body => {
+        if (body.autoScope === true) {
+          try { body = { ...body, metadata: { reviewedRepository: repoName, ...await jj.scope() } }; }
+          catch { throw new HubError('WORKSPACE_UNAVAILABLE', 'refresh', 'Cannot determine review scope; pass --no-scope or explicit scope flags'); }
+        }
+        const document = await documents.publish(body, (docs, commit, id) => writeSiblings(docs, commit, id));
+        return { ...document, scope: Object.keys(document.metadata || {}).length ? document.metadata : null, ...(reviewUrl ? { url: directUrl(document.id) } : {}) };
+      },
       attach: body => documents.attach(body),
       readDocument: body => documents.read(body),
       saveDocument: async body => {

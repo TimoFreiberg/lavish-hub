@@ -115,13 +115,17 @@ export async function readHubSnapshot(cwd, { target, afterMetadata } = {}) {
   return readSnapshotAt(cwd, await operation(cwd, { ignoreWorkingCopy: Boolean(target?.rev) }), { target, afterMetadata });
 }
 
-async function readSnapshotAt(cwd, op, { target, afterMetadata } = {}) {
+async function readScopeAt(cwd, op, target) {
   const headRevset = target?.rev?.revset || '@';
   const baseExpr = target?.base?.revset || 'trunk()';
   const baseRows = await rows(cwd, op, `fork_point((${baseExpr}) | (${headRevset}))`);
   const headRows = await rows(cwd, op, headRevset);
   if (baseRows.length !== 1 || headRows.length !== 1) throw new Error('The jj base and working-copy head must each resolve to one commit');
-  const base = baseRows[0].commitId, head = headRows[0].commitId;
+  return { base: baseRows[0].commitId, head: headRows[0].commitId };
+}
+
+async function readSnapshotAt(cwd, op, { target, afterMetadata } = {}) {
+  const { base, head } = await readScopeAt(cwd, op, target);
   const commits = await rows(cwd, op, `${base}..${head}`);
   if (afterMetadata) await afterMetadata();
   const args = ['--at-operation', op, '--config', 'diff.git.show-path-prefix=true', 'diff', '--from', base, '--to', head];
@@ -167,6 +171,13 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
     setTarget(nextTarget) {
       currentTarget = nextTarget;
       generation++; cached = undefined; snapshots.clear();
+    },
+    async scope() {
+      await checkWorkspace();
+      const activeCwd = resolveCwd(), target = currentTarget;
+      const op = await operation(activeCwd, { ignoreWorkingCopy: Boolean(target?.rev) });
+      const { base, head } = await readScopeAt(activeCwd, op, target);
+      return { baseCommit: base, headCommit: head };
     },
     async summary() {
       await checkWorkspace();

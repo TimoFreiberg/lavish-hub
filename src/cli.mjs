@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { callHub, hubUrl, prepareTargetRequest, resolveHubIdentity, runHubOwner, validateSessionTitle } from './hub-runtime.mjs';
 import { formatHubError } from './hub-errors.mjs';
 import { resolveSessionId, validateSessionId } from './hub-workspace.mjs';
-import { readMetadata } from './hub-documents.mjs';
+import { readMetadata, validateMetadata } from './hub-documents.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
 import { createLavishClient } from './lavish-http.mjs';
 import { resolveLavishPort } from './lavish-port.mjs';
@@ -12,7 +12,7 @@ import { themeCss, syntaxTheme, diffThemeCss } from './orangebox.mjs';
 const usage = `usage: lavish-hub [listen|stop|status|url] [--workspace DIR] [--session ID] [--open] [--reopen] [--view ID]
        lavish-hub listen [--rev REV] [--base REV | --no-base] [--title TEXT]
        lavish-hub target [REV] [--base REV | --no-base] [--title TEXT] [--session ID] [--workspace DIR]
-       lavish-hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--session ID] [--attention] [--open]
+       lavish-hub publish FILE [--id ID] [--title T] [--metadata-file JSON] [--repo REPO] [--base-commit HEX] [--head-commit HEX] [--source-url URL] [--no-scope] [--workspace DIR] [--session ID] [--attention] [--open]
        lavish-hub tasks --file FILE [--workspace DIR] [--session ID]
        lavish-hub reply --batch ID [--text | --agent-reply] TEXT [--workspace DIR] [--session ID]
        lavish-hub reply PAGE --agent-reply TEXT
@@ -32,6 +32,11 @@ preferredHighlighter: 'shiki-js' in the renderer options. Pass the output of
 
 The CSS and JSON are self-contained: include them in the artifact or save them
 as sibling assets. Do not rely on the viewer to inject them.`;
+const publishHelp = `usage: lavish-hub publish FILE [--id ID] [--title T] [--metadata-file JSON] [--repo REPO] [--base-commit HEX] [--head-commit HEX] [--source-url URL] [--no-scope] [--workspace DIR] [--session ID] [--attention] [--open]
+
+Local jj review: lavish-hub publish review.html
+Remote PR review: lavish-hub publish review.html --repo org/repo --base-commit <hex> --head-commit <hex> --source-url https://github.com/org/repo/pull/123
+Non-review artifact: lavish-hub publish notes.html --no-scope`;
 const help = `${usage}
 
 Run listen in the foreground to own a workspace hub and receive feedback as
@@ -67,6 +72,7 @@ export function parseArgs(args) {
     try { if (result.session !== undefined) validateSessionId(result.session); } catch (error) { throw new UsageError(error.message); }
     return result;
   }
+  if (target === 'publish' && args.length === 1 && args[0] === '--help') return { commandHelp: target };
   if (!['listen', 'stop', 'status', 'url', 'publish', 'tasks', 'target'].includes(target)) throw new UsageError(`unknown command ${target}`);
   const command = target;
   const result = { hub: command };
@@ -80,8 +86,8 @@ export function parseArgs(args) {
     if (arg === '--workspace') {
       if (result.workspace || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--workspace requires one value');
       result.workspace = args[++i];
-    } else if (arg === '--session' || (command === 'publish' && ['--id', '--title', '--metadata-file'].includes(arg)) || (command === 'tasks' && arg === '--file') || (['listen', 'target'].includes(command) && ['--base', '--title'].includes(arg)) || (command === 'listen' && arg === '--rev')) {
-      const key = arg === '--metadata-file' ? 'metadataFile' : arg.slice(2);
+    } else if (arg === '--session' || (command === 'publish' && ['--id', '--title', '--metadata-file', '--repo', '--base-commit', '--head-commit', '--source-url'].includes(arg)) || (command === 'tasks' && arg === '--file') || (['listen', 'target'].includes(command) && ['--base', '--title'].includes(arg)) || (command === 'listen' && arg === '--rev')) {
+      const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
       if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
       result[key] = args[++i];
     } else if (['listen', 'target'].includes(command) && arg === '--no-base') {
@@ -90,8 +96,8 @@ export function parseArgs(args) {
     } else if (command === 'status' && arg === '--view') {
       if (result.view !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--view requires one value');
       result.view = args[++i];
-    } else if ((arg === '--open' && ['listen', 'status', 'publish'].includes(command)) || (arg === '--reopen' && command === 'listen') || (arg === '--attention' && command === 'publish')) {
-      const key = arg.slice(2);
+    } else if ((arg === '--open' && ['listen', 'status', 'publish'].includes(command)) || (arg === '--reopen' && command === 'listen') || (arg === '--attention' && command === 'publish') || (arg === '--no-scope' && command === 'publish')) {
+      const key = arg === '--no-scope' ? 'noScope' : arg.slice(2);
       if (result[key]) throw new UsageError(`${arg} given twice`);
       result[key] = true;
     } else throw new UsageError(`unknown argument ${arg}`);
@@ -103,7 +109,7 @@ export function parseArgs(args) {
   if (result.base !== undefined && result.noBase) throw new UsageError('--base and --no-base are mutually exclusive');
   if (command === 'listen' && result.session !== undefined && result.title === undefined) throw new UsageError('listen with --session requires --title');
   if (command === 'target' && result.rev === undefined && result.base === undefined && !result.noBase && result.title === undefined) throw new UsageError('target requires REV, --base, --no-base, or --title');
-  if (command === 'publish' && !result.id) throw new UsageError('publish requires --id');
+  if (command === 'publish' && result.noScope && ['metadataFile', 'repo', 'baseCommit', 'headCommit', 'sourceUrl'].some(key => result[key] !== undefined)) throw new UsageError('--no-scope cannot be combined with metadata or scope flags');
   if (command === 'tasks' && !result.file) throw new UsageError('tasks requires --file');
   return result;
 }
@@ -126,7 +132,7 @@ export async function main(args = process.argv.slice(2)) {
     const options = parseArgs([...args]);
     if (options.help) { console.log(help); return 0; }
     if (options.commandHelp) {
-      console.log(options.commandHelp === 'reply' ? 'usage: lavish-hub reply --batch ID [--text | --agent-reply] TEXT [--workspace DIR] [--session ID]\n       lavish-hub reply PAGE --agent-reply TEXT' : 'usage: lavish-hub context --batch ID [--workspace DIR] [--session ID]');
+      console.log(options.commandHelp === 'publish' ? publishHelp : options.commandHelp === 'reply' ? 'usage: lavish-hub reply --batch ID [--text | --agent-reply] TEXT [--workspace DIR] [--session ID]\n       lavish-hub reply PAGE --agent-reply TEXT' : 'usage: lavish-hub context --batch ID [--workspace DIR] [--session ID]');
       return 0;
     }
     if (options.theme) {
@@ -163,14 +169,19 @@ export async function main(args = process.argv.slice(2)) {
     }
     if (options.hub === 'url') { console.log(await hubUrl(options)); return 0; }
     if (['publish', 'tasks'].includes(options.hub)) {
-      const body = options.hub === 'publish'
-        ? { id: options.id, title: options.title, file: path.resolve(options.file), ...(options.metadataFile ? { metadata: await readMetadata(options.metadataFile) } : {}), ...(options.attention ? { attention: true } : {}) }
-        : { kind: options.hub, file: path.resolve(options.file) };
+      let body;
+      if (options.hub === 'publish') {
+        const inline = Object.fromEntries([['repo', 'reviewedRepository'], ['baseCommit', 'baseCommit'], ['headCommit', 'headCommit'], ['sourceUrl', 'sourceUrl']].filter(([key]) => options[key] !== undefined).map(([key, field]) => [field, options[key]]));
+        const scope = options.noScope ? { metadata: {} } : options.metadataFile || Object.keys(inline).length
+          ? { metadata: validateMetadata({ ...(options.metadataFile ? await readMetadata(options.metadataFile) : {}), ...inline }) }
+          : { autoScope: true };
+        body = { id: options.id, title: options.title, file: path.resolve(options.file), ...scope, ...(options.attention ? { attention: true } : {}) };
+      } else body = { kind: options.hub, file: path.resolve(options.file) };
       const result = await callHub(options.hub === 'publish' ? 'publish' : 'attach', { ...options, body });
-      console.log(options.hub === 'publish' ? (result?.url ? `Registered document ${options.id}: ${result.url}` : `Registered document ${options.id}.`) : `Configured ${options.hub}.`);
+      console.log(options.hub === 'publish' ? JSON.stringify({ id: result.id, url: result.url ?? null, title: result.title, scope: result.scope ?? null }) : `Configured ${options.hub}.`);
       if (options.open) {
-        if (options.hub === 'publish') await callHub('navigate', { ...options, body: { id: options.id } });
-        await callHub('open', { ...options, ...(options.hub === 'publish' ? { body: { view: options.id } } : {}) });
+        if (options.hub === 'publish') await callHub('navigate', { ...options, body: { id: result.id } });
+        await callHub('open', { ...options, ...(options.hub === 'publish' ? { body: { view: result.id } } : {}) });
       }
       return 0;
     }

@@ -1,10 +1,49 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createHubDocuments, readMetadata } from '../src/hub-documents.mjs';
+import { createHubDocuments, deriveDocumentId, readMetadata } from '../src/hub-documents.mjs';
+import { createHash } from 'node:crypto';
 import { parseArgs } from '../src/cli.mjs';
+
+test('derived document IDs avoid collisions and fit document ID rules', async t => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-ids-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const first = path.join(dir, 'one', 'Review.html'), second = path.join(dir, 'two', 'Review.html');
+  const hash = createHash('sha256').update(second).digest('hex').slice(0, 8);
+  assert.equal(deriveDocumentId(first, {}), 'review');
+  assert.equal(deriveDocumentId(first, { review: { source: first } }), 'review');
+  assert.equal(deriveDocumentId(second, { review: { source: first } }), `review-${hash}`);
+  assert.throws(() => deriveDocumentId(second, { review: { source: first }, [`review-${hash}`]: { source: first } }), /already used/);
+  for (const id of ['commits', 'changes', 'tasks']) assert.equal(deriveDocumentId(path.join(dir, `${id}.html`), {}), `${id}-doc`);
+  assert.equal(deriveDocumentId(path.join(dir, ' --_ !!.html'), {}), 'doc-');
+  assert.equal(deriveDocumentId(path.join(dir, '  Hello, World!.html'), {}), 'hello-world');
+  const long = path.join(dir, `${'a'.repeat(80)}.html`);
+  assert.equal(deriveDocumentId(long, {}).length, 64);
+  assert.match(deriveDocumentId(long, { ['a'.repeat(64)]: { source: first } }), /^a{55}-[0-9a-f]{8}$/);
+  await Promise.all([mkdir(path.dirname(first)), mkdir(path.dirname(second))]);
+  await writeFile(first, '<p>one</p>'); await writeFile(second, '<p>two</p>');
+  const store = await createHubDocuments(path.join(dir, 'state'));
+  let generatedId;
+  await store.publish({ file: first }, async (_docs, commit, id) => { generatedId = id; await commit(); });
+  assert.equal(generatedId, 'review');
+  assert.equal((await store.publish({ file: first })).id, 'review');
+  assert.equal((await store.publish({ file: second })).id, `review-${hash}`);
+  assert.equal(store.list().documents.length, 2);
+});
+
+test('republishing a source reuses its explicit ID', async t => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-republish-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'review.html');
+  await writeFile(file, '<p>review</p>');
+  const store = await createHubDocuments(path.join(dir, 'state'));
+  await store.publish({ id: 'custom', file });
+  assert.equal((await store.publish({ file })).id, 'custom');
+  assert.equal(store.list().documents.length, 1);
+  await assert.rejects(store.publish({ file: path.join(dir, 'missing.html') }), { code: 'VALIDATION_ERROR', action: 'fix_args' });
+});
 
 test('hub registrations persist, replace metadata, and protect save targets', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-documents-'));
@@ -77,5 +116,5 @@ test('hub metadata validation and CLI options', async t => {
   assert.deepEqual(parseArgs(['publish', 'review.md', '--id', 'review', '--metadata-file', 'meta.json']), { hub: 'publish', file: 'review.md', id: 'review', metadataFile: 'meta.json' });
   assert.deepEqual(parseArgs(['publish', 'review.md', '--id', 'review', '--attention']), { hub: 'publish', file: 'review.md', id: 'review', attention: true });
   assert.throws(() => parseArgs(['publish', 'review.md', '--id', 'review', '--attention', '--attention']), /given twice/);
-  assert.throws(() => parseArgs(['publish', 'review.md']), /requires --id/);
+  assert.deepEqual(parseArgs(['publish', 'review.md']), { hub: 'publish', file: 'review.md' });
 });

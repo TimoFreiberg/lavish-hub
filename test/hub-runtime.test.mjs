@@ -74,6 +74,36 @@ async function sessionFixture(t) {
   return { dir, repo, child, state, env, run, start, labels };
 }
 
+test('publish derives IDs and scope, and accepts explicit PR metadata', async t => {
+  const f = await sessionFixture(t), hub = await f.start(f.repo);
+  const source = path.join(f.dir, 'Review.html');
+  await writeFile(source, '<p>Review</p>');
+  const output = await f.run(['publish', source, '--workspace', f.repo]);
+  assert.equal(output.stdout.trim().split('\n').length, 1);
+  const published = JSON.parse(output.stdout);
+  const commit = rev => execFileSync('jj', ['log', '-r', rev, '--no-graph', '-T', 'commit_id'], { cwd: f.repo, encoding: 'utf8' }).trim();
+  assert.deepEqual(published, { id: 'review', url: 'http://localhost:123/review?view=review', title: 'Review.html', scope: { reviewedRepository: 'repo', baseCommit: commit('fork_point(trunk() | @)'), headCommit: commit('@') } });
+  const saved = (await hub.request('documents')).documents.find(doc => doc.id === published.id);
+  assert.deepEqual(saved.metadata, published.scope);
+  assert.match(await readFile(path.join(hub.identity.directory, saved.sibling), 'utf8'), /Review/);
+  const metadata = path.join(f.dir, 'metadata.json');
+  await writeFile(metadata, JSON.stringify({ reviewedRepository: 'old', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), sourceUrl: 'https://example.com/old' }));
+  const scope = { reviewedRepository: 'org/repo', baseCommit: 'c'.repeat(40), headCommit: 'd'.repeat(40), sourceUrl: 'https://github.com/org/repo/pull/123' };
+  const flags = ['--repo', scope.reviewedRepository, '--base-commit', scope.baseCommit, '--head-commit', scope.headCommit, '--source-url', scope.sourceUrl];
+  assert.deepEqual(JSON.parse((await f.run(['publish', source, '--workspace', f.repo, ...flags])).stdout).scope, scope);
+  assert.deepEqual(JSON.parse((await f.run(['publish', source, '--workspace', f.repo, '--metadata-file', metadata, ...flags])).stdout).scope, scope);
+  assert.equal(JSON.parse((await f.run(['publish', source, '--workspace', f.repo, '--no-scope'])).stdout).scope, null);
+  assert.deepEqual((await hub.request('documents')).documents.find(doc => doc.id === 'review').metadata, {});
+  await rename(f.repo, path.join(f.dir, 'old-repo'));
+  const response = await fetch(`${hub.connection.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': hub.connection.capability }, body: JSON.stringify({ operation: 'publish', file: source, autoScope: true }) });
+  assert.equal(response.status, 400);
+  const error = await response.json();
+  assert.match(JSON.stringify(error), /WORKSPACE_UNAVAILABLE/);
+  assert.match(JSON.stringify(error), /refresh/);
+  assert.match(JSON.stringify(error), /--no-scope/);
+  await hub.stop();
+});
+
 test('concurrent repo-scoped sessions run independently against the same primary repo', async t => {
   const f = await sessionFixture(t), a = await f.start(f.repo, 'one', 'First session'), b = await f.start(f.child, 'two', 'Second session');
   assert.notEqual(a.identity.directory, b.identity.directory);
@@ -295,7 +325,10 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const subdir = path.join(repo, 'subdir'); await mkdir(subdir);
   assert.match((await run(process.execPath, [cli], { env, cwd: subdir })).stdout, /Hub owner running/);
   const other = path.join(dir, 'other'); await mkdir(other); execFileSync('jj', ['git', 'init', other]);
-  await assert.rejects(run(process.execPath, [cli, '--workspace', other], { env }), /No live hub owner/);
+  await assert.rejects(run(process.execPath, [cli, 'status', '--workspace', other], { env }), error => {
+    assert.match(error.stderr, /lavish-hub: \[NO_OWNER\] action=reconnect — No live hub owner/);
+    return true;
+  });
   assert.match((await run(process.execPath, [cli, 'url', '--workspace', other], { env })).stdout, new RegExp(`^http://[^/]+:${server.address().port}/session/[a-f0-9]{16}\\n$`));
   const hubHtml = await readFile(path.join(identity.directory, 'hub.html'), 'utf8');
   const bundleNames = [...hubHtml.matchAll(/(?:src|href)="(hub-asset-[a-f0-9]{64}\.(?:js|css))"/g)].map(match => match[1]);
@@ -657,7 +690,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(path.join(identity.directory, sibling), editedInside.replace('<!-- local edit -->', ''));
   await writeFile(path.join(dir, 'outside.css'), 'outside');
   await symlink(path.join(repo, 'asset.css'), path.join(dir, 'linked.css'));
-  await run(process.execPath, [cli, 'publish', outsideHtml, '--id', 'outside', '--workspace', repo, '--open'], { env });
+  await run(process.execPath, [cli, 'publish', outsideHtml, '--workspace', repo, '--open'], { env });
   assert.equal((await request('status')).selected, 'outside');
   const openedLines = (await readFile(path.join(dir, 'opened'), 'utf8')).trim().split('\n');
   assert.equal(openedLines.length, 2);
@@ -702,7 +735,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await writeFile(metadata, JSON.stringify({ unknown: 'invalid' }));
   await assert.rejects(run(process.execPath, [cli, 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env }), /metadata/i);
   assert.equal((await request('documents')).documents.find(doc => doc.id === 'review').metadata.reviewedRepository, 'Reviewed repo');
-  await run(process.execPath, [cli, 'publish', document, '--id', 'review', '--workspace', repo], { env });
+  await run(process.execPath, [cli, 'publish', document, '--id', 'review', '--workspace', repo, '--no-scope'], { env });
   assert.deepEqual((await request('documents')).documents.find(doc => doc.id === 'review').metadata, {});
   const reviewedScope = { reviewedRepository: 'Reviewed repo', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), sourceUrl: 'https://example.com/review' };
   await writeFile(metadata, JSON.stringify(reviewedScope));
@@ -801,6 +834,10 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal((await resource('outside', 'linked.css')).status, 404);
   assert.equal(await (await resource('outside', 'outside.css')).text(), 'outside');
   assert.equal((await secondRequest('status')).result.available, false);
+  await assert.rejects(run(process.execPath, [cli, 'publish', document, '--workspace', repo], { env }), error => {
+    assert.match(error.stderr, /lavish-hub: \[WORKSPACE_UNAVAILABLE\] action=refresh — /);
+    return true;
+  });
   assert.notEqual((await secondRequest('snapshot')).status, 200);
   assert.notEqual((await secondRequest('saveDocument', { id: 'review', text: 'changed' })).status, 200);
   assert.equal(await readFile(document, 'utf8'), '# Review\n');
