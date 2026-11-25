@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { recordWorkspace, resolveRecordedWorkspace, resolveWorkspace, workspaceMatches } from '../src/hub-workspace.mjs';
+import { primaryRootForRepo, recordWorkspace, repoMatches, resolveHubSession, resolveRecordedSession, resolveRecordedWorkspace, resolveSessionId, resolveWorkspace, validateSessionId, workspaceMatches } from '../src/hub-workspace.mjs';
 import { createHubTransport } from '../src/hub-transport.mjs';
 
 test('hub workspace identity distinguishes workspaces and detects replacement', async t => {
@@ -33,6 +33,49 @@ test('hub workspace identity distinguishes workspaces and detects replacement', 
   await mkdir(root);
   execFileSync('jj', ['git', 'init'], { cwd: root, stdio: 'ignore' });
   assert.equal(await workspaceMatches(a), false);
+});
+
+test('session identity scopes by repo and session, distinguishes concurrent sessions, and checks repo without spawning jj', async t => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-session-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const root = path.join(dir, 'repo'), child = path.join(dir, 'child');
+  await mkdir(root); execFileSync('jj', ['git', 'init'], { cwd: root, stdio: 'ignore' });
+  execFileSync('jj', ['workspace', 'add', child], { cwd: root, stdio: 'ignore' });
+  const env = { XDG_DATA_HOME: path.join(dir, 'data'), LAVISH_AXI_STATE_DIR: path.join(dir, 'state'), LAVISH_HUB_SESSION: 'environment' };
+  assert.equal(resolveSessionId({ session: 'option' }, env), 'option');
+  assert.equal(resolveSessionId({}, env), 'environment');
+  assert.equal(resolveSessionId({}, {}), null);
+  for (const invalid of ['', '-a', '../bad', 'a/b', 'a\n', 'x'.repeat(129), null, 1]) {
+    assert.throws(() => validateSessionId(invalid), /Invalid session ID/);
+  }
+  assert.throws(() => resolveSessionId({ session: '' }, env), /Invalid session ID/);
+  assert.throws(() => primaryRootForRepo(root), /Invalid jj repository path/);
+  const first = await resolveHubSession(root, 'one', env);
+  assert.deepEqual(await resolveHubSession(child, 'one', env), first);
+  assert.notEqual((await resolveHubSession(root, 'two', env)).directory, first.directory);
+  assert.notEqual((await resolveHubSession(root, 'one', { ...env, LAVISH_AXI_STATE_DIR: path.join(dir, 'other-state') })).directory, first.directory);
+  const workspace = await resolveWorkspace(root, env);
+  assert.notEqual(workspace.directory, first.directory);
+  assert.equal((await resolveWorkspace(root, { ...env, LAVISH_HUB_SESSION: '' })).directory, workspace.directory);
+  await recordWorkspace(first);
+  assert.deepEqual(await resolveRecordedSession(child, 'one', env), first);
+  const stub = path.join(dir, 'bin'), marker = path.join(dir, 'jj-calls');
+  await mkdir(stub);
+  await writeFile(path.join(stub, 'jj'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${marker}'\nexit 1\n`);
+  await chmod(path.join(stub, 'jj'), 0o700);
+  const search = process.env.PATH;
+  process.env.PATH = `${stub}${path.delimiter}${search}`;
+  t.after(() => { process.env.PATH = search; });
+  assert.equal(await repoMatches(first), true);
+  assert.equal(await workspaceMatches(first), true);
+  await rename(root, path.join(dir, 'old'));
+  assert.deepEqual(await resolveRecordedSession(root, 'one', env), first);
+  assert.equal(await repoMatches(first), false);
+  await mkdir(root);
+  execFileSync('jj', ['git', 'init'], { cwd: root, stdio: 'ignore', env: { ...process.env, PATH: search } });
+  assert.equal(await repoMatches(first), false);
+  assert.equal(await workspaceMatches(first), false);
+  assert.equal(await readFile(marker, 'utf8').catch(() => ''), '');
 });
 
 test('hub transport requires capability even after opaque-origin preflight', async t => {

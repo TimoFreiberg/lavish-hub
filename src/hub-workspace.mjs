@@ -22,10 +22,25 @@ export async function canonicalPath(value) {
   }
 }
 
-async function hubDirectory(root, env) {
+async function hubDirectory(key, env) {
   const lavishState = await canonicalPath(runtimeEnv(env).LAVISH_AXI_STATE_DIR);
   const data = await canonicalPath(env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'));
-  return path.join(data, 'lavish-hub', 'hubs', digest(`${lavishState}\0${root}`));
+  return path.join(data, 'lavish-hub', 'hubs', digest(`${lavishState}\0${key}`));
+}
+
+export function validateSessionId(session) {
+  if (typeof session !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(session)) throw new Error('Invalid session ID');
+  return session;
+}
+
+export function resolveSessionId(options = {}, env = process.env) {
+  if (options.session !== undefined) return validateSessionId(options.session);
+  return env.LAVISH_HUB_SESSION ? validateSessionId(env.LAVISH_HUB_SESSION) : null;
+}
+
+export function primaryRootForRepo(repo) {
+  if (typeof repo !== 'string' || path.basename(repo) !== 'repo' || path.basename(path.dirname(repo)) !== '.jj') throw new Error('Invalid jj repository path');
+  return path.dirname(path.dirname(repo));
 }
 
 // Record filesystem identity as well as paths: a new repository at the same
@@ -52,6 +67,28 @@ export async function resolveWorkspace(directory = process.cwd(), env = process.
   return { ...identity, directory: await hubDirectory(root, env) };
 }
 
+export async function resolveHubSession(directory = process.cwd(), session, env = process.env) {
+  validateSessionId(session);
+  const { stdout } = await exec('jj', ['root'], { cwd: directory });
+  const invocationRoot = await realpath(stdout.trim());
+  const identity = await identityAt(invocationRoot);
+  const root = primaryRootForRepo(identity.repo);
+  const primary = await identityAt(root);
+  if (!['repo', 'repoDevice', 'repoInode'].every(key => primary[key] === identity[key])) throw new Error('Primary workspace does not match repository');
+  return { root, repo: identity.repo, repoDevice: identity.repoDevice, repoInode: identity.repoInode, session, directory: await hubDirectory(`repo\0${identity.repo}\0session\0${session}`, env) };
+}
+
+export async function resolveRecordedSession(directory, session, env = process.env) {
+  validateSessionId(session);
+  let repo;
+  try { repo = (await identityAt(await realpath(directory))).repo; }
+  catch { repo = path.join(await canonicalPath(directory), '.jj', 'repo'); }
+  const hub = await hubDirectory(`repo\0${repo}\0session\0${session}`, env);
+  const identity = JSON.parse(await readFile(path.join(hub, 'workspace.json'), 'utf8'));
+  if (identity.repo !== repo || identity.session !== session || identity.directory !== hub) throw new Error('Recorded session identity does not match');
+  return identity;
+}
+
 // Only an explicitly named root with previously recorded identity can be used
 // when jj is unavailable there; never infer a replacement checkout.
 export async function resolveRecordedWorkspace(directory, env = process.env) {
@@ -72,7 +109,36 @@ export async function recordWorkspace(identity) {
   } finally { await rm(temporary, { force: true }); }
 }
 
+export async function checkoutMatchesRepo(directory, identity) {
+  try {
+    let root = await realpath(directory);
+    while (true) {
+      try {
+        await lstat(path.join(root, '.jj'));
+      } catch (error) {
+        if (error.code !== 'ENOENT') return false;
+        const parent = path.dirname(root);
+        if (parent === root) return false;
+        root = parent;
+        continue;
+      }
+      const current = await identityAt(root);
+      return ['repo', 'repoDevice', 'repoInode'].every(key => current[key] === identity[key]);
+    }
+  } catch { return false; }
+}
+
+export async function repoMatches(identity) {
+  try {
+    const root = primaryRootForRepo(identity.repo);
+    if (await realpath(root) !== root || (identity.session && identity.root !== root)) return false;
+    const current = await identityAt(root);
+    return ['repo', 'repoDevice', 'repoInode'].every(key => current[key] === identity[key]);
+  } catch { return false; }
+}
+
 export async function workspaceMatches(identity) {
+  if (identity.session) return repoMatches(identity);
   try {
     const current = await identityAt(await realpath(identity.root));
     return ['root', 'repo', 'workspaceDevice', 'workspaceInode', 'repoDevice', 'repoInode'].every(key => current[key] === identity[key]);
