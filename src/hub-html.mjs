@@ -16,7 +16,7 @@ function siblingSidebarClient(c) {
   let currentHash = location.hash, queuedUrlChange = null;
   function syncUrl(update) {
     if (globalThis.lavish?.syncUrl) globalThis.lavish.syncUrl(update);
-    else if (window.self === window.top) {
+    else if (window.self === window.top && location.protocol !== 'about:') {
       const url = new URL(location.href); url.searchParams.set('view', update.view); url.hash = update.hash;
       const next = url.pathname + url.search + url.hash;
       if (next !== location.pathname + location.search + location.hash) history[update.mode === 'push' ? 'pushState' : 'replaceState'](null, '', next);
@@ -43,12 +43,41 @@ function siblingSidebarClient(c) {
   });
   let navigating = false, dirty = false, leaving = false, edits = 0, navGeneration = 0;
   let paused = false, polling = false, timer, leaveTimer, readController, readTimer;
-  let attemptedSelection = '', navigationCancelled = false, navigationUncertain = false;
+  let navigationUncertain = false, lastSelectionRevision = null, notificationBaseline = false, toastTimer;
+  const seenDocs = new Map();
   let warmed = false, catchup = false, acknowledged = false, ackPending = false;
   let pendingUpdate = null, flashedVersion = '', flashTimer, lavishRetryTimer, lastLavishInputAt = 0;
   const touched = new Set(), initialEditable = new WeakMap();
   const nav = document.querySelector('#lavish-hub-sidebar nav');
   const feedback = document.querySelector('#lavish-hub-sidebar [role=status]');
+  const toast = document.querySelector('#lavish-hub-toast');
+  function hideToast() { clearTimeout(toastTimer); toast.hidden = true; }
+  function showToast(id, label) {
+    clearTimeout(toastTimer);
+    const text = document.createElement('span'); text.textContent = label;
+    const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open';
+    open.addEventListener('click', () => { hideToast(); const link = [...nav.querySelectorAll('a[data-hub-id]')].find(a => a.dataset.hubId === id); link?.click(); });
+    const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.textContent = '×'; dismiss.setAttribute('aria-label', 'Dismiss notification'); dismiss.addEventListener('click', hideToast);
+    toast.replaceChildren(text, open, dismiss); toast.hidden = false; toastTimer = setTimeout(hideToast, 6000);
+  }
+  function noteUpdates(state, list, generation) {
+    let notice;
+    for (const doc of list) {
+      const previous = seenDocs.get(doc.id);
+      if (notificationBaseline && doc.id !== c.id) {
+        const kind = !previous ? 'New' : previous.version !== doc.version ? 'Updated' : !previous.attention && doc.attention ? 'Attention' : '';
+        if (kind) notice = { id: doc.id, label: kind + ': ' + doc.title };
+      }
+      seenDocs.set(doc.id, { version: doc.version, attention: Boolean(doc.attention) });
+    }
+    if (notificationBaseline && !notice && !navigating && !leaving && generation === navGeneration && state.selectionRevision > lastSelectionRevision && state.selected && state.selected !== c.id) {
+      const title = ({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' })[state.selected] || list.find(doc => doc.id === state.selected)?.title || state.selected;
+      notice = { id: state.selected, label: 'Selected: ' + title };
+    }
+    if (typeof state.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? state.selectionRevision, state.selectionRevision);
+    notificationBaseline = true;
+    if (notice) showToast(notice.id, notice.label);
+  }
   function pause() { paused = true; clearTimeout(timer); readController?.abort(); }
   function resume() {
     clearTimeout(leaveTimer); leaving = false;
@@ -58,7 +87,7 @@ function siblingSidebarClient(c) {
     if (!polling) timer = setTimeout(refresh, 0);
   }
   function leave(url, id) {
-    pause(); leaving = true; attemptedSelection = id;
+    pause(); leaving = true;
     if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; resume(); }, 1000);
     location.replace(url);
   }
@@ -81,7 +110,7 @@ function siblingSidebarClient(c) {
   }
   window.navigation?.addEventListener('navigate', e => {
     if (leaving) e.signal.addEventListener('abort', () => {
-      navigationUncertain = false; navigationCancelled = true; feedback.dataset.error = '';
+      navigationUncertain = false; feedback.dataset.error = '';
       feedback.textContent = 'Navigation cancelled. Select a destination to try again.'; resume();
     }, { once: true });
   });
@@ -157,10 +186,11 @@ function siblingSidebarClient(c) {
       let approved = false, approvedEdits = edits;
       if (dirty) { approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'); if (!approved) return; }
       await action('navigate', { id }, AbortSignal.timeout(10000));
+      action('status', {}, AbortSignal.timeout(10000)).then(state => { if (state.selected === id && typeof state.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? state.selectionRevision, state.selectionRevision); }).catch(() => {});
       syncDirty();
       if ((!approved || approvedEdits !== edits) && dirty && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'))) return;
       if (queuedUrlChange) return;
-      navigationUncertain = false; navigationCancelled = false;
+      navigationUncertain = false;
       if (!fromPopstate) syncUrl({ view: id, hash, mode: 'push' });
       leave(targetUrl, id);
     } catch { feedback.dataset.error = ''; feedback.textContent = 'Could not open ' + labelText + '. Select it again to retry.'; }
@@ -168,7 +198,7 @@ function siblingSidebarClient(c) {
       navigating = false;
       if (!leaving) {
         resume(); nav.removeAttribute('aria-busy'); if (!feedback.hasAttribute('data-error')) feedback.textContent = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : '';
-        if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
+        if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; if (!next.view || next.view === c.id) action('navigate', { id: c.id }, AbortSignal.timeout(10000)).catch(() => {}); handleUrlChange(next); }
         else if (fromPopstate) syncUrl({ view: c.id, hash: currentHash, mode: 'push' });
       }
     }
@@ -209,14 +239,8 @@ function siblingSidebarClient(c) {
         setTabTitle();
       }
       if (!acknowledged) acknowledgeCurrent();
-      if (generation === navGeneration && !navigating && !leaving && attemptedSelection && state.selected && state.selected !== attemptedSelection) {
-        attemptedSelection = '';
-        if (navigationCancelled) { navigationCancelled = false; feedback.removeAttribute('data-error'); feedback.textContent = ''; }
-      }
+      noteUpdates(state, list.documents, generation);
       syncDirty();
-      if (!dirty && state.selected && state.selected !== c.id && state.selected !== attemptedSelection && canAutoReload(generation)) {
-        leave(docUrl(list.documents.find(d => d.id === state.selected), state.selected).href, state.selected); return;
-      }
       const current = list.documents.find(d => d.id === c.id);
       if (current && c.version && current.version && current.version !== c.version) {
         const dest = docUrl(current);
@@ -315,7 +339,11 @@ html { padding-left: 200px; box-sizing: border-box; }
 #lavish-hub-sidebar [role=status] { margin: 12px 10px; color: var(--ob-muted); }
 #lavish-hub-sidebar [role=status][data-error] { color: var(--ob-red); }
 #lavish-hub-sidebar aside { margin: 16px 10px; overflow-wrap: anywhere; color: var(--ob-muted); }
-</style><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-attention" hidden>Needs attention</span><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${siblingSidebarScript(navConfig)}</script>`;
+#lavish-hub-toast { position: fixed; right: 12px; bottom: 12px; z-index: 2147483647; display: flex; align-items: center; gap: 8px; max-width: min(28rem, calc(100vw - 224px)); padding: 10px; border: 1px solid var(--ob-border); border-radius: 6px; background: var(--ob-surface); color: var(--ob-fg); font: 14px system-ui, sans-serif; }
+#lavish-hub-toast[hidden] { display: none; }
+#lavish-hub-toast span { min-width: 0; overflow-wrap: anywhere; }
+#lavish-hub-toast button { flex: none; border: 1px solid var(--ob-border); border-radius: 4px; padding: 4px 8px; background: var(--ob-accent, var(--ob-orange)); color: var(--ob-on-accent); font: inherit; cursor: pointer; }
+</style><div id="lavish-hub-toast" data-lavish-action role="status" aria-live="polite" hidden></div><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-attention" hidden>Needs attention</span><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${siblingSidebarScript(navConfig)}</script>`;
 }
 
 // Edit only parser-located tags, leaving authored scripts, doctype and formatting intact.
