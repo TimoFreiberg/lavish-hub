@@ -99,9 +99,40 @@ const startsInExplore = id => id === 'commits' || id === 'changes';
 // runs per request, so only those views ask for one. Status and documents keep
 // polling on every view.
 const needsSnapshot = startsInExplore;
-window.addEventListener('lavish:ready', () => { if (startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(false); updateTabTitle(); });
+window.addEventListener('lavish:ready', () => { if (startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(false); updateTabTitle(); if (lastReplaceUrl) syncUrl(lastReplaceUrl); });
 const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks' };
 const labelFor = id => Object.hasOwn(labels, id) ? labels[id] : undefined;
+let pendingHash = location.hash || null, currentViewHash = location.hash, lastReplaceUrl = null, queuedUrlChange = null;
+function syncUrl(update) {
+  if (update.mode === 'replace') lastReplaceUrl = update;
+  else lastReplaceUrl = null;
+  if (globalThis.lavish?.syncUrl) globalThis.lavish.syncUrl(update);
+  else if (window.self === window.top) {
+    const url = new URL(location.href); url.searchParams.set('view', update.view); url.hash = update.hash;
+    const next = url.pathname + url.search + url.hash;
+    if (next !== location.pathname + location.search + location.hash) history[update.mode === 'push' ? 'pushState' : 'replaceState'](null, '', next);
+  }
+}
+function replaceFrameHash(hash) {
+  if (window.self !== window.top) history.replaceState(null, '', location.pathname + location.search + hash);
+}
+function scrollToFragment(hash) {
+  let id;
+  try { id = decodeURIComponent(hash.slice(1)); } catch { id = hash.slice(1); }
+  if (!id || id === 'top') { window.scrollTo(0, 0); return; }
+  const view = document.querySelector('#view');
+  const target = [...view.querySelectorAll('[id], [name]')].find(node => node.id === id || node.getAttribute('name') === id)
+    || document.getElementById(id) || document.getElementsByName(id)[0];
+  target?.scrollIntoView();
+}
+for (const type of ['wheel', 'pointerdown', 'keydown', 'touchstart']) document.addEventListener(type, event => { if (event.isTrusted) pendingHash = null; }, true);
+document.addEventListener('click', event => {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const link = event.target.closest?.('#view a[href^="#"]');
+  if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
+  const hash = link.getAttribute('href'); event.preventDefault(); pendingHash = hash; currentViewHash = hash;
+  replaceFrameHash(hash); syncUrl({ view: selected, hash, mode: 'push' }); scrollToFragment(hash);
+});
 function truncateCodeUnits(text, limit) {
   let out = '';
   for (const ch of text) {
@@ -249,7 +280,7 @@ document.addEventListener('visibilitychange', () => {
 function leavePage(url, id) {
   pauseRefresh(); leavingConfirmed = true; attemptedSelection = id;
   if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; status(connectionStatus); resumeRefresh(); }, 1000);
-  location.href = url;
+  location.replace(url);
 }
 window.navigation?.addEventListener('navigate', event => {
   if (leavingConfirmed) event.signal.addEventListener('abort', () => {
@@ -270,7 +301,8 @@ function hasUnsavedDrafts() {
 window.addEventListener('beforeunload', event => {
   if (!leavingConfirmed && hasUnsavedDrafts()) { event.preventDefault(); event.returnValue = ''; }
 });
-async function select(id) {
+async function select(id, { historyMode = 'push', hash = '', fromPopstate = false } = {}) {
+  const currentHash = currentViewHash;
   const doc = documents.find(item => item.id === id);
   const leavesPage = doc?.sibling && doc.source?.toLowerCase().endsWith('.html');
   if (navigationPending) return;
@@ -285,7 +317,9 @@ async function select(id) {
       if (!approved) return;
     }
     if (!leavesPage) {
-      selected = id; renderNav();
+      selected = id; currentViewHash = hash; pendingHash = hash || (fromPopstate ? '' : null); replaceFrameHash(hash);
+      if (!fromPopstate) syncUrl({ view: id, hash, mode: historyMode });
+      renderNav();
       // A stale snapshot keeps rendering, but the view marks it as refreshing until
       // the request below replaces it, and a missing one shows its loading state.
       if (needsSnapshot(id)) { snapshotQueued = true; snapshotPreflightFailed = false; }
@@ -308,16 +342,35 @@ async function select(id) {
     if (leavesPage) {
       if ((!approved || approvedRevision !== editRevision) && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
       const modeEditRevision = editRevision;
-      if (startsInExplore(selected)) await globalThis.lavish?.setAnnotationMode?.(true);
+      if (modeView && startsInExplore(modeView)) await globalThis.lavish?.setAnnotationMode?.(true);
       if (revision !== navigationRevision) return;
       if (modeEditRevision !== editRevision && hasUnsavedDrafts() && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved hub drafts and unqueued comments.'))) return;
+      if (queuedUrlChange) return;
       navigationUncertain = false; navigationCancelled = false; status(connectionStatus);
-      leavePage(new URL(doc.sibling, location.href).href, id); return;
+      if (!fromPopstate) syncUrl({ view: id, hash, mode: historyMode });
+      leavePage(new URL(doc.sibling + hash, location.href).href, id); return;
     }
-    selected = id; renderNav(); await renderView();
   } catch (error) { if (revision === navigationRevision) { navigationError = error.message; status(connectionStatus); } }
-  finally { if (revision === navigationRevision) { navigationPending = false; if (leavesPage && !leavingConfirmed) resumeRefresh(); } }
+  finally {
+    if (revision === navigationRevision) {
+      navigationPending = false;
+      if (leavesPage && !leavingConfirmed) {
+        resumeRefresh();
+        if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
+        else if (fromPopstate) syncUrl({ view: selected, hash: currentHash, mode: 'push' });
+      }
+    }
+  }
 }
+function handleUrlChange({ view, hash = '' }) {
+  lastReplaceUrl = null;
+  if ((!rendered || navigationPending) && !leavingConfirmed) { queuedUrlChange = { view, hash }; return; }
+  const target = labelFor(view) || documents.some(doc => doc.id === view) ? view : selected;
+  if (target !== selected) select(target, { fromPopstate: true, hash });
+  else { currentViewHash = hash; pendingHash = hash; replaceFrameHash(hash); scrollToFragment(hash); }
+}
+window.addEventListener('lavish:urlChange', event => handleUrlChange(event.detail));
+window.addEventListener('popstate', () => { if (window.self === window.top && !globalThis.lavish?.syncUrl) handleUrlChange({ view: new URLSearchParams(location.search).get('view') || '', hash: location.hash }); });
 const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
 // A rerender replaces the focused editor, so one made only to update a notice carries the
 // caret into the replacement field. Returns the generation it rendered, or null when a
@@ -370,6 +423,10 @@ async function refresh(force = false) {
     let oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSelectedDoc = JSON.stringify(documents.find(item => item.id === selected) || null);
     const oldSnapshot = snapshot, snapshotWasLoading = snapshotLoading();
     documents = list.documents;
+    if (!rendered && queuedUrlChange) {
+      initialView = queuedUrlChange.view; pendingHash = queuedUrlChange.hash; currentViewHash = queuedUrlChange.hash;
+      replaceFrameHash(currentViewHash); queuedUrlChange = null;
+    }
     let requestedInitialView = '';
     if (initialView) {
       const candidate = initialView;
@@ -394,10 +451,12 @@ async function refresh(force = false) {
     if (ownerSelectionChanged && !navigationError && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
       pauseRevision = pauseRefresh();
       if (requestedInitialView && requestedInitialView !== state.selected) await action('navigate', { id: requestedInitialView }).catch(() => {});
-      if (startsInExplore(oldSelected)) await globalThis.lavish?.setAnnotationMode?.(true);
+      if (modeView && startsInExplore(modeView)) await globalThis.lavish?.setAnnotationMode?.(true);
+      if (!rendered && queuedUrlChange) { selected = oldSelected; if (pauseRevision === refreshPauseRevision) resumeRefresh(); return; }
       if (navigationAtStart !== navigationRevision || navigationPending || pendingOwnerNavigation || hasUnsavedDrafts()) { selected = navigationAtStart === navigationRevision ? oldSelected : selected; if (pauseRevision === refreshPauseRevision) resumeRefresh(); return; }
+      if (!rendered) syncUrl({ view: selectedDoc.id, hash: pendingHash || '', mode: 'replace' });
       selected = oldSelected;
-      leavePage(new URL(selectedDoc.sibling, location.href).href, selectedDoc.id); return;
+      leavePage(new URL(selectedDoc.sibling + (pendingHash || ''), location.href).href, selectedDoc.id); return;
     }
     // Ask for the snapshot only on the views that render it, and only for the
     // selection the owner settled on above. Issuing the request transfers the queued
@@ -413,7 +472,10 @@ async function refresh(force = false) {
       .then(value => ({ value: value.unchanged === true ? oldSnapshot : value }))
       .catch(error => ({ error })) : null;
     const initialRender = !rendered;
-    if (initialRender) { renderNav(); oldSelected = selected; oldDocuments = JSON.stringify(documents); await renderView(); }
+    if (initialRender) {
+      syncUrl({ view: selected, hash: pendingHash || '', mode: 'replace' }); renderNav(); oldSelected = selected; oldDocuments = JSON.stringify(documents); await renderView();
+      if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
+    }
     const result = await snapshotResult;
     if (navigationAtStart !== navigationRevision) oldSelected = selected;
     // A snapshot that settles while the page is leaving is still the newest repository
@@ -507,6 +569,11 @@ function editor(label, value, onInput) { const area = el('textarea', null, { 'ar
 function notice(text) { return el('p', text, { role: 'status', class: 'notice' }); }
 let renderGeneration = 0;
 async function renderView(focusChangeId) {
+  const rendering = renderViewContent(focusChangeId); const generation = renderGeneration;
+  await rendering;
+  if (generation === renderGeneration && pendingHash !== null) scrollToFragment(pendingHash);
+}
+async function renderViewContent(focusChangeId) {
   const generation = ++renderGeneration;
   displayedDoc = null;
   const view = document.querySelector('#view'); diffView?.hide(); view.replaceChildren(); rendered = true;
@@ -663,6 +730,7 @@ async function renderView(focusChangeId) {
           const value = node.getAttribute(attr);
           if (value && !value.startsWith('#') && !value.startsWith('/') && !/^[a-z][a-z\d+.-]*:/i.test(value)) node.setAttribute(attr, new URL(value, base).href);
         }
+        if (generation === renderGeneration && selected === id && pendingHash !== null) scrollToFragment(pendingHash);
         if (doc && generation === renderGeneration && selected === id) {
           displayedDoc = { id, version: state.version };
           acknowledgeDisplayed(id, state.version);

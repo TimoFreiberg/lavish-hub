@@ -12,7 +12,35 @@ function siblingSidebarClient(c) {
     globalThis.lavish?.setDocumentMeta?.({ title });
   };
   setTabTitle();
-  window.addEventListener('lavish:ready', setTabTitle);
+  window.addEventListener('lavish:ready', () => { setTabTitle(); syncUrl({ view: c.id, hash: currentHash, mode: 'replace' }); });
+  let currentHash = location.hash, queuedUrlChange = null;
+  function syncUrl(update) {
+    if (globalThis.lavish?.syncUrl) globalThis.lavish.syncUrl(update);
+    else if (window.self === window.top) {
+      const url = new URL(location.href); url.searchParams.set('view', update.view); url.hash = update.hash;
+      const next = url.pathname + url.search + url.hash;
+      if (next !== location.pathname + location.search + location.hash) history[update.mode === 'push' ? 'pushState' : 'replaceState'](null, '', next);
+    }
+  }
+  function replaceFrameHash(hash) { if (window.self !== window.top) history.replaceState(null, '', location.pathname + location.search + hash); }
+  function scrollToFragment(hash) {
+    let id; try { id = decodeURIComponent(hash.slice(1)); } catch { id = hash.slice(1); }
+    if (!id || id === 'top') { window.scrollTo(0, 0); return; }
+    (document.getElementById(id) || document.getElementsByName(id)[0])?.scrollIntoView();
+  }
+  syncUrl({ view: c.id, hash: currentHash, mode: 'replace' });
+  if (currentHash) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => scrollToFragment(currentHash), { once: true });
+    else scrollToFragment(currentHash);
+    window.addEventListener('load', () => scrollToFragment(currentHash), { once: true });
+  }
+  document.addEventListener('click', e => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest?.('a[href^="#"]');
+    if (!a || a.closest('[data-lavish-action],[data-lavish-ui]') || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
+    const hash = a.getAttribute('href'); e.preventDefault(); currentHash = hash;
+    replaceFrameHash(hash); syncUrl({ view: c.id, hash, mode: 'push' }); scrollToFragment(hash);
+  });
   let navigating = false, dirty = false, leaving = false, edits = 0, navGeneration = 0;
   let paused = false, polling = false, timer, leaveTimer, readController, readTimer;
   let attemptedSelection = '', navigationCancelled = false, navigationUncertain = false;
@@ -32,7 +60,7 @@ function siblingSidebarClient(c) {
   function leave(url, id) {
     pause(); leaving = true; attemptedSelection = id;
     if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; resume(); }, 1000);
-    location.href = url;
+    location.replace(url);
   }
   function applyUpdate(update) {
     if (update.samePage) {
@@ -41,7 +69,7 @@ function siblingSidebarClient(c) {
       location.reload();
     } else leave(update.dest, c.id);
   }
-  const docUrl = doc => new URL(doc?.source?.toLowerCase().endsWith('.html') ? doc.sibling : 'hub.html', location.href);
+  const docUrl = (doc, id = doc?.id, hash = '') => new URL((doc?.source?.toLowerCase().endsWith('.html') ? doc.sibling : 'hub.html?__lavish_hub_view=' + encodeURIComponent(id)) + hash, location.href);
   const canAutoReload = generation => (generation === undefined || generation === navGeneration) && !navigating && !leaving && !navigationUncertain && !feedback.hasAttribute('data-error');
   function maybeApplyPendingUpdate(generation) {
     if (!pendingUpdate || dirty || !canAutoReload(generation)) return false;
@@ -121,29 +149,48 @@ function siblingSidebarClient(c) {
     action('acknowledge', { id: c.id, version: c.version }, AbortSignal.timeout(10000)).then(() => { acknowledged = true; }, () => {}).finally(() => { ackPending = false; });
   };
   if (readyToAck()) acknowledgeCurrent(); else document.addEventListener('DOMContentLoaded', acknowledgeCurrent, { once: true });
-  nav.addEventListener('click', async e => {
-    syncDirty();
+  async function navigateTo(id, targetUrl, labelText, fromPopstate = false, hash = '') {
+    if (navigating || leaving) return;
+    syncDirty(); navigating = true; pause(); navGeneration++;
+    feedback.removeAttribute('data-error'); feedback.textContent = 'Opening ' + labelText + '…'; nav.setAttribute('aria-busy', 'true');
+    try {
+      let approved = false, approvedEdits = edits;
+      if (dirty) { approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'); if (!approved) return; }
+      await action('navigate', { id }, AbortSignal.timeout(10000));
+      syncDirty();
+      if ((!approved || approvedEdits !== edits) && dirty && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'))) return;
+      if (queuedUrlChange) return;
+      navigationUncertain = false; navigationCancelled = false;
+      if (!fromPopstate) syncUrl({ view: id, hash, mode: 'push' });
+      leave(targetUrl, id);
+    } catch { feedback.dataset.error = ''; feedback.textContent = 'Could not open ' + labelText + '. Select it again to retry.'; }
+    finally {
+      navigating = false;
+      if (!leaving) {
+        resume(); nav.removeAttribute('aria-busy'); if (!feedback.hasAttribute('data-error')) feedback.textContent = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : '';
+        if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
+        else if (fromPopstate) syncUrl({ view: c.id, hash: currentHash, mode: 'push' });
+      }
+    }
+  }
+  nav.addEventListener('click', e => {
     const reload = e.target.closest('button.nav-reload');
     if (reload && nav.contains(reload)) { e.preventDefault(); if (!navigating && !leaving && pendingUpdate) applyUpdate(pendingUpdate); return; }
     const a = e.target.closest('a[data-hub-id]');
     if (!a || !nav.contains(a)) return;
     e.preventDefault();
-    if (navigating || leaving) return;
-    navigating = true; pause(); navGeneration++;
-    const labelText = a.querySelector('.nav-label')?.textContent || a.textContent;
-    feedback.removeAttribute('data-error'); feedback.textContent = 'Opening ' + labelText + '…'; nav.setAttribute('aria-busy', 'true');
-    try {
-      let approved = false, approvedEdits = edits;
-      if (dirty) { approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'); if (!approved) return; }
-      await action('navigate', { id: a.dataset.hubId }, AbortSignal.timeout(10000));
-      if ((!approved || approvedEdits !== edits) && dirty && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'))) return;
-      navigationUncertain = false; navigationCancelled = false; leave(a.href, a.dataset.hubId);
-    } catch { feedback.dataset.error = ''; feedback.textContent = 'Could not open ' + labelText + '. Select it again to retry.'; }
-    finally {
-      navigating = false;
-      if (!leaving) { resume(); nav.removeAttribute('aria-busy'); if (!feedback.hasAttribute('data-error')) feedback.textContent = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : ''; }
-    }
+    navigateTo(a.dataset.hubId, a.href, a.querySelector('.nav-label')?.textContent || a.textContent);
   });
+  function handleUrlChange({ view, hash = '' }) {
+    if (navigating && !leaving) { queuedUrlChange = { view, hash }; return; }
+    if (!view || view === c.id) { currentHash = hash; replaceFrameHash(hash); scrollToFragment(hash); return; }
+    const a = [...nav.querySelectorAll('a[data-hub-id]')].find(link => link.dataset.hubId === view);
+    const target = a ? new URL(a.href) : docUrl(null, view);
+    target.hash = hash;
+    navigateTo(view, target.href, a?.querySelector('.nav-label')?.textContent || view, true, hash);
+  }
+  window.addEventListener('lavish:urlChange', e => handleUrlChange(e.detail));
+  window.addEventListener('popstate', () => { if (window.self === window.top && !globalThis.lavish?.syncUrl) handleUrlChange({ view: new URLSearchParams(location.search).get('view') || '', hash: location.hash }); });
   async function refresh() {
     if (paused || polling || (warmed && document.visibilityState === 'hidden')) return;
     warmed = true; polling = true;
@@ -168,7 +215,7 @@ function siblingSidebarClient(c) {
       }
       syncDirty();
       if (!dirty && state.selected && state.selected !== c.id && state.selected !== attemptedSelection && canAutoReload(generation)) {
-        leave(docUrl(list.documents.find(d => d.id === state.selected)).href, state.selected); return;
+        leave(docUrl(list.documents.find(d => d.id === state.selected), state.selected).href, state.selected); return;
       }
       const current = list.documents.find(d => d.id === c.id);
       if (current && c.version && current.version && current.version !== c.version) {

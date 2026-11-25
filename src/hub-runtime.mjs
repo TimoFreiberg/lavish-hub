@@ -235,7 +235,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
           continue;
         }
         const base = `${browserUrl}/resources/${transport.resourceKey}/${encodeURIComponent(doc.id)}/${encodeURIComponent(path.basename(doc.source))}`;
-        const destinations = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, href: 'hub.html', attention: false, unseen: false })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : 'hub.html', attention: Boolean(item.attention), unseen: item.id !== doc.id && item.viewedVersion !== item.version }))];
+        const destinations = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, href: `hub.html?__lavish_hub_view=${encodeURIComponent(id)}`, attention: false, unseen: false })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : `hub.html?__lavish_hub_view=${encodeURIComponent(item.id)}`, attention: Boolean(item.attention), unseen: item.id !== doc.id && item.viewedVersion !== item.version }))];
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope">${scope}</aside>` : '';
         const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id, version: doc.version, workspaceName, repoName, session: Boolean(identity.session), sessionTitle: effectiveTitle() || '' }).replaceAll('<', '\\u003c');
