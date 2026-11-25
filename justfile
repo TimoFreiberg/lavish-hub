@@ -22,3 +22,7 @@ test-e2e:
 
 shots:
     node scripts/check.mjs shots
+
+# Verify release prerequisites: version, tag/release availability, Nix flake, and package smoke.
+release-check *args:
+    node scripts/release-check.mjs {{args}}

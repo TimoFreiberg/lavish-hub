@@ -20,12 +20,22 @@ smoke jobs.
 
 1. Run `just check` on the exact integrated source and inspect the screenshots at
    original size. Record both results before release.
-2. Push the tested source to main. Confirm the version in `package.json` and
-   verify that its tag and release do not already exist.
-3. Manually dispatch the [release workflow](https://github.com/TimoFreiberg/lavish-hub/actions/workflows/release.yml)
+2. Run `just release-check` to verify the release prerequisites:
+   - `package.json` has an `X.Y.Z` version matching `package-lock.json`,
+   - tag `v<version>` and GitHub release `v<version>` do not already exist,
+   - `flake.nix` builds (`nix build --no-link` and `nix flake check`) and the
+     built `lavish-hub` binary runs,
+   - `scripts/package.mjs` and `test/package-smoke.mjs` pass on a local archive.
+   Pass `--skip-availability` to verify `flake.nix` and packaging before bumping
+   the version. If `nix build` reports an out-of-date `npmDepsHash` after
+   updating dependencies or bumping the version, set `npmDepsHash = pkgs.lib.fakeHash;`,
+   run `nix build --no-link` to get the expected `sha256-...` hash, update
+   `flake.nix`, and rerun `just release-check`.
+3. Push the tested source to main.
+4. Manually dispatch the [release workflow](https://github.com/TimoFreiberg/lavish-hub/actions/workflows/release.yml)
    with the full integrated commit and version without `v`. CI builds one archive,
    tests those bytes on Linux and macOS, and publishes them only after both pass.
-4. Check the published metadata and checksum against the CI artifact. Attempt
+5. Check the published metadata and checksum against the CI artifact. Attempt
    installation from both the pinned and latest URLs using isolated mise state.
    Report failures and any partially created release rather than overwriting it.
 
