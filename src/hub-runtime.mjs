@@ -72,12 +72,8 @@ async function checkInvocationCheckout(identity, directory) {
   if (!matches) throw new Error('Workspace is unavailable or has changed');
 }
 
-export function validateSessionTitle(title) {
-  if (typeof title !== 'string' || /[\x00-\x1f\x7f]/.test(title)) throw new Error('Invalid session title');
-  const trimmed = title.trim();
-  if (!trimmed || trimmed.length > 240) throw new Error('Invalid session title');
-  return trimmed;
-}
+export { validateSessionTitle } from './hub-title.mjs';
+import { validateSessionTitle } from './hub-title.mjs';
 
 async function readTarget(directory) {
   let target;
