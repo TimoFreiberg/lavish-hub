@@ -1,6 +1,6 @@
 # Lavish HTTP boundary
 
-The foreground hub uses the packaged, patched Lavish 0.1.98 runtime. Before use it checks the server health response, version, the page-review and hub-asset capabilities, and canonical state identity. The default state directory is `${XDG_STATE_HOME:-$HOME/.local/state}/lavish-hub/lavish`; `LAVISH_AXI_STATE_DIR` overrides it.
+The foreground hub uses the packaged, patched Lavish 0.1.98 runtime. Before use it checks the server health response, version, the page-review, hub-asset, and batch-reply capabilities, and canonical state identity. The default state directory is `${XDG_STATE_HOME:-$HOME/.local/state}/lavish-hub/lavish`; `LAVISH_AXI_STATE_DIR` overrides it.
 
 Without `LAVISH_AXI_PORT`, commands find an existing Lavish server for that state directory on ports 4388–4407, or choose the first available port in that range. Unidentified listeners on unrecorded ports are skipped. If the recorded port is occupied but its listener cannot identify itself, startup is refused rather than risking a second server writing the same state. A matching but incompatible server is rejected rather than replaced. An explicit `LAVISH_AXI_PORT` selects exactly that port, with no fallback, and is rejected if another known port uses the same state.
 
@@ -20,4 +20,17 @@ That line names a server whose owner the client cannot see. The health response 
 
 Every HTTP response closes its connection, so the browser opens a new one for each request instead of reusing an old one. That keeps the hub usable through a port forward that does not relay the server's close, such as the one in some terminal apps. Through such a forward, a connection the server had closed looked open to the browser, and requests sent on it were never answered until navigations stalled and the tab had to be reloaded. The live-event WebSocket carries a heartbeat message every 30 seconds; a page that hears nothing for 75 seconds replaces the connection. Restart a running server after upgrading to pick this up.
 
-The package installs only `lavish-hub`, so `lavish-axi` is not on `PATH`. A hand-typed `lavish-axi stop` would use the default state directory and port, which reaches a different server or none. To see what a running server actually reports, `curl -s http://127.0.0.1:<port>/health` returns its version and the `lavish_hub_page_reviews` and `lavish_hub_assets` fields the client requires.
+The package installs only `lavish-hub`, so `lavish-axi` is not on `PATH`. A hand-typed `lavish-axi stop` would use the default state directory and port, which reaches a different server or none. To see what a running server actually reports, `curl -s http://127.0.0.1:<port>/health` returns its version and the required `lavish_hub_page_reviews`, `lavish_hub_assets`, and `lavish_hub_batch_replies` fields. Each must be `1`. The last identifies the local batch-reply patch even though the upstream version remains unchanged.
+
+## Batch replies
+
+A consuming feedback poll returns `batch_id`. `POST /api/:key/agent-reply` accepts
+JSON with `text` and an optional `batch_id`. If supplied, the ID must be a nonempty
+string of at most 128 characters. Success returns `{"status":"sent"}`, and the CLI
+adds `batchId` to its own confirmation. An invalid ID returns `400 VALIDATION_ERROR`,
+an unknown or evicted batch returns `404 BATCH_NOT_FOUND`, and an already replied
+batch returns `409 BATCH_ALREADY_REPLIED` with `replied_at`. A missing session returns
+404, and an ended session returns 409 with `status: "ended"`. Omitting `batch_id`
+stamps `Done` on all open delivered prompts and marks their delivered batches as
+replied (so a later batch-bound reply to them returns `409 BATCH_ALREADY_REPLIED`).
+See [feedback and actions](feedback-routing.md) for receipt and delivery guarantees.

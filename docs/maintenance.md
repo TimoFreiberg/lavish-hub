@@ -90,6 +90,18 @@ release, and refuse it. Closing the connection after every HTTP response, and th
 heartbeat message on live-event WebSockets with the chrome's silence check, are
 further local differences: upstream reuses connections, which stalls the hub behind
 a port forward that does not relay the server's close.
+
+The batch-reply patch returns `batch_id` on consuming polls and accepts it on
+`POST /api/:key/agent-reply`, binding `Done` receipts to that batch (while unbound
+replies still stamp all open delivered prompts and mark their batches replied). The
+endpoint returns `404 BATCH_NOT_FOUND` for an unknown batch and
+`409 BATCH_ALREADY_REPLIED` with `replied_at` for a duplicate. The client requires
+`lavish_hub_batch_replies: 1` on `/health` to distinguish a server with this patch
+from an older build of the same version. Preserve the capability check,
+disconnected-poll restore, bounded batch records, and receipt isolation when
+evaluating an upgrade. See [the HTTP boundary](lavish-http.md#batch-replies) and
+[feedback and actions](feedback-routing.md#delivery-guarantees).
+
 Retain or adapt any differences still needed here. Only retire code after establishing an
 upstream equivalent and passing the applicable regression tests and full repository
 QA, including visual inspection, on the proposed replacement. Review and document

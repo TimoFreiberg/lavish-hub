@@ -70,28 +70,42 @@ commands; they never start an owner themselves. For example:
 ```sh
 lavish-hub listen --workspace "$PWD" --open
 # In another terminal, after the owner is ready:
-lavish-hub publish "$HOME/reviews/review.html" --id review --title "Review" --metadata-file "$HOME/reviews/scope.json" --open
+lavish-hub publish "$HOME/reviews/review.html" --title "Review" --open
 lavish-hub --view review
 lavish-hub stop
 ```
 
-The source must already exist and end in `.html`, `.md`, or `.markdown`. IDs
-are 1–64 ASCII letters, digits, underscores or hyphens, starting with a letter
-or digit; built-in view IDs are reserved. Publishing registers or replaces the
-document without changing the active browser view and prints its direct
-`?view=ID` link. Pass `--attention` to mark the document in the sidebar for
-review without taking over the page; opening it clears the flag. New or updated publications show a `New` badge in the sidebar until opened. Pass `--open` to `publish`, or run
-`lavish-hub --view ID [--open]`, to select and open the artifact explicitly.
-`--metadata-file` accepts a JSON object of at most
-16 KiB with optional `reviewedRepository` (nonempty display name), `baseCommit`
-and `headCommit` (full 40- or 64-digit hex IDs), and `sourceUrl` (HTTP(S) URL).
-Unknown fields are rejected. Each publication replaces all previous metadata;
-omitting it clears the old scope. If generating the published HTML pages fails,
-publication retains the previous registration, metadata, selection, and generated
-pages when rollback succeeds. A process interruption or filesystem error during
-rollback can leave generated pages out of sync. Scope is recorded as supplied and
-is not updated if commits are rewritten. The displayed scope describes the review
-at publication time, not necessarily the current checkout.
+The source must already exist and end in `.html`, `.md`, or `.markdown` (a missing source file returns `VALIDATION_ERROR` with `action=fix_args`). `--id` is optional: if the canonical source file is already registered, omitting `--id` reuses its existing ID. Otherwise the owner derives a lowercase ID from the filename, replacing unsupported characters with hyphens (prepending `doc-` if it does not start with a letter or digit, or appending `-doc` if it matches a built-in view ID). If another source already owns that ID, an eight-hex hash of the canonical path is appended. If that hashed ID also belongs to another source, publication fails with `VALIDATION_ERROR` (`action=fix_args`) and you must pass `--id` explicitly. IDs are 1–64 ASCII letters, digits, underscores, or hyphens, starting with a letter or digit. Built-in view IDs are reserved.
+
+Publishing registers or replaces the document without changing the active browser
+view and prints one JSON line with `id`, `url`, `title`, and `scope`. The URL is the
+direct `?view=ID` link when available. Pass `--attention` to mark the document in
+the sidebar for review without taking over the page (opening it clears the flag).
+New or updated publications show a `New` badge until opened. Pass `--open` to
+`publish`, or run `lavish-hub --view ID [--open]`, to select and open it.
+
+By default, publication records the repository name and the base and head commits
+of the tracked jj target. If the workspace or repository is unavailable, automatic
+scope fails with `WORKSPACE_UNAVAILABLE` (`action=refresh`) so you can pass
+`--no-scope` or explicit scope flags. For an external PR, supply explicit scope instead:
+
+```sh
+lavish-hub publish review.html --repo org/repo --base-commit BASE_HEX --head-commit HEAD_HEX --source-url https://github.com/org/repo/pull/123
+```
+
+`--metadata-file` accepts a JSON object of at most 16 KiB with optional
+`reviewedRepository` (nonempty display name), `baseCommit` and `headCommit` (full
+40- or 64-digit hex IDs), and `sourceUrl` (HTTP(S) URL). Unknown fields or unreadable
+files fail with `VALIDATION_ERROR` (`action=fix_args`). Inline flags override
+corresponding file fields. A metadata file or any inline scope flag disables
+automatic scope, leaving unspecified fields absent. Use `--no-scope` to publish
+without scope (it cannot be combined with a metadata file or inline scope flags).
+Each publication replaces previous metadata. Scope is recorded at publication time
+and is not updated if commits are rewritten. If generating the published HTML pages
+fails, publication retains the previous registration, metadata, selection, and
+generated pages when rollback succeeds. A process interruption or filesystem error
+during rollback can leave generated pages out of sync. See `lavish-hub publish --help`
+for examples.
 
 Entering Commits or Changes turns Lavish annotations off so you can interact
 with the view. Turn the annotation switch back on whenever you want to comment
@@ -176,7 +190,7 @@ or run `lavish-hub stop [--workspace DIR]` to request shutdown. Add `--open`
 to `lavish-hub` or `publish` to open the existing review (or list
 it under Artifacts when available); on `publish`, `--open` also selects the
 published document. Plain `publish` leaves the active view unchanged and
-prints a direct `?view=ID` link. The browser tab title follows the active view
+prints JSON containing the direct `?view=ID` link. The browser tab title follows the active view
 and session title or workspace name (`<View> · <title or workspace>` via Lavish's `setDocumentMeta()`). Selection
 is shared by the running owner and is restored on page refresh; a new owner starts
 on Commits. An open hub checks for selection, repository, and source changes about
@@ -223,14 +237,34 @@ process is not replaced. A stale record is reclaimed only when its recorded proc
 provably gone. An incomplete ownership record requires manual investigation;
 do not delete it while an owner might still be running.
 
-Diagnostics and the review URL go to stderr. Each feedback batch is one JSON
-line on stdout with `type: "agent-notification"`, `workspace`, `session` (for
-session-scoped hubs), `instance`, `page`, `prompts`, `context`, `snapshotPage`,
-`snapshotDocument`, `failures`, and `reply` fields. For a published HTML document, each annotation prompt has a
-`document` source path; `snapshotDocument` identifies the source of the snapshot,
-while `snapshotPage` retains Lavish's page identity. The snapshot document is null
-when no published HTML source matches. Poll failures are not retried because delivery may have occurred. Reply using the printed Lavish
-command. An explicitly ended review needs `--reopen` to open again.
+Diagnostics and the review URL go to stderr. Each feedback batch is one compact
+JSON line on stdout with `type: "agent-notification"`, `batchId`, `workspace`,
+optional `session`, `instance`, `page`, `prompts`, `hasDomContext`, and `failures`.
+When there are no prompts and the snapshot matches a published HTML document,
+`snapshotDocument` also identifies its source. Notifications omit the raw DOM
+snapshot so stdout stays compact.
+
+Each normalized prompt has a `message` and an `artifact`: a diff (`kind: "diff"`,
+`view: "changes"`), a published HTML document (`kind: "document"`, `id`,
+`document`), or a hub or freeform message (`kind: "hub"` or `"freeform"`, `view`,
+with `id` and `document` when a published document is selected). Diff annotations
+include `diff` with `file`, `oldPath`, `side`, `startLine`, `endLine`, and `revision`,
+plus `range` and `quote` when the original prefix can be parsed. Otherwise the
+original prompt is retained as `message`. Text annotations include `selection.text`,
+and other semantic targets (such as table or Mermaid targets) appear in `target`.
+Non-diff element annotations include available `element` fields (`uid`, `tag`,
+`selector`, `text`), and nonempty `attachments` are included. Fields whose values
+are unavailable may be omitted.
+
+Use `lavish-hub reply --batch ID 'response'` to reply to a particular batch. When
+`hasDomContext` is true, `lavish-hub context --batch ID` prints the captured DOM
+outline on demand (it prints nothing when none was captured). The running owner
+caches the 50 most recent batches in memory and evicts the oldest. Restarting the
+owner clears this cache. An unknown or evicted batch reports
+`BATCH_CONTEXT_UNAVAILABLE` with `action=refresh`. Add `--workspace DIR` or
+`--session ID` to address the right hub. Poll failures are not retried because
+delivery may have occurred. See [feedback and actions](feedback-routing.md). An
+explicitly ended review needs `--reopen` to open again.
 
 Workspace identity and owner metadata live under the private XDG data directory,
 scoped by workspace and Lavish state directory, or by repository, session ID, and
