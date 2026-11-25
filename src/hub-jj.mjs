@@ -29,7 +29,7 @@ function run(cwd, args, input) {
     child.stderr.on('data', chunk => err.push(chunk));
     child.on('error', reject);
     child.stdin.on('error', () => {});
-    child.on('close', code => code === 0 ? resolve(Buffer.concat(out).toString('utf8')) : reject(new Error(`jj ${args[0]} failed: ${Buffer.concat(err).toString('utf8').trim() || `exit ${code}`}`)));
+    child.on('close', code => code === 0 ? resolve(Buffer.concat(out).toString('utf8')) : reject(new Error(`jj ${args.find(arg => !arg.startsWith('-')) || args[0]} failed: ${Buffer.concat(err).toString('utf8').trim() || `exit ${code}`}`)));
     child.stdin.end(input);
   });
 }
@@ -41,10 +41,10 @@ function parseRows(text) {
   });
 }
 
-async function operation(cwd) {
+async function operation(cwd, { ignoreWorkingCopy = false } = {}) {
   // A normal command snapshots the working copy before we capture the operation.
-  await run(cwd, ['status']);
-  const id = (await run(cwd, ['op', 'log', '-n', '1', '--no-graph', '-T', 'id ++ "\\n"'])).trim();
+  if (!ignoreWorkingCopy) await run(cwd, ['status']);
+  const id = (await run(cwd, [...(ignoreWorkingCopy ? ['--ignore-working-copy'] : []), 'op', 'log', '-n', '1', '--no-graph', '-T', 'id ++ "\\n"'])).trim();
   if (!/^[0-9a-f]{128}$/.test(id)) throw new Error('Could not determine the current jj operation');
   return id;
 }
@@ -53,13 +53,73 @@ async function rows(cwd, op, revset) {
   return parseRows(await run(cwd, ['--at-operation', op, 'log', '-r', revset, '--no-graph', '-T', template]));
 }
 
-export async function readHubSnapshot(cwd, { afterMetadata } = {}) {
-  return readSnapshotAt(cwd, await operation(cwd), afterMetadata);
+export function escapeJjString(value) {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-async function readSnapshotAt(cwd, op, afterMetadata) {
-  const baseRows = await rows(cwd, op, 'fork_point(trunk() | @)');
-  const headRows = await rows(cwd, op, '@');
+export function isWorkingCopyRev(input) {
+  let quoted = false, escaped = false;
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    if (quoted && escaped) { escaped = false; continue; }
+    if (quoted && char === '\\') { escaped = true; continue; }
+    if (char === '"') { quoted = !quoted; continue; }
+    if (!quoted && char === '@' && !/[a-zA-Z0-9_]/.test(input[i + 1] || '')) return true;
+  }
+  return false;
+}
+
+export async function resolveTargetRev(cwd, input, { ignoreWorkingCopy = false } = {}) {
+  if (typeof input !== 'string' || !input.trim() || /[\x00-\x1f\x7f]/.test(input)) throw new Error('Invalid revision');
+  const log = async revset => parseRows(await run(cwd, [...(ignoreWorkingCopy ? ['--ignore-working-copy'] : []), 'log', '-r', revset, '--no-graph', '-T', template]));
+  const single = items => {
+    if (!items.length) throw new Error('Revision not found');
+    if (items.length !== 1) throw new Error('Revision must resolve to a single commit');
+    return items[0];
+  };
+  const pin = row => ({ input: row.changeId.slice(0, 12), revset: `change_id(${row.changeId})`, kind: 'change', changeId: row.changeId });
+  if (isWorkingCopyRev(input)) {
+    if (ignoreWorkingCopy) throw new Error('Working-copy revisions require a live workspace checkout');
+    return pin(single(await log(input)));
+  }
+  const escaped = escapeJjString(input), bookmark = `bookmarks(exact:"${escaped}")`;
+  const local = await log(bookmark);
+  if (local.length > 1) throw new Error('Bookmark is conflicted and resolves to multiple commits');
+  if (local.length === 1) return { input, revset: bookmark, kind: 'bookmark' };
+  if (input.includes('@')) {
+    const at = input.lastIndexOf('@');
+    const remote = `remote_bookmarks(exact:"${escapeJjString(input.slice(0, at))}", exact:"${escapeJjString(input.slice(at + 1))}")`;
+    const matches = await log(remote);
+    if (matches.length > 1) throw new Error('Remote bookmark is conflicted and resolves to multiple commits');
+    if (matches.length === 1) return { input, revset: remote, kind: 'remote-bookmark' };
+  }
+  const row = single(await log(input));
+  if (/^[a-z]{1,32}$/i.test(input) && row.changeId.startsWith(input.toLowerCase())) return { input: input.length === 32 ? row.changeId.slice(0, 12) : input, revset: `change_id(${row.changeId})`, kind: 'change', changeId: row.changeId };
+  return { input, revset: input, kind: 'revset' };
+}
+
+export async function discoverStartupTarget(cwd) {
+  const startupTemplate = '"[" ++ json(change_id) ++ "," ++ json(description) ++ "," ++ json(empty) ++ "," ++ json(root) ++ "]\\n"';
+  const log = async revset => (await run(cwd, ['log', '-r', revset, '--no-graph', '-T', startupTemplate])).split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const current = await log('@');
+  if (current.length !== 1) throw new Error('Working-copy head must resolve to one commit');
+  let [changeId, description, empty] = current[0];
+  if (!description.trim() && empty) {
+    const parent = await log('@-');
+    if (parent.length === 1 && !parent[0][3]) changeId = parent[0][0];
+  }
+  return { input: changeId.slice(0, 12), revset: `change_id(${changeId})`, kind: 'change', changeId };
+}
+
+export async function readHubSnapshot(cwd, { target, afterMetadata } = {}) {
+  return readSnapshotAt(cwd, await operation(cwd, { ignoreWorkingCopy: Boolean(target?.rev) }), { target, afterMetadata });
+}
+
+async function readSnapshotAt(cwd, op, { target, afterMetadata } = {}) {
+  const headRevset = target?.rev?.revset || '@';
+  const baseExpr = target?.base?.revset || 'trunk()';
+  const baseRows = await rows(cwd, op, `fork_point((${baseExpr}) | (${headRevset}))`);
+  const headRows = await rows(cwd, op, headRevset);
   if (baseRows.length !== 1 || headRows.length !== 1) throw new Error('The jj base and working-copy head must each resolve to one commit');
   const base = baseRows[0].commitId, head = headRows[0].commitId;
   const commits = await rows(cwd, op, `${base}..${head}`);
@@ -73,39 +133,53 @@ async function readSnapshotAt(cwd, op, afterMetadata) {
   return { operationId: op, base, head, commits, patch, generated: new Date().toISOString() };
 }
 
-export function createHubJj(cwd, { validate = async () => true, beforeDescribe } = {}) {
+export function createHubJj(cwd, { validate = async () => true, beforeDescribe, target } = {}) {
+  const resolveCwd = () => typeof cwd === 'function' ? cwd() : cwd;
+  let currentTarget = target;
   let pending = Promise.resolve(), cached, expires = 0, flight, generation = 0;
   const snapshots = new Map();
   async function checkWorkspace() {
     if (!await validate()) throw new Error('Workspace no longer matches its recorded repository');
   }
-  async function versions(changeId) {
-    const op = await operation(cwd);
-    return rows(cwd, op, `change_id(${changeId})`).then(items => items.filter(item => item.changeId === changeId));
+  async function versions(activeCwd, changeId, ignoreWorkingCopy) {
+    const op = await operation(activeCwd, { ignoreWorkingCopy });
+    return rows(activeCwd, op, `change_id(${changeId})`).then(items => items.filter(item => item.changeId === changeId));
   }
   async function describe(request) {
+    const activeCwd = resolveCwd(), ignoreWorkingCopy = Boolean(currentTarget?.rev);
     const { changeId, commitId, expectedDescription, description } = request;
     if (!/^[a-z]{32}$/.test(changeId || '') || !/^[0-9a-f]{40,128}$/.test(commitId || '') || typeof expectedDescription !== 'string' || typeof description !== 'string' || description.includes('\0')) throw new Error('Invalid description request');
     await checkWorkspace();
-    const current = await versions(changeId);
+    const current = await versions(activeCwd, changeId, ignoreWorkingCopy);
     if (current.length !== 1 || current[0].divergent) return { status: 'conflict', reason: current.length ? 'divergent' : 'missing', current };
     if (current[0].immutable) return { status: 'conflict', reason: 'immutable', current };
     if (current[0].commitId !== commitId || current[0].description !== expectedDescription) return { status: 'conflict', reason: 'stale', current };
     if (beforeDescribe) await beforeDescribe();
     await checkWorkspace();
-    await run(cwd, ['describe', '-r', commitId, '--stdin'], description);
-    const updated = await versions(changeId);
+    await run(activeCwd, [...(ignoreWorkingCopy ? ['--ignore-working-copy'] : []), 'describe', '-r', commitId, '--stdin'], description);
+    const updated = await versions(activeCwd, changeId, ignoreWorkingCopy);
     // jj normalizes a nonempty description to end in a newline.
     const intended = description && !description.endsWith('\n') ? `${description}\n` : description;
     if (updated.length !== 1 || updated[0].divergent || updated[0].description !== intended) return { status: 'conflict', reason: 'unexpected-result', current: updated };
     return { status: 'saved', current: updated[0] };
   }
   return {
+    setTarget(nextTarget) {
+      currentTarget = nextTarget;
+      generation++; cached = undefined; snapshots.clear();
+    },
     async summary() {
       await checkWorkspace();
-      const result = parseRows(await run(cwd, ['log', '-r', '@-', '--no-graph', '-T', template]));
+      const activeCwd = resolveCwd(), rev = currentTarget?.rev;
+      const log = async revset => parseRows(await run(activeCwd, [...(rev ? ['--ignore-working-copy'] : []), 'log', '-r', revset, '--no-graph', '-T', template]));
+      let result = await log(rev?.revset || '@-');
       if (result.length !== 1) throw new Error('Working-copy parent unavailable');
-      return result[0].description.split('\n')[0].slice(0, 240) || '(no description)';
+      let description = result[0].description.split('\n')[0].slice(0, 240);
+      if (!description && rev) {
+        result = await log(`(${rev.revset})-`);
+        if (result.length === 1) description = result[0].description.split('\n')[0].slice(0, 240);
+      }
+      return description || '(no description)';
     },
     async snapshot({ force = false, knownVersion } = {}) {
       await checkWorkspace();
@@ -113,19 +187,19 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
       while (true) {
         if (flight) { await flight; continue; }
         if (!force && cached && Date.now() < expires) return knownVersion === cached.version ? { unchanged: true } : cached;
-        const started = generation;
+        const started = generation, snapshotTarget = currentTarget, activeCwd = resolveCwd();
         const refresh = (async () => {
-          const op = await operation(cwd);
+          const op = await operation(activeCwd, { ignoreWorkingCopy: Boolean(snapshotTarget?.rev) });
           if (generation !== started) return;
           if (!force && cached?.operationId === op) {
             expires = Date.now() + 2000;
             return;
           }
-          const value = { ...await readSnapshotAt(cwd, op), version: randomUUID() };
+          const value = { ...await readSnapshotAt(activeCwd, op, { target: snapshotTarget }), version: randomUUID() };
           if (generation === started) {
             cached = value; expires = Date.now() + 2000;
             snapshots.delete(value.operationId);
-            snapshots.set(value.operationId, { base: value.base, head: value.head, files: modelPatch(value.patch).map(({ oldPath, newPath, parseError, status, oldMode, newMode }) => ({ oldPath, newPath, parseError, status, oldMode, newMode })) });
+            snapshots.set(value.operationId, { version: value.version, base: value.base, head: value.head, files: modelPatch(value.patch).map(({ oldPath, newPath, parseError, status, oldMode, newMode }) => ({ oldPath, newPath, parseError, status, oldMode, newMode })) });
             while (snapshots.size > 8) snapshots.delete(snapshots.keys().next().value);
           }
         })();
@@ -134,15 +208,18 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe }
         force = false;
       }
     },
-    async diffFiles({ operationId, fileIndex }) {
+    async diffFiles({ operationId, fileIndex, version }) {
       await checkWorkspace();
+      const activeCwd = resolveCwd(), started = generation;
       const snapshot = snapshots.get(operationId);
+      if (version !== undefined && snapshot?.version !== version) throw new Error('Expansion is unavailable for this file or snapshot');
       const file = Number.isSafeInteger(fileIndex) && snapshot?.files[fileIndex];
       if (!file || file.parseError || !['modified', 'renamed', 'copied'].includes(file.status) || [file.oldMode, file.newMode].some(mode => mode && !['100644', '100755'].includes(mode))) throw new Error('Expansion is unavailable for this file or snapshot');
       const [oldContent, newContent] = await Promise.all([
-        readFileAt(cwd, operationId, snapshot.base, file.oldPath),
-        readFileAt(cwd, operationId, snapshot.head, file.newPath),
+        readFileAt(activeCwd, operationId, snapshot.base, file.oldPath),
+        readFileAt(activeCwd, operationId, snapshot.head, file.newPath),
       ]);
+      if (generation !== started) throw new Error('Expansion is unavailable for this file or snapshot');
       return { oldFile: { name: file.oldPath, contents: oldContent }, newFile: { name: file.newPath, contents: newContent } };
     },
     describe(request) {
