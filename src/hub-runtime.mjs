@@ -9,7 +9,7 @@ import { resolveWorkspace, resolveRecordedWorkspace, resolveHubSession, resolveR
 import { computeHubUrl } from './hub-url.mjs';
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
-import { quote } from './quote.mjs';
+import { HubError } from './hub-errors.mjs';
 import { ensureHubAssets } from './deps.mjs';
 import { composeHubHtml, renderSiblingNavigation } from './hub-html.mjs';
 import { themeCss } from './orangebox.mjs';
@@ -26,7 +26,7 @@ function alive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return error.code !== 'ESRCH'; }
 }
-async function resolveHubIdentity(options = {}) {
+export async function resolveHubIdentity(options = {}) {
   const env = options.env || process.env;
   const session = resolveSessionId(options, env);
   const live = dir => session ? resolveHubSession(dir, session, env) : resolveWorkspace(dir, env);
@@ -40,6 +40,29 @@ async function resolveHubIdentity(options = {}) {
   // Preserve recorded identity if a checkout path was replaced.
   try { return await recorded(current.root); }
   catch (error) { if (error.code !== 'ENOENT') throw error; return current; }
+}
+
+export function formatNotificationBatch(batch, { identity, instance, page, selected, documents, siblingSources }) {
+  const selectedDoc = documents.find(doc => doc.id === selected);
+  const docFields = selectedDoc ? { id: selectedDoc.id, document: selectedDoc.source } : {};
+  const prompts = batch.prompts.map(prompt => {
+    const target = prompt.target;
+    const sibling = siblingSources.get(prompt.page);
+    const artifact = target?.type === 'diff-line' ? { kind: 'diff', view: 'changes' }
+      : sibling ? { kind: 'document', id: sibling.id, document: sibling.source }
+        : { kind: prompt.tag === 'message' ? 'freeform' : 'hub', view: selected, ...docFields };
+    let message = prompt.prompt;
+    let diff;
+    if (target?.type === 'diff-line') {
+      const match = typeof message === 'string' && message.match(/^Hub view: [^\n]+\nRevision range: ([^\n]+)\n\n[^\n]+\n\n([\s\S]*?)\n\n([\s\S]*)$/);
+      if (match) message = match[3];
+      diff = { file: target.newPath || target.oldPath, oldPath: target.oldPath, side: target.side, startLine: target.start, endLine: target.end, revision: target.revision, ...(match?.[1] ? { range: match[1] } : {}), ...(match?.[2] ? { quote: match[2] } : {}) };
+    }
+    const element = Object.fromEntries(['uid', 'tag', 'selector', 'text'].filter(key => prompt[key] !== undefined).map(key => [key, prompt[key]]));
+    return { message, artifact, ...(diff ? { diff } : {}), ...(target?.type === 'text-range' ? { selection: { text: target.text } } : target && target.type !== 'diff-line' ? { target } : {}), ...(target?.type !== 'diff-line' && prompt.tag !== 'message' && Object.keys(element).length ? { element } : {}), ...(prompt.attachments?.length ? { attachments: prompt.attachments } : {}) };
+  });
+  const snapshotDocument = siblingSources.get(batch.snapshot_page)?.source ?? null;
+  return { type: 'agent-notification', batchId: batch.batch_id ?? null, workspace: identity.root, ...(identity.session ? { session: identity.session } : {}), instance, page, prompts, hasDomContext: Boolean(batch.dom_snapshot), failures: batch.artifact_failures || [], ...(!prompts.length && snapshotDocument ? { snapshotDocument } : {}) };
 }
 
 async function checkInvocationCheckout(identity, directory) {
@@ -194,6 +217,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const workspaceName = path.basename(identity.root);
     const directUrl = id => reviewUrl ? `${reviewUrl}?view=${encodeURIComponent(id)}` : undefined;
     const siblingSources = new Map();
+    const recentBatches = new Map();
     const siblingName = doc => `document-${createHash('sha256').update(JSON.stringify([doc.id, doc.source])).digest('hex')}.html`;
     const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
     const confirmNavigation = await readFile(new URL('../web/confirm-navigation.js', import.meta.url), 'utf8');
@@ -224,7 +248,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         const current = await readFile(target, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
         if (current !== null && current !== previous) throw new Error(`Published document ${doc.id} already exists or was edited; refusing to overwrite it`);
         const temp = `${target}.${randomUUID()}.tmp`;
-        staged.push({ target, temp, current, authored, name, source: doc.source, installed: false });
+        staged.push({ target, temp, current, authored, name, id: doc.id, source: doc.source, installed: false });
         await writeFile(temp, authored, { mode: 0o600, flag: 'wx' });
       }
       for (const item of staged) {
@@ -239,7 +263,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       for (const item of staged) {
         generatedSiblings.add(item.target);
         siblingContents.set(item.target, item.authored);
-        siblingSources.set(item.name, item.source);
+        siblingSources.set(item.name, { id: item.id, source: item.source });
       }
       } catch (error) {
         hashes.clear();
@@ -266,6 +290,11 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     };
     let register, targetSerial = Promise.resolve();
     transport = await createHubTransport({
+      context: ({ batchId }) => {
+        const batch = recentBatches.get(batchId);
+        if (!batch) throw new HubError('BATCH_CONTEXT_UNAVAILABLE', 'refresh', 'Batch context is unavailable; refresh the review and request feedback again');
+        return batch;
+      },
       navigate: body => select(body.id),
       acknowledge: body => documents.acknowledge(body),
       open: async (body = {}) => {
@@ -357,9 +386,12 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       if (!(await register())) break;
       const batch = await client.poll(page, instance, { timeoutMs: 10000 });
       if (batch.session.status === 'feedback') {
-        const sourceFor = sibling => siblingSources.get(sibling) ?? null;
-        const prompts = batch.prompts.map(prompt => typeof prompt === 'object' && prompt !== null && sourceFor(prompt.page) ? { ...prompt, document: sourceFor(prompt.page) } : prompt);
-        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, ...(identity.session ? { session: identity.session } : {}), instance, page, prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, snapshotDocument: sourceFor(batch.snapshot_page), failures: batch.artifact_failures || [], reply: `lavish-hub reply ${quote(page)} --agent-reply '...'` }));
+        const batchId = batch.batch_id ?? null;
+        const snapshotPage = batch.snapshot_page ?? null;
+        recentBatches.delete(batchId);
+        recentBatches.set(batchId, { batchId, domSnapshot: batch.dom_snapshot || '', snapshotPage, snapshotDocument: siblingSources.get(snapshotPage)?.source ?? null });
+        while (recentBatches.size > 50) recentBatches.delete(recentBatches.keys().next().value);
+        console.log(JSON.stringify(formatNotificationBatch(batch, { identity, instance, page, selected, documents: documents.list().documents, siblingSources })));
       }
       if (batch.session.status === 'ended' || batch.session.session_ended) break;
     }
@@ -390,14 +422,17 @@ export async function callHub(operation, options = {}) {
   const identity = await resolveHubIdentity(options);
   let runtime;
   try { runtime = await readJson(path.join(identity.directory, 'owner', 'runtime.json')); }
-  catch { throw new Error(`No live hub owner. ${startup}`); }
-  if (!alive(runtime.pid) || !/^http:\/\/127\.0\.0\.1:\d+$/.test(runtime.url) || !/^[a-f0-9]{64}$/.test(runtime.capability || '')) throw new Error(`No live hub owner. ${startup}`);
+  catch { throw new HubError('NO_OWNER', 'reconnect', `No live hub owner. ${startup}`); }
+  if (!alive(runtime.pid) || !/^http:\/\/127\.0\.0\.1:\d+$/.test(runtime.url) || !/^[a-f0-9]{64}$/.test(runtime.capability || '')) throw new HubError('NO_OWNER', 'reconnect', `No live hub owner. ${startup}`);
   let response;
   try {
-    response = await fetch(`${runtime.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': runtime.capability }, body: JSON.stringify({ ...options.body, operation }), signal: AbortSignal.timeout(3000), redirect: 'error' });
-  } catch { throw new Error(`Hub owner is unreachable; it will not be replaced automatically. ${startup}`); }
+    response = await fetch(`${runtime.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': runtime.capability }, body: JSON.stringify({ ...options.body, operation }), signal: AbortSignal.timeout(15000), redirect: 'error' });
+  } catch (error) { throw new HubError('OWNER_UNREACHABLE', 'reconnect', `Hub owner ${error.name === 'TimeoutError' ? 'timed out' : 'is unreachable'}; it will not be replaced automatically. ${startup}`, error); }
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Hub request failed');
+  if (!response.ok) {
+    if (data.code && data.action) throw new HubError(data.code, data.action, data.error || 'Hub request failed');
+    throw Object.assign(new Error(data.error || 'Hub request failed'), data.code ? { code: data.code } : {});
+  }
   return data.result;
 }
 
@@ -407,7 +442,7 @@ export async function hubUrl(options = {}, deps = {}) {
     const status = await callHub('status', options);
     if (status?.url) return status.url;
   } catch (error) {
-    if (!error.message.startsWith('No live hub owner.')) throw error;
+    if (error.code !== 'NO_OWNER') throw error;
   }
   return computeHubUrl(identity, { env: options.env, ...deps });
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, realpath } from 'node:fs/promises';
@@ -34,6 +34,20 @@ async function prepareReview({ port, state }) {
   const code = await new Promise(resolve => child.on('exit', resolve));
   return { code, stderr };
 }
+
+test('CLI reports a server missing batch replies as unsupported', async t => {
+  const calls = [];
+  const { port, state } = await fakeServer(t, { version: supportedLavishVersion, lavish_hub_page_reviews: 1, lavish_hub_assets: 1 }, calls);
+  const repo = await mkdtemp(path.join(os.tmpdir(), 'hub-unsupported-'));
+  t.after(() => rm(repo, { recursive: true, force: true }));
+  execFileSync('jj', ['git', 'init', repo]);
+  const child = spawn(process.execPath, [path.resolve('bin/lavish-hub'), 'url', '--workspace', repo], {
+    env: { ...process.env, LAVISH_AXI_PORT: String(port), LAVISH_AXI_STATE_DIR: state, XDG_DATA_HOME: path.join(repo, 'data') }, stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk; });
+  assert.notEqual(await new Promise(resolve => child.on('exit', resolve)), 0);
+  assert.match(stderr, /lavish-hub: \[UNSUPPORTED_LAVISH\] action=reconnect — /);
+});
 
 test('vendored opening refuses an incompatible occupied port before registration', async t => {
   const calls = [];

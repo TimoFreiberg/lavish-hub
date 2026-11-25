@@ -169,20 +169,23 @@ test('offline feedback queues in Lavish, delivers on hub reconnect, and updates 
   }, 'agent-notification on reconnect');
   const notification = JSON.parse(notificationLine);
   assert.equal(notification.type, 'agent-notification');
-  assert.equal(notification.prompts[0].prompt, 'Comment while owner is offline');
+  assert.equal(notification.prompts[0].message, 'Comment while owner is offline');
 
   await waitFor(async () => seenStep.evaluate(el => el.classList.contains('is-done')), 'Seen receipt after reconnect');
   assert.equal(await bubble.locator('.receipt-note').count(), 0);
   assert.equal(await doneStep.evaluate(el => el.classList.contains('is-done')), false);
 
-  // Replying stamps Done and shows the reply in the reviewer's chat.
-  await execute(process.execPath, [cli, 'reply', page, '--agent-reply', 'Handled after reconnect'], { env, timeout: 10000 });
-  await browserPage.locator('#chatLog .bubble.agent', { hasText: 'Handled after reconnect' }).waitFor();
-  await waitFor(async () => doneStep.evaluate(el => el.classList.contains('is-done')), 'Done receipt after reply');
-
-  // Stop the owner cleanly and end the session so no private Lavish sessions remain.
+  // The delivered batch remains replyable after the owner stops.
   await execute(process.execPath, [cli, 'stop', '--workspace', repo], { env, timeout: 5000 });
   assert.equal(await secondOwner.exited, 0, secondOwner.stderr);
+  const reply = await execute(process.execPath, [cli, 'reply', '--batch', notification.batchId, '--text', '- Handled after reconnect', '--workspace', repo], { env, timeout: 10000 });
+  assert.deepEqual(JSON.parse(reply.stdout), { status: 'sent', batchId: notification.batchId });
+  await browserPage.locator('#chatLog .bubble.agent', { hasText: 'Handled after reconnect' }).waitFor();
+  await waitFor(async () => doneStep.evaluate(el => el.classList.contains('is-done')), 'Done receipt after reply');
+  await assert.rejects(execute(process.execPath, [cli, 'reply', '--batch', notification.batchId, 'again', '--workspace', repo], { env, timeout: 10000 }), /\[BATCH_ALREADY_REPLIED\] action=check_delivery/);
+  await assert.rejects(execute(process.execPath, [cli, 'reply', '--batch', 'unknown', 'again', '--workspace', repo], { env, timeout: 10000 }), /\[BATCH_NOT_FOUND\] action=fix_args/);
+
+  // End the session so no private Lavish sessions remain.
   await createLavishClient({ env }).end(page);
 });
 

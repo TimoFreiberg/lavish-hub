@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { callHub, hubUrl, prepareTargetRequest, runHubOwner, validateSessionTitle } from './hub-runtime.mjs';
+import { callHub, hubUrl, prepareTargetRequest, resolveHubIdentity, runHubOwner, validateSessionTitle } from './hub-runtime.mjs';
+import { formatHubError } from './hub-errors.mjs';
 import { resolveSessionId, validateSessionId } from './hub-workspace.mjs';
 import { readMetadata } from './hub-documents.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
@@ -13,7 +14,9 @@ const usage = `usage: lavish-hub [listen|stop|status|url] [--workspace DIR] [--s
        lavish-hub target [REV] [--base REV | --no-base] [--title TEXT] [--session ID] [--workspace DIR]
        lavish-hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--session ID] [--attention] [--open]
        lavish-hub tasks --file FILE [--workspace DIR] [--session ID]
+       lavish-hub reply --batch ID [--text | --agent-reply] TEXT [--workspace DIR] [--session ID]
        lavish-hub reply PAGE --agent-reply TEXT
+       lavish-hub context --batch ID [--workspace DIR] [--session ID]
        lavish-hub theme [css|syntax|diff-css]`;
 const themeHelp = `Orangebox is Lavish Hub's dark theme for standalone HTML.
 
@@ -32,9 +35,9 @@ as sibling assets. Do not rely on the viewer to inject them.`;
 const help = `${usage}
 
 Run listen in the foreground to own a workspace hub and receive feedback as
-agent-notification JSON lines. Use reply to respond to the page in a notification.
+agent-notification JSON lines. Use reply --batch <batchId> to respond to a notification.
 See docs/hub.md for configuration and workflow details.`;
-class UsageError extends Error {}
+class UsageError extends Error { constructor(message) { super(message); this.name = 'UsageError'; } }
 
 export function parseArgs(args) {
   if (args.length === 1 && args[0] === '--help') return { help: true };
@@ -43,9 +46,26 @@ export function parseArgs(args) {
     if (args.length > 1 || (args.length && !['--help', 'css', 'syntax', 'diff-css'].includes(args[0]))) throw new UsageError('theme accepts css, syntax, or diff-css');
     return { theme: args[0] === '--help' ? 'help' : (args[0] || 'help') };
   }
-  if (target === 'reply') {
-    if (args.length !== 3 || !args[0] || args[0].startsWith('-') || args[1] !== '--agent-reply' || !args[2]) throw new UsageError('reply requires PAGE --agent-reply TEXT');
-    return { reply: true, page: args[0], text: args[2] };
+  if (target === 'reply' || target === 'context') {
+    if (args.length === 1 && args[0] === '--help') return { commandHelp: target };
+    if (target === 'reply' && args.length === 3 && !args[0].startsWith('-') && args[1] === '--agent-reply' && args[2]) return { reply: true, page: args[0], text: args[2] };
+    const result = { hub: target };
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (['--batch', '--workspace', '--session'].includes(arg)) {
+        const key = arg === '--batch' ? 'batchId' : arg.slice(2);
+        if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
+        result[key] = args[++i];
+      } else if (target === 'reply' && ['--text', '--agent-reply', '--'].includes(arg)) {
+        if (result.text !== undefined || !args[i + 1]) throw new UsageError(`${arg} requires one text value`);
+        result.text = args[++i];
+        if (arg === '--' && i !== args.length - 1) throw new UsageError('-- accepts one text value');
+      } else if (target === 'reply' && result.text === undefined && !arg.startsWith('--')) result.text = arg;
+      else throw new UsageError(`unknown argument ${arg}`);
+    }
+    if (!result.batchId || (target === 'reply' && !result.text)) throw new UsageError(`${target} requires --batch ID${target === 'reply' ? ' and reply text' : ''}`);
+    try { if (result.session !== undefined) validateSessionId(result.session); } catch (error) { throw new UsageError(error.message); }
+    return result;
   }
   if (!['listen', 'stop', 'status', 'url', 'publish', 'tasks', 'target'].includes(target)) throw new UsageError(`unknown command ${target}`);
   const command = target;
@@ -105,6 +125,10 @@ export async function main(args = process.argv.slice(2)) {
   try {
     const options = parseArgs([...args]);
     if (options.help) { console.log(help); return 0; }
+    if (options.commandHelp) {
+      console.log(options.commandHelp === 'reply' ? 'usage: lavish-hub reply --batch ID [--text | --agent-reply] TEXT [--workspace DIR] [--session ID]\n       lavish-hub reply PAGE --agent-reply TEXT' : 'usage: lavish-hub context --batch ID [--workspace DIR] [--session ID]');
+      return 0;
+    }
     if (options.theme) {
       const outputs = {
         help: themeHelp,
@@ -118,6 +142,17 @@ export async function main(args = process.argv.slice(2)) {
     if (options.reply) return await reply(options.page, options.text);
     let session;
     try { session = resolveSessionId(options); } catch (error) { throw new UsageError(error.message); }
+    if (options.hub === 'reply') {
+      const identity = await resolveHubIdentity(options);
+      await createLavishClient().reply(path.join(identity.directory, 'hub.html'), options.text, { batchId: options.batchId });
+      console.log(JSON.stringify({ status: 'sent', batchId: options.batchId }));
+      return 0;
+    }
+    if (options.hub === 'context') {
+      const result = await callHub('context', { ...options, body: { batchId: options.batchId } });
+      if (result.domSnapshot) process.stdout.write(result.domSnapshot);
+      return 0;
+    }
     if (options.hub === 'listen' && session && options.title === undefined) throw new UsageError('listen with --session requires --title');
     if (options.hub === 'listen') return await runHubOwner(options);
     if (options.hub === 'target') {
@@ -145,7 +180,7 @@ export async function main(args = process.argv.slice(2)) {
     console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}${result.session ? `; session: ${result.session}` : ''}${result.title ? `; title: ${result.title}` : ''}${result.target ? `; target: ${result.target}` : ''}${result.base ? `; base: ${result.base}` : ''}.`);
     return 0;
   } catch (error) {
-    if (error instanceof UsageError) { console.error(error.message ? `lavish-hub: ${error.message}\n${usage}` : usage); return 2; }
-    console.error(`lavish-hub: ${error.message}`); return 1;
+    if (error instanceof UsageError) { console.error(error.message ? `${formatHubError(error)}\n${usage}` : usage); return 2; }
+    console.error(formatHubError(error)); return 1;
   }
 }

@@ -16,7 +16,7 @@ async function fixture(t) {
   const state = path.join(dir, 'state'); await mkdir(state);
   const file = path.join(dir, 'review.html'); await writeFile(file, '<!doctype html><html lang="en"><title>HTTP probe</title><p>Review</p></html>');
   const env = { ...process.env, LAVISH_AXI_TELEMETRY: '0', LAVISH_AXI_STATE_DIR: state };
-  const health = { ok: true, app: 'lavish-axi', version: supportedLavishVersion, lavish_hub_page_reviews: 1, lavish_hub_assets: 1, state_id: keyFor(path.join(await realpath(state), 'state.json')) };
+  const health = { ok: true, app: 'lavish-axi', version: supportedLavishVersion, lavish_hub_page_reviews: 1, lavish_hub_assets: 1, lavish_hub_batch_replies: 1, state_id: keyFor(path.join(await realpath(state), 'state.json')) };
   return { dir, state, file, env, health };
 }
 
@@ -33,6 +33,31 @@ test('HTTP checks version and state before consuming; never retries broken poll 
   await assert.rejects(client.poll(x.file, 'test'), error => /STATE_MISMATCH/.test(error.message) && !error.ambiguousDelivery); assert.equal(polls, 0);
   x.health.state_id = keyFor(path.join(await realpath(x.state), 'state.json'));
   await assert.rejects(client.poll(x.file, 'test'), error => error instanceof SyntaxError && error.ambiguousDelivery === true); assert.equal(polls, 1);
+});
+
+test('batch replies require capability and classify delivery and session failures', async t => {
+  const x = await fixture(t); let response, calls = [];
+  const client = createLavishClient({ env: x.env, fetch: async (url, options = {}) => {
+    if (new URL(url).pathname === '/health') return Response.json(x.health);
+    calls.push(JSON.parse(options.body));
+    if (response instanceof Error) throw response;
+    return Response.json(response.body, { status: response.status });
+  } });
+  delete x.health.lavish_hub_batch_replies;
+  await assert.rejects(client.reply(x.file, 'hello', { batchId: 'one' }), e => e.code === 'UNSUPPORTED_LAVISH' && /batch-bound/.test(e.message));
+  assert.equal(calls.length, 0);
+  x.health.lavish_hub_batch_replies = 1;
+  response = { status: 200, body: { status: 'sent' } };
+  await client.reply(x.file, '- bullet', { batchId: 'one' });
+  assert.deepEqual(calls[0], { text: '- bullet', batch_id: 'one' });
+  response = { status: 404, body: { code: 'BATCH_NOT_FOUND', error: 'Unknown batch' } };
+  await assert.rejects(client.reply(x.file, 'x', { batchId: 'missing' }), e => e.code === 'BATCH_NOT_FOUND' && e.action === 'fix_args');
+  response = { status: 409, body: { code: 'BATCH_ALREADY_REPLIED', error: 'Already replied', replied_at: 'today' } };
+  await assert.rejects(client.reply(x.file, 'x', { batchId: 'one' }), e => e.code === 'BATCH_ALREADY_REPLIED' && e.action === 'check_delivery' && /today/.test(e.message));
+  response = { status: 409, body: { status: 'ended', error: 'Session ended' } };
+  await assert.rejects(client.reply(x.file, 'x', { batchId: 'one' }), e => e.code === 'SESSION_ENDED' && e.action === 'reconnect');
+  response = Object.assign(new Error('timeout'), { name: 'TimeoutError' });
+  await assert.rejects(client.reply(x.file, 'x', { batchId: 'one' }), e => e.code === 'REPLY_DELIVERY_UNCERTAIN' && e.action === 'check_delivery');
 });
 
 test('hub HTTP requires the patched version and matching state before polling', async t => {

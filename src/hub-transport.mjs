@@ -76,7 +76,7 @@ export async function createHubTransport(operations, { resource, guardSource = a
       const result = await operations[body.operation](body);
       respond(200, { result });
     } catch (error) {
-      if (!res.headersSent) respond(400, { error: error instanceof Error ? error.message : 'Action failed' });
+      if (!res.headersSent) respond(400, { error: error instanceof Error ? error.message : 'Action failed', ...(error?.code ? { code: error.code } : {}), ...(error?.action ? { action: error.action } : {}) });
     }
   });
   server.requestTimeout = 15000;

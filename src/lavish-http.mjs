@@ -5,6 +5,7 @@ import { canonicalPath } from './hub-workspace.mjs';
 import { quote } from './quote.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
 import { resolveLavishPort } from './lavish-port.mjs';
+import { HubError } from './hub-errors.mjs';
 
 export const supportedLavishVersion = '0.1.98';
 // Local vendor patches this client cannot work without, named by the /health field
@@ -15,6 +16,7 @@ export const supportedLavishVersion = '0.1.98';
 const requiredPatches = [
   ['lavish_hub_page_reviews', 'the page review routes'],
   ['lavish_hub_assets', 'the hub asset origin grant'],
+  ['lavish_hub_batch_replies', 'batch-bound agent replies'],
 ];
 const keyFor = file => createHash('sha256').update(file).digest('hex').slice(0, 16);
 const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
@@ -45,7 +47,7 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
     }
     const data = await response.json();
     if (!response.ok || data.code === 'LISTENER_REPLACED') {
-      throw Object.assign(failure(data.code || (response.status === 404 ? 'NOT_FOUND' : 'LAVISH_HTTP_ERROR'), data.error || data.status || `HTTP ${response.status}`), { status: response.status });
+      throw Object.assign(failure(data.code || (response.status === 404 ? 'NOT_FOUND' : 'LAVISH_HTTP_ERROR'), data.error || data.status || `HTTP ${response.status}`), { status: response.status, data });
     }
     return data;
   }
@@ -56,7 +58,11 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
     }
     let health;
     try { health = await json(`${base}/health`, { signal: boundedSignal() }); }
-    catch (error) { if (error.cause?.code === 'ECONNREFUSED') { port = undefined; base = undefined; } throw error; }
+    catch (error) {
+      if (error.cause?.code === 'ECONNREFUSED') { port = undefined; base = undefined; }
+      if (error.name === 'TimeoutError') throw new HubError('LAVISH_CONNECTION_ERROR', 'reconnect', 'Lavish health check timed out', error);
+      throw error;
+    }
     if (!health.ok || health.app !== 'lavish-axi' || health.version !== version) {
       throw failure('UNSUPPORTED_LAVISH', `Direct HTTP requires patched lavish-axi ${version}; server reports ${health.version || 'unknown'}`);
     }
@@ -106,7 +112,7 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
       }
       return {
         session: { file: absolute, status: data.status, ...(data.session_ended ? { session_ended: true } : {}), ...(data.ended_by ? { ended_by: data.ended_by } : {}) },
-        ...(data.status === 'feedback' ? { prompts: data.prompts || [], dom_snapshot: data.dom_snapshot || '', ...(Object.hasOwn(data, 'snapshot_page') ? { snapshot_page: data.snapshot_page } : {}), ...(data.artifact_failures?.length ? { artifact_failures: data.artifact_failures } : {}) } : {}),
+        ...(data.status === 'feedback' ? { batch_id: data.batch_id ?? null, prompts: data.prompts || [], dom_snapshot: data.dom_snapshot || '', ...(Object.hasOwn(data, 'snapshot_page') ? { snapshot_page: data.snapshot_page } : {}), ...(data.artifact_failures?.length ? { artifact_failures: data.artifact_failures } : {}) } : {}),
       };
     },
     async registerHub(file, transport, display) {
@@ -125,10 +131,24 @@ export function createLavishClient({ env = process.env, fetch: request = globalT
       const absolute = await realpath(file);
       return post('/api/hub-proxy/unregister', { key: keyFor(absolute), identityKey: transport.identityKey });
     },
-    async reply(file, text) {
-      if (!text.trim()) throw new Error('Agent reply must not be empty');
-      const absolute = await realpath(file);
-      return post(`/api/${keyFor(absolute)}/agent-reply`, { text });
+    async reply(file, text, { batchId } = {}) {
+      if (!text.trim()) throw new HubError('VALIDATION_ERROR', 'fix_args', 'Agent reply must not be empty');
+      let absolute;
+      try { absolute = await realpath(file); }
+      catch (error) {
+        if (error.code === 'ENOENT') throw new HubError('NOT_FOUND', 'reconnect', 'No Lavish hub session exists for this workspace; start lavish-hub listen first', error);
+        throw error;
+      }
+      await verify();
+      try {
+        return await json(`${base}/api/${keyFor(absolute)}/agent-reply`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, ...(batchId ? { batch_id: batchId } : {}) }), signal: boundedSignal() });
+      } catch (error) {
+        if (error.status === 409 && error.data?.status === 'ended') throw new HubError('SESSION_ENDED', 'reconnect', error.data.error || 'Lavish session ended', error);
+        if (error.status === 409 && error.code === 'BATCH_ALREADY_REPLIED') throw new HubError('BATCH_ALREADY_REPLIED', 'check_delivery', `${error.data.error || 'Batch already replied'}${error.data.replied_at ? ` (replied at ${error.data.replied_at})` : ''}`, error);
+        if (error.status === 404 && error.code === 'BATCH_NOT_FOUND') throw new HubError('BATCH_NOT_FOUND', 'fix_args', error.data.error || 'Batch not found', error);
+        if (!error.status) throw new HubError('REPLY_DELIVERY_UNCERTAIN', 'check_delivery', 'Reply delivery is uncertain; check the review chat before retrying', error);
+        throw error;
+      }
     },
     async end(file) { return post('/api/end', { file: await realpath(file) }); },
     async list() {

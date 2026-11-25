@@ -42,7 +42,7 @@ async function sessionFixture(t) {
   app.use('/hub-proxy', (req, res, next) => { if (req.headers.origin) req.headers.origin = 'null'; next(); }, proxy.handle);
   app.use((req, res) => {
     res.setHeader('content-type', 'application/json');
-    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.98', lavish_hub_page_reviews: 1, lavish_hub_assets: 1, state_id: createHash('sha256').update(path.join(state, 'state.json')).digest('hex').slice(0, 16) }));
+    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.98', lavish_hub_page_reviews: 1, lavish_hub_assets: 1, lavish_hub_batch_replies: 1, state_id: createHash('sha256').update(path.join(state, 'state.json')).digest('hex').slice(0, 16) }));
     else setTimeout(() => res.end(JSON.stringify({ status: 'waiting' })), 50);
   });
   const server = http.createServer(app); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -231,7 +231,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await mkdir(repo); await mkdir(state);
   execFileSync('jj', ['git', 'init', repo]);
   const canonicalState = await realpath(state);
-  let pollMode = 'waiting', polls = 0, generatedDirectory, registrationFailure = null;
+  let pollMode = 'waiting', polls = 0, feedbackCounter = 0, generatedDirectory, registrationFailure = null;
   let failureAfterPoll = { status: 404, body: { code: 'HUB_SESSION_ENDED', error: 'Session not active' } };
   const app = express();
   const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json() });
@@ -241,10 +241,16 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   app.use((req, res, next) => generatedDirectory ? express.static(generatedDirectory)(req, res, next) : next());
   app.use((req, res) => {
     res.setHeader('content-type', 'application/json');
-    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.98', lavish_hub_page_reviews: 1, lavish_hub_assets: 1, state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
+    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.98', lavish_hub_page_reviews: 1, lavish_hub_assets: 1, lavish_hub_batch_replies: 1, state_id: createHash('sha256').update(path.join(canonicalState, 'state.json')).digest('hex').slice(0, 16) }));
+    else if (req.url === '/api/sessions') res.end(JSON.stringify({ status: 'opened', url: `http://127.0.0.1:${server.address().port}/session/test` }));
     else {
       polls++;
-      if (pollMode === 'feedback') { pollMode = 'waiting'; res.end(JSON.stringify({ status: 'feedback', prompts: ['Review this'], dom_snapshot: 'quoted context' })); }
+      if (pollMode === 'feedback') { pollMode = 'waiting'; res.end(JSON.stringify({ status: 'feedback', batch_id: 'batch-one', prompts: [{ prompt: 'Review this', tag: 'message' }], dom_snapshot: 'quoted context' })); }
+      else if (pollMode === 'feedback-series') {
+        feedbackCounter++;
+        if (feedbackCounter === 50) pollMode = 'waiting';
+        res.end(JSON.stringify({ status: 'feedback', batch_id: `series-${feedbackCounter}`, prompts: [], dom_snapshot: `snapshot-${feedbackCounter}` }));
+      }
       else if (pollMode === 'end-between') { registrationFailure = failureAfterPoll; res.end(JSON.stringify({ status: 'waiting' })); }
       else if (pollMode === 'truncated') { res.write('{"status":"feedback"'); res.destroy(); }
       else setTimeout(() => res.end(JSON.stringify({ status: 'waiting' })), 50);
@@ -734,9 +740,20 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   for (let i = 0; i < 100 && !output.includes('\n'); i++) await delay(30);
   const notification = JSON.parse(output.trim());
   assert.equal(notification.type, 'agent-notification');
-  assert.deepEqual(notification.prompts, ['Review this']);
-  assert.equal(notification.context, 'quoted context');
-  assert.match(notification.reply, /lavish-hub reply/);
+  assert.equal(notification.prompts[0].message, 'Review this');
+  assert.equal(notification.batchId, 'batch-one');
+  assert.equal(notification.hasDomContext, true);
+  assert.equal('context' in notification, false);
+  assert.equal('reply' in notification, false);
+  assert.equal((await request('context', { batchId: 'batch-one' })).domSnapshot, 'quoted context');
+  const contextOutput = await run(process.execPath, [cli, 'context', '--batch', 'batch-one', '--workspace', repo], { env });
+  assert.equal(contextOutput.stdout, 'quoted context');
+  await assert.rejects(run(process.execPath, [cli, 'context', '--batch', 'missing', '--workspace', repo], { env }), /\[BATCH_CONTEXT_UNAVAILABLE\] action=refresh/);
+  pollMode = 'feedback-series';
+  for (let i = 0; i < 500 && !output.includes('"batchId":"series-50"'); i++) await delay(20);
+  assert.ok(output.includes('"batchId":"series-50"'), 'all batches were delivered');
+  assert.equal((await request('context', { batchId: 'series-1' })).domSnapshot, 'snapshot-1');
+  await assert.rejects(run(process.execPath, [cli, 'context', '--batch', 'batch-one', '--workspace', repo], { env }), /\[BATCH_CONTEXT_UNAVAILABLE\] action=refresh/);
   const shutdownMarker = path.join(dir, 'shutdown-marker');
   const shutdownCommand = { id: 'owner-shutdown', argv: [process.execPath, '-e', "require('fs').writeFileSync(process.argv[1], 'started'); setTimeout(() => require('fs').writeFileSync(process.argv[1], 'escaped'), 1500)", shutdownMarker] };
   const shutdownRequest = request('executeCommand', shutdownCommand).catch(() => null);
@@ -820,4 +837,13 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     assert.match(failureText, failure.status === 404 ? /NOT_FOUND/ : /HUB_SESSION_ENDED/);
     await assert.rejects(readFile(runtime), { code: 'ENOENT' });
   }
+  registrationFailure = null;
+  pollMode = 'truncated';
+  // The vendored CLI forces a server restart for local builds, so use the same
+  // formatter as the CLI with a stubbed prepare step instead of spawning it.
+  const errorScript = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; import { formatHubError } from ${JSON.stringify(new URL('../src/hub-errors.mjs', import.meta.url).href)}; try { process.exitCode = await runHubOwner({ workspace: process.argv[1] }, { prepare: async () => ({ url: 'http://localhost:123/review' }) }); } catch (error) { console.error(formatHubError(error)); process.exitCode = 1; }`;
+  await assert.rejects(run(process.execPath, ['--input-type=module', '-e', errorScript, other], { env }), error => {
+    assert.match(error.stderr, /lavish-hub: \[AMBIGUOUS_DELIVERY\] action=check_delivery — /);
+    return true;
+  });
 });
