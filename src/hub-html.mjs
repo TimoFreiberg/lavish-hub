@@ -1,6 +1,282 @@
 import { parse, parseFragment, serializeOuter } from 'parse5';
 import { themeCss } from './orangebox.mjs';
 
+const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+
+function siblingSidebarClient(c) {
+  c.url = new URL(c.url, location.href).href;
+  const cut = (text, limit) => { let out = ''; for (const ch of text) { if (out.length + ch.length > limit) break; out += ch; } return out; };
+  const formatTitle = (view, workspace) => {
+    const ws = workspace ? cut(workspace, 60) : '';
+    if (!ws) return cut(view, 120);
+    const suffix = ' · ' + ws, max = 120 - suffix.length;
+    return (view.length > max ? cut(view, Math.max(1, max - 1)).trimEnd() + '…' : view) + suffix;
+  };
+  const setTabTitle = () => {
+    const title = formatTitle(c.title || '', c.sessionTitle || (c.session ? c.repoName : c.workspaceName) || c.repoName || '');
+    document.title = title;
+    globalThis.lavish?.setDocumentMeta?.({ title });
+  };
+  setTabTitle();
+  window.addEventListener('lavish:ready', setTabTitle);
+  let navigating = false, dirty = false, leaving = false, edits = 0, navGeneration = 0;
+  let paused = false, polling = false, timer, leaveTimer, readController, readTimer;
+  let attemptedSelection = '', navigationCancelled = false, navigationUncertain = false;
+  let warmed = false, catchup = false, acknowledged = false, ackPending = false;
+  let pendingUpdate = null, flashedVersion = '', flashTimer, lavishRetryTimer, lastLavishInputAt = 0;
+  const touched = new Set(), initialEditable = new WeakMap();
+  const nav = document.querySelector('#lavish-hub-sidebar nav');
+  const feedback = document.querySelector('#lavish-hub-sidebar [role=status]');
+  function pause() { paused = true; clearTimeout(timer); readController?.abort(); }
+  function resume() {
+    clearTimeout(leaveTimer); leaving = false;
+    if (!paused) return;
+    paused = false; nav.removeAttribute('aria-busy');
+    if (!feedback.hasAttribute('data-error')) feedback.textContent = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : '';
+    if (!polling) timer = setTimeout(refresh, 0);
+  }
+  function leave(url, id) {
+    pause(); leaving = true; attemptedSelection = id;
+    if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; resume(); }, 1000);
+    location.href = url;
+  }
+  function applyUpdate(update) {
+    if (update.samePage) {
+      pause(); leaving = true;
+      if (!window.navigation) leaveTimer = setTimeout(() => { navigationUncertain = true; resume(); }, 1000);
+      location.reload();
+    } else leave(update.dest, c.id);
+  }
+  const docUrl = doc => new URL(doc?.source?.toLowerCase().endsWith('.html') ? doc.sibling : 'hub.html', location.href);
+  const canAutoReload = generation => (generation === undefined || generation === navGeneration) && !navigating && !leaving && !navigationUncertain && !feedback.hasAttribute('data-error');
+  function maybeApplyPendingUpdate(generation) {
+    if (!pendingUpdate || dirty || !canAutoReload(generation)) return false;
+    if (Date.now() - lastLavishInputAt < 250) {
+      clearTimeout(lavishRetryTimer); lavishRetryTimer = setTimeout(() => { syncDirty(); maybeApplyPendingUpdate(); }, 260);
+      return false;
+    }
+    applyUpdate(pendingUpdate); return true;
+  }
+  window.navigation?.addEventListener('navigate', e => {
+    if (leaving) e.signal.addEventListener('abort', () => {
+      navigationUncertain = false; navigationCancelled = true; feedback.dataset.error = '';
+      feedback.textContent = 'Navigation cancelled. Select a destination to try again.'; resume();
+    }, { once: true });
+  });
+  window.addEventListener('pageshow', e => { if (e.persisted) { navigationUncertain = false; resume(); } });
+  const isAuthoredTarget = target => target instanceof Element && !target.closest('[data-lavish-action],[data-lavish-ui]');
+  document.addEventListener('beforeinput', e => {
+    if (!e.isTrusted || !isAuthoredTarget(e.target)) return;
+    const host = e.target.closest('[contenteditable]');
+    if (host && !initialEditable.has(host)) initialEditable.set(host, host.innerHTML);
+  }, true);
+  function trackControl(target) {
+    if (target.tagName === 'INPUT' && target.type === 'radio' && target.name) {
+      for (const radio of document.querySelectorAll('input[type="radio"]')) {
+        if (radio.name === target.name && radio.form === target.form) touched.add(radio);
+      }
+    } else if (target.isContentEditable) touched.add(target.closest('[contenteditable]') || target);
+    else touched.add(target);
+  }
+  function isControlDirty(el) {
+    if (!el.isConnected) { touched.delete(el); return false; }
+    if (el.tagName === 'INPUT') {
+      if (el.type === 'checkbox' || el.type === 'radio') return el.checked !== el.defaultChecked;
+      if (el.type === 'file') return Boolean(el.files?.length);
+      return el.value !== el.defaultValue;
+    }
+    if (el.tagName === 'TEXTAREA') return el.value !== el.defaultValue;
+    if (el.tagName === 'SELECT') {
+      const options = [...el.options];
+      if (!el.multiple) {
+        const selected = options.filter(option => option.defaultSelected).at(-1);
+        const fallback = el.size <= 1 ? options.find(option => !option.disabled && !(option.parentElement?.tagName === 'OPTGROUP' && option.parentElement.disabled)) : undefined;
+        const defaultOption = selected || fallback;
+        if (defaultOption) return options.some(option => option.selected !== (option === defaultOption));
+      }
+      return options.some(option => option.selected !== option.defaultSelected);
+    }
+    if (initialEditable.has(el)) return el.innerHTML !== initialEditable.get(el);
+    return true;
+  }
+  function syncDirty() { dirty = [...touched].some(isControlDirty); }
+  function recomputeDirty() {
+    const wasDirty = dirty;
+    syncDirty();
+    if (wasDirty && !dirty) maybeApplyPendingUpdate();
+  }
+  for (const type of ['input', 'change']) document.addEventListener(type, e => {
+    if (!e.isTrusted) return;
+    if (type === 'input' && e.target instanceof Element && e.target.closest('[data-lavish-ui]')) lastLavishInputAt = Date.now();
+    if (isAuthoredTarget(e.target)) { trackControl(e.target); recomputeDirty(); if (dirty) edits++; }
+  }, true);
+  document.addEventListener('reset', e => { if (isAuthoredTarget(e.target)) setTimeout(recomputeDirty, 0); }, true);
+  window.addEventListener('beforeunload', e => { syncDirty(); if (dirty && !leaving) { e.preventDefault(); e.returnValue = ''; } });
+  const action = async (operation, body = {}, signal) => {
+    const response = await fetch(c.url + '/action', { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': c.capability }, body: JSON.stringify({ ...body, operation }), ...(signal ? { signal } : {}) });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 403 && data.error === 'Unauthorized' && !dirty && !leaving && performance.now() > 1e4) { leaving = true; pause(); location.reload(); }
+    if (!response.ok) throw Error('Hub action failed');
+    return data.result;
+  };
+  for (const a of nav.querySelectorAll('a')) a.href = new URL(a.getAttribute('href'), location.href).href;
+  const readyToAck = () => document.readyState !== 'loading';
+  const acknowledgeCurrent = () => {
+    if (!readyToAck() || acknowledged || ackPending || !c.version) return;
+    ackPending = true;
+    action('acknowledge', { id: c.id, version: c.version }, AbortSignal.timeout(10000)).then(() => { acknowledged = true; }, () => {}).finally(() => { ackPending = false; });
+  };
+  if (readyToAck()) acknowledgeCurrent(); else document.addEventListener('DOMContentLoaded', acknowledgeCurrent, { once: true });
+  nav.addEventListener('click', async e => {
+    syncDirty();
+    const reload = e.target.closest('button.nav-reload');
+    if (reload && nav.contains(reload)) { e.preventDefault(); if (!navigating && !leaving && pendingUpdate) applyUpdate(pendingUpdate); return; }
+    const a = e.target.closest('a[data-hub-id]');
+    if (!a || !nav.contains(a)) return;
+    e.preventDefault();
+    if (navigating || leaving) return;
+    navigating = true; pause(); navGeneration++;
+    const labelText = a.querySelector('.nav-label')?.textContent || a.textContent;
+    feedback.removeAttribute('data-error'); feedback.textContent = 'Opening ' + labelText + '…'; nav.setAttribute('aria-busy', 'true');
+    try {
+      let approved = false, approvedEdits = edits;
+      if (dirty) { approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'); if (!approved) return; }
+      await action('navigate', { id: a.dataset.hubId }, AbortSignal.timeout(10000));
+      if ((!approved || approvedEdits !== edits) && dirty && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'))) return;
+      navigationUncertain = false; navigationCancelled = false; leave(a.href, a.dataset.hubId);
+    } catch { feedback.dataset.error = ''; feedback.textContent = 'Could not open ' + labelText + '. Select it again to retry.'; }
+    finally {
+      navigating = false;
+      if (!leaving) { resume(); nav.removeAttribute('aria-busy'); if (!feedback.hasAttribute('data-error')) feedback.textContent = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : ''; }
+    }
+  });
+  async function refresh() {
+    if (paused || polling || (warmed && document.visibilityState === 'hidden')) return;
+    warmed = true; polling = true;
+    const generation = navGeneration;
+    readController = new AbortController(); readTimer = setTimeout(() => readController?.abort(), 10000);
+    try {
+      const [state, list] = await Promise.all([action('status', {}, readController.signal), action('documents', {}, readController.signal)]);
+      if (paused) return;
+      const nextTitle = state.title || '';
+      if (nextTitle !== (c.sessionTitle || '')) {
+        c.sessionTitle = nextTitle;
+        const title = document.querySelector('#lavish-hub-sidebar .hub-session-title');
+        if (title) { title.textContent = nextTitle; title.hidden = !nextTitle; }
+        const name = document.querySelector('#lavish-hub-sidebar .hub-repo-name');
+        if (name) name.textContent = c.session || nextTitle ? c.repoName : c.workspaceName;
+        setTabTitle();
+      }
+      if (!acknowledged) acknowledgeCurrent();
+      if (generation === navGeneration && !navigating && !leaving && attemptedSelection && state.selected && state.selected !== attemptedSelection) {
+        attemptedSelection = '';
+        if (navigationCancelled) { navigationCancelled = false; feedback.removeAttribute('data-error'); feedback.textContent = ''; }
+      }
+      syncDirty();
+      if (!dirty && state.selected && state.selected !== c.id && state.selected !== attemptedSelection && canAutoReload(generation)) {
+        leave(docUrl(list.documents.find(d => d.id === state.selected)).href, state.selected); return;
+      }
+      const current = list.documents.find(d => d.id === c.id);
+      if (current && c.version && current.version && current.version !== c.version) {
+        const dest = docUrl(current);
+        pendingUpdate = { version: current.version, dest: dest.href, samePage: dest.pathname === location.pathname };
+        if (maybeApplyPendingUpdate(generation)) return;
+      } else pendingUpdate = null;
+      const items = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, attention: false, unseen: false })), ...list.documents.map(d => ({ ...d, unseen: d.id === c.id ? d.version !== c.version : d.viewedVersion !== d.version }))];
+      const focused = nav.contains(document.activeElement) ? document.activeElement : null;
+      const existing = new Map([...nav.querySelectorAll('a[data-hub-id]')].map(a => [a.dataset.hubId, a]));
+      let next = nav.firstElementChild;
+      for (const item of items) {
+        const a = existing.get(item.id) || document.createElement('a'); existing.delete(item.id); a.dataset.hubId = item.id;
+        let row = a.parentElement?.classList.contains('nav-row') ? a.parentElement : null;
+        if (!row) {
+          row = document.createElement('div'); row.className = 'nav-row';
+          if (a.parentElement === nav) { nav.insertBefore(row, a); if (next === a) next = row; }
+          row.append(a);
+        }
+        row.toggleAttribute('data-current', item.id === c.id);
+        let label = a.querySelector('.nav-label');
+        if (!label) { label = document.createElement('span'); label.className = 'nav-label'; a.replaceChildren(label); }
+        if (label.textContent !== item.title) label.textContent = item.title;
+        const badgeKind = item.attention ? 'attention' : item.unseen && !(item.id === c.id && pendingUpdate) ? 'new' : '';
+        let badge = a.querySelector('.nav-badge');
+        if (badgeKind) {
+          if (!badge) { badge = document.createElement('span'); badge.setAttribute('aria-hidden', 'true'); a.append(badge); }
+          badge.className = 'nav-badge nav-badge-' + badgeKind; badge.textContent = badgeKind === 'attention' ? 'Attention' : 'New';
+          a.title = badgeKind === 'attention' ? 'Needs attention' : 'New publication'; a.setAttribute('aria-describedby', 'lavish-hub-desc-' + badgeKind);
+          if (badgeKind === 'attention') { a.dataset.attention = 'true'; delete a.dataset.unseen; } else { a.dataset.unseen = 'true'; delete a.dataset.attention; }
+        } else { badge?.remove(); a.removeAttribute('title'); a.removeAttribute('aria-describedby'); delete a.dataset.attention; delete a.dataset.unseen; }
+        const href = docUrl(item).href;
+        if (a.href !== href) a.href = href;
+        if (item.id === c.id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+        let button = row.querySelector('.nav-reload');
+        if (item.id === c.id && pendingUpdate) {
+          if (!button) {
+            button = document.createElement('button'); button.type = 'button'; button.className = 'nav-reload';
+            button.setAttribute('aria-label', 'Reload updated document'); button.title = 'Document updated — reload';
+            button.innerHTML = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.5-3"/></svg>';
+            row.append(button);
+          }
+          if (flashedVersion !== pendingUpdate.version) {
+            flashedVersion = pendingUpdate.version; row.classList.remove('nav-updated-flash'); void row.offsetWidth; row.classList.add('nav-updated-flash');
+            clearTimeout(flashTimer); flashTimer = setTimeout(() => row.classList.remove('nav-updated-flash'), 1200);
+          }
+        } else button?.remove();
+        if (row !== next) nav.insertBefore(row, next);
+        next = row.nextElementSibling;
+      }
+      for (const a of existing.values()) { const row = a.parentElement?.classList.contains('nav-row') ? a.parentElement : a; row.remove(); }
+      if (focused?.isConnected && document.activeElement !== focused) focused.focus();
+    } catch {} finally {
+      clearTimeout(readTimer); readController = undefined; polling = false;
+      const immediate = catchup; catchup = false;
+      if (!paused && document.visibilityState !== 'hidden') timer = setTimeout(refresh, immediate ? 0 : 2000);
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(timer); if (document.visibilityState === 'hidden' || paused) return;
+    if (polling) { catchup = true; return; } timer = setTimeout(refresh, 0);
+  });
+  timer = setTimeout(refresh, 2000);
+}
+
+export function siblingSidebarScript(navConfigJson) {
+  return `(${siblingSidebarClient.toString()})(${navConfigJson});`;
+}
+
+export function renderSiblingNavigation({ destinations, doc, currentTarget, identity, repoName, workspaceName, reviewedScope, confirmNavigation, navConfig }) {
+  const items = destinations.map(item => {
+    const kind = item.attention ? 'attention' : item.unseen ? 'new' : '';
+    return `<div class="nav-row"${item.id === doc.id ? ' data-current' : ''}><a href="${escapeHtml(item.href)}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}${kind ? ` title="${kind === 'attention' ? 'Needs attention' : 'New publication'}" aria-describedby="lavish-hub-desc-${kind}" data-${kind === 'attention' ? 'attention' : 'unseen'}="true"` : ''}><span class="nav-label">${escapeHtml(item.title)}</span>${kind ? `<span class="nav-badge nav-badge-${kind}" aria-hidden="true">${kind === 'attention' ? 'Attention' : 'New'}</span>` : ''}</a></div>`;
+  }).join('');
+  return `<style>
+html { padding-left: 200px; box-sizing: border-box; }
+#lavish-hub-sidebar { position: fixed; inset: 0 auto 0 0; width: 200px; box-sizing: border-box; z-index: 2147483647; overflow: auto; padding: 16px 10px; background: var(--ob-surface); color: var(--ob-fg); border-right: 1px solid var(--ob-border); font: 14px system-ui, sans-serif; }
+#lavish-hub-sidebar .hub-identity { padding: 0 10px 12px; overflow-wrap: anywhere; }
+#lavish-hub-sidebar .hub-session-title { font-weight: 600; color: var(--ob-fg); }
+#lavish-hub-sidebar .hub-session-title[hidden] { display: none; }
+#lavish-hub-sidebar .hub-repo-name { color: var(--ob-muted); font-size: 12px; }
+#lavish-hub-sidebar nav { display: flex; flex-direction: column; gap: 4px; }
+#lavish-hub-sidebar .nav-row { display: flex; align-items: center; gap: 4px; border-radius: 5px; }
+#lavish-hub-sidebar .nav-row[data-current] { background: var(--ob-raised); }
+#lavish-hub-sidebar nav a { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 10px; border-radius: 5px; color: var(--ob-fg); text-decoration: none; overflow-wrap: anywhere; }
+#lavish-hub-sidebar nav a:hover, #lavish-hub-sidebar nav a:focus-visible { background: var(--ob-raised); }
+#lavish-hub-sidebar .nav-row[data-current] > a[aria-current] { color: var(--ob-orange); background: transparent; }
+#lavish-hub-sidebar .nav-label { min-width: 0; overflow-wrap: anywhere; }
+#lavish-hub-sidebar .nav-badge { font-size: 11px; font-weight: 600; line-height: 1.2; padding: 1px 6px; border-radius: 999px; flex: none; white-space: nowrap; }
+#lavish-hub-sidebar .nav-badge-attention { background: var(--ob-orange); color: var(--ob-on-accent); }
+#lavish-hub-sidebar .nav-badge-new { background: var(--ob-cyan); color: var(--ob-on-accent); }
+#lavish-hub-sidebar .nav-reload { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-right: 4px; padding: 0; border: 0; border-radius: 4px; background: var(--ob-green); color: var(--ob-on-accent); cursor: pointer; }
+#lavish-hub-sidebar .nav-reload:hover, #lavish-hub-sidebar .nav-reload:focus-visible { outline: 2px solid var(--ob-fg); outline-offset: 1px; }
+@keyframes lavish-hub-update-flash { 50% { box-shadow: 0 0 0 2px var(--ob-green); } }
+#lavish-hub-sidebar .nav-updated-flash { animation: lavish-hub-update-flash 1s 1; }
+@media (prefers-reduced-motion: reduce) { #lavish-hub-sidebar .nav-updated-flash { animation: none; } }
+#lavish-hub-sidebar [role=status] { margin: 12px 10px; color: var(--ob-muted); }
+#lavish-hub-sidebar [role=status][data-error] { color: var(--ob-red); }
+#lavish-hub-sidebar aside { margin: 16px 10px; overflow-wrap: anywhere; color: var(--ob-muted); }
+</style><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-attention" hidden>Needs attention</span><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${currentTarget.title ? '' : ' hidden'}>${escapeHtml(currentTarget.title || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || currentTarget.title ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${siblingSidebarScript(navConfig)}</script>`;
+}
+
 // Edit only parser-located tags, leaving authored scripts, doctype and formatting intact.
 export function composeHubHtml(authored, sourceUrl, navigation) {
   const document = parse(authored, { sourceCodeLocationInfo: true });
