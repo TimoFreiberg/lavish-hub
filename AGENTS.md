@@ -1,6 +1,6 @@
 # Working on lavish-hub
 
-Last verified: 2026-11-14
+Last verified: 2026-11-25
 
 Testing and test-retention guidance are in [TESTING.md](TESTING.md). User and
 agent docs are in [docs/](docs/README.md). Update them when behavior changes.
@@ -34,8 +34,9 @@ local and outside the reviewed repository.
 ## Development process
 
 - Make every file edit in your own jj workspace under `.workspaces/<name>`
-  (see the `jj-workspaces` skill), based on the revision the operator named
-  (default: `main`). Commit only your task as new leaf commits.
+  (see the `jj-workspaces` skill). Base new workspaces on `main` (`-r main`)
+  unless the operator names a different revision. Commit only your task as new
+  leaf commits.
 - Finish every task by integrating it into `main`. Orchestrators must personally
   run integration, not delegate it. Serialize integration with the shared lock
   file `<primary-checkout>/.workspaces/integration-mutex`, never a workspace-local
@@ -51,24 +52,28 @@ local and outside the reviewed repository.
   before rewriting another session's active commits, and stop if preservation
   is uncertain. This rebase default does not authorize publishing unrelated
   work that is not approved for publication. Resolve conflicts before QA;
-  the lock, full QA, and no-force-push requirements still apply.
-- Run `just check` in that workspace. It installs dependencies exclusively,
-  generates and audits the full screenshot matrix first, then runs the full test
-  and real-`hc` e2e suites with separate temporary state and ports. Once it prints
-  `Screenshots ready`, visually inspect the PNGs in the announced artifact
-  directory at original size while the remaining checks run. Eight primary
-  wide/dark images represent the larger static and real-Lavish diagnostic
-  matrices; selected pages can have additional scroll captures. Wait for exit zero
-  and inspect `status.json`; screenshot readiness alone is not a pass. Record
-  visual inspection separately: automated checks cannot sign it off.
+  the lock, required QA, and no-force-push requirements still apply.
+- Run automated checks only for areas that were touched. Skip `just check` for
+  docs-only, agent-instruction, or non-code config/tooling changes that do not
+  affect runtime behavior or tests. When runtime, UI, or test files change, run
+  the relevant checks (or full `just check` for broad or cross-cutting changes).
+  `just check` installs dependencies exclusively, generates and audits the full
+  screenshot matrix first, then runs the full test and real-`hc` e2e suites with
+  separate temporary state and ports. Once it prints `Screenshots ready`,
+  visually inspect the PNGs in the announced artifact directory at original size
+  while the remaining checks run. Eight primary wide/dark images represent the
+  larger static and real-Lavish diagnostic matrices; selected pages can have
+  additional scroll captures. Wait for exit zero and inspect `status.json`;
+  screenshot readiness alone is not a pass. Record visual inspection separately:
+  automated checks cannot sign it off.
   The runner's bounded concurrency is allowed; do not overlap independent test
   commands or `npm ci` in one checkout. The public commands enforce a shared
   `.checks/lock` because dependency installation and standalone `shots/` output
   are mutable. Direct test invocations bypass that lock and must not overlap.
-  All checks remain mandatory, including for documentation changes; missing
-  prerequisites (including a working `hc` service) block integration. Automated
-  tests mock `herdr-app` and do not require its desktop application. Any fixes
-  require fresh QA on the exact commits to be pushed.
+  Missing prerequisites for the required checks (including a working `hc`
+  service when running e2e) block integration. Automated tests mock `herdr-app`
+  and do not require its desktop application. Any code fixes require fresh QA on
+  the exact commits to be pushed.
 - After QA passes, move local `main` to the tested task tip and push only
   `main` to `origin`, never force-push. If remote `main` advances, fetch,
   rebase onto the new `main@origin`, and repeat all QA before moving local
