@@ -8,14 +8,175 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { resolveWorkspace } from '../src/hub-workspace.mjs';
+import { resolveWorkspace, resolveHubSession } from '../src/hub-workspace.mjs';
 import { chromium } from 'playwright-core';
+import { modelPatch } from '../src/diff/model.mjs';
 import express from 'express';
 import { EventEmitter } from 'node:events';
 import { createHubProxy } from '../vendor/lavish/src/hub-proxy.js';
 import { buildSelfContainedHtml } from '../vendor/lavish/src/export-bundle.js';
 
 const cli = path.resolve('bin/lavish-hub');
+
+async function sessionFixture(t) {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-sessions-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const repo = path.join(dir, 'repo'), child = path.join(dir, 'child'), state = path.join(dir, 'state');
+  await mkdir(repo); await mkdir(state);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  await writeFile(path.join(repo, 'base.txt'), 'base\n');
+  execFileSync('git', ['add', 'base.txt'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base'], { cwd: repo });
+  execFileSync('jj', ['git', 'init', '--colocate'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('jj', ['describe', '-m', 'First'], { cwd: repo, stdio: 'ignore' });
+  await writeFile(path.join(repo, 'first.txt'), 'first\n');
+  execFileSync('jj', ['new'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('jj', ['describe', '-m', 'Second'], { cwd: repo, stdio: 'ignore' });
+  await writeFile(path.join(repo, 'second.txt'), 'second\n');
+  execFileSync('jj', ['workspace', 'add', child], { cwd: repo, stdio: 'ignore' });
+  const labels = new Map(), app = express();
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json() });
+  app.post('/api/hub-proxy/register', proxy.control, (req, res, next) => { labels.set(req.body.key, req.body.display.label); next(); }, proxy.register);
+  app.post('/api/hub-proxy/unregister', proxy.control, proxy.unregister);
+  app.use('/hub-proxy', (req, res, next) => { if (req.headers.origin) req.headers.origin = 'null'; next(); }, proxy.handle);
+  app.use((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/health') res.end(JSON.stringify({ ok: true, app: 'lavish-axi', version: '0.1.98', lavish_hub_page_reviews: 1, lavish_hub_assets: 1, state_id: createHash('sha256').update(path.join(state, 'state.json')).digest('hex').slice(0, 16) }));
+    else setTimeout(() => res.end(JSON.stringify({ status: 'waiting' })), 50);
+  });
+  const server = http.createServer(app); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.closeAllConnections() || server.close());
+  const env = { ...process.env, LAVISH_AXI_STATE_DIR: state, LAVISH_AXI_PORT: String(server.address().port), XDG_DATA_HOME: path.join(dir, 'data'), XDG_STATE_HOME: path.join(dir, 'xdg-state') };
+  delete env.LAVISH_HUB_SESSION; delete env.HC_TERMINAL_ID;
+  const execute = promisify(execFile);
+  const run = (args, cwd = repo) => execute(process.execPath, [cli, ...args], { env, cwd, timeout: 10000 });
+  const start = async (workspace, session, title, extra = {}) => {
+    const options = { workspace, ...(session ? { session, title } : {}), ...extra };
+    const identity = session ? await resolveHubSession(workspace, session, env) : await resolveWorkspace(workspace, env);
+    const script = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; process.exitCode = await runHubOwner(JSON.parse(process.argv[1]), { prepare: async () => ({ url: 'http://localhost:123/review' }) });`;
+    const owner = spawn(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(options)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = ''; owner.stderr.on('data', chunk => { stderr += chunk; });
+    t.after(() => { if (owner.exitCode === null) owner.kill('SIGKILL'); });
+    const runtime = path.join(identity.directory, 'owner', 'runtime.json');
+    for (let i = 0; i < 400; i++) { try { await stat(runtime); break; } catch { if (owner.exitCode !== null) throw new Error(stderr); await delay(30); } }
+    const connection = JSON.parse(await readFile(runtime, 'utf8'));
+    const request = async (operation, body = {}, ok = true) => {
+      const response = await fetch(`${connection.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': connection.capability }, body: JSON.stringify({ operation, ...body }) });
+      const data = await response.json();
+      if (ok && !response.ok) throw new Error(data.error);
+      if (!ok) assert.equal(response.status, 400);
+      return ok ? data.result : data.error;
+    };
+    const stop = async () => { const done = new Promise(resolve => owner.once('exit', resolve)); await request('stop'); await done; };
+    return { identity, request, stop, owner, connection };
+  };
+  return { dir, repo, child, state, env, run, start, labels };
+}
+
+test('concurrent repo-scoped sessions run independently against the same primary repo', async t => {
+  const f = await sessionFixture(t), a = await f.start(f.repo, 'one', 'First session'), b = await f.start(f.child, 'two', 'Second session');
+  assert.notEqual(a.identity.directory, b.identity.directory);
+  assert.equal((await a.request('status')).session, 'one');
+  assert.equal((await b.request('status')).session, 'two');
+  assert.deepEqual(new Set(f.labels.values()), new Set(['First session · repo', 'Second session · repo']));
+  assert.match((await f.run(['status', '--session', 'one'], f.child)).stdout, /session: one/);
+  assert.match((await f.run(['status', '--session', 'two'], f.repo)).stdout, /session: two/);
+  await a.stop(); await b.stop();
+});
+
+test('session startup rejects target discovery against a replacement repository', async t => {
+  const f = await sessionFixture(t), original = await f.start(f.repo, 'replace', 'Review');
+  await original.stop();
+  await rm(path.join(original.identity.directory, 'target.json'));
+  await rename(f.repo, path.join(f.dir, 'old-repo'));
+  await mkdir(f.repo); execFileSync('jj', ['git', 'init'], { cwd: f.repo, stdio: 'ignore' });
+  await writeFile(path.join(f.repo, 'untracked'), 'do not snapshot');
+  const operation = () => execFileSync('jj', ['--ignore-working-copy', 'op', 'log', '-n', '1', '--no-graph', '-T', 'id'], { cwd: f.repo, encoding: 'utf8' });
+  const before = operation();
+  const unavailable = await f.start(f.repo, 'replace', 'Review');
+  assert.equal((await unavailable.request('status')).available, false);
+  assert.equal(operation(), before);
+  await assert.rejects(stat(path.join(original.identity.directory, 'target.json')), { code: 'ENOENT' });
+  await unavailable.stop();
+  await assert.rejects(f.start(f.repo, 'replace', 'Review', { rev: '@' }), /Repository is unavailable/);
+  assert.equal(operation(), before);
+});
+
+test('repo-scoped session persists discovered target across restart', async t => {
+  const f = await sessionFixture(t), a = await f.start(f.child, 'persist', 'Persistence');
+  const initial = await a.request('status');
+  assert.ok(initial.target);
+  const targetFile = path.join(a.identity.directory, 'target.json');
+  const saved = JSON.parse(await readFile(targetFile, 'utf8'));
+  assert.equal((await stat(targetFile)).mode & 0o777, 0o600);
+  await a.stop();
+  execFileSync('jj', ['new'], { cwd: f.child, stdio: 'ignore' });
+  const restarted = await f.start(f.child, 'persist', 'Persistence');
+  assert.equal((await restarted.request('status')).target, initial.target);
+  assert.deepEqual(JSON.parse(await readFile(targetFile, 'utf8')), saved);
+  await restarted.stop();
+  await writeFile(targetFile, JSON.stringify({ rev: { input: '@', revset: '@', kind: 'revset' } }));
+  await assert.rejects(f.start(f.child, 'persist', 'Persistence'), /Invalid target record/);
+});
+
+test('lavish-hub target retargets active session and preserves or updates base and title', async t => {
+  const f = await sessionFixture(t), a = await f.start(f.child, 'target', 'Original');
+  const before = await a.request('snapshot');
+  await f.run(['target', '@-', '--base', 'root()', '--title', 'Updated', '--session', 'target'], f.child);
+  const status = await a.request('status');
+  assert.equal(status.title, 'Updated'); assert.equal(status.base, 'root()');
+  assert.ok([...f.labels.values()].includes('Updated · repo'));
+  const after = await a.request('snapshot');
+  assert.notEqual(before.version, after.version);
+  await f.run(['target', '--no-base', '--session', 'target']);
+  const cleared = await a.request('status');
+  assert.equal(cleared.target, status.target); assert.equal(cleared.title, 'Updated'); assert.equal(cleared.base, undefined);
+  assert.match(await a.request('target', { rev: { revset: '@' } }, false), /Invalid target request/);
+  assert.match(await a.request('target', { rev: '@' }, false), /Working-copy revisions/);
+  await a.stop();
+});
+
+test('detaching a workspace-bound hub survives deleting the temporary workspace while blocking deleted-workspace files', async t => {
+  const f = await sessionFixture(t), a = await f.start(f.child);
+  const inside = path.join(f.child, 'inside.md'), outside = path.join(f.dir, 'outside.md'), html = path.join(f.dir, 'outside.html');
+  await writeFile(inside, 'inside'); await writeFile(outside, 'outside'); await writeFile(html, '<p>external</p>');
+  await writeFile(path.join(f.child, 'base.txt'), 'changed\n');
+  await a.request('publish', { id: 'inside', file: inside });
+  await a.request('publish', { id: 'outside', file: outside });
+  await a.request('publish', { id: 'html', file: html });
+  const inDoc = await a.request('readDocument', { id: 'inside' });
+  await f.run(['target', '@', '--base', 'main', '--workspace', f.child]);
+  await rm(f.child, { recursive: true, force: true });
+  assert.equal((await a.request('status')).available, true);
+  const snap = await a.request('snapshot');
+  assert.ok(snap.head);
+  const fileIndex = modelPatch(snap.patch).findIndex(file => file.newPath === 'base.txt');
+  assert.ok(fileIndex >= 0);
+  assert.equal(modelPatch(snap.patch)[fileIndex].parseError, null, snap.patch);
+  const expanded = await a.request('diffFiles', { operationId: snap.operationId, fileIndex });
+  assert.equal(expanded.newFile.contents, 'changed\n');
+  const head = snap.commits.find(commit => commit.commitId === snap.head);
+  assert.ok(head);
+  const described = await a.request('describe', { changeId: head.changeId, commitId: head.commitId, expectedDescription: head.description, description: 'Detached description' });
+  assert.equal(described.status, 'saved');
+  const config = JSON.parse((await readFile(path.join(a.identity.directory, 'hub.html'), 'utf8')).match(/globalThis\.hubConfig=(.*?);<\/script>/)[1]);
+  const resource = await fetch(`${a.connection.url}/resources/${config.resourceKey}/html/outside.html`);
+  assert.equal(resource.status, 200); assert.match(await resource.text(), /external/);
+  const command = await a.request('executeCommand', { id: 'pwd', argv: ['pwd'] });
+  assert.equal(command.stdout.trim(), f.repo);
+  const tasks = await a.request('readDocument', { id: 'tasks' });
+  assert.ok(await a.request('saveDocument', { id: 'tasks', version: tasks.version, baseHash: tasks.hash, text: 'tasks' }));
+  const out = await a.request('readDocument', { id: 'outside' });
+  assert.ok(await a.request('saveDocument', { id: 'outside', version: out.version, baseHash: out.hash, text: 'updated' }));
+  assert.match(await a.request('readDocument', { id: 'inside' }, false), /unavailable/);
+  assert.match(await a.request('saveDocument', { id: 'inside', version: inDoc.version, baseHash: inDoc.hash, text: 'bad' }, false), /unavailable/);
+  await mkdir(f.child); await writeFile(inside, 'replacement');
+  assert.match(await a.request('readDocument', { id: 'inside' }, false), /unavailable/);
+  assert.match(await a.request('saveDocument', { id: 'inside', version: inDoc.version, baseHash: inDoc.hash, text: 'bad' }, false), /unavailable/);
+  assert.equal(await readFile(inside, 'utf8'), 'replacement');
+  await a.stop();
+});
+
 test('hub foreground owner rejects duplicates and stops without a relay', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-owner-'));
   t.after(() => rm(dir, { recursive: true, force: true }));

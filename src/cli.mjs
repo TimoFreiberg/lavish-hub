@@ -1,15 +1,18 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { callHub, hubUrl, runHubOwner } from './hub-runtime.mjs';
+import { callHub, hubUrl, prepareTargetRequest, runHubOwner, validateSessionTitle } from './hub-runtime.mjs';
+import { resolveSessionId, validateSessionId } from './hub-workspace.mjs';
 import { readMetadata } from './hub-documents.mjs';
 import { lavishCli, runtimeEnv } from './runtime.mjs';
 import { createLavishClient } from './lavish-http.mjs';
 import { resolveLavishPort } from './lavish-port.mjs';
 import { themeCss, syntaxTheme, diffThemeCss } from './orangebox.mjs';
 
-const usage = `usage: lavish-hub [listen|stop|status|url] [--workspace DIR] [--open] [--reopen] [--view ID]
-       lavish-hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--attention] [--open]
-       lavish-hub tasks --file FILE [--workspace DIR]
+const usage = `usage: lavish-hub [listen|stop|status|url] [--workspace DIR] [--session ID] [--open] [--reopen] [--view ID]
+       lavish-hub listen [--rev REV] [--base REV | --no-base] [--title TEXT]
+       lavish-hub target [REV] [--base REV | --no-base] [--title TEXT] [--session ID] [--workspace DIR]
+       lavish-hub publish FILE --id ID [--title T] [--metadata-file JSON] [--workspace DIR] [--session ID] [--attention] [--open]
+       lavish-hub tasks --file FILE [--workspace DIR] [--session ID]
        lavish-hub reply PAGE --agent-reply TEXT
        lavish-hub theme [css|syntax|diff-css]`;
 const themeHelp = `Orangebox is Lavish Hub's dark theme for standalone HTML.
@@ -44,22 +47,26 @@ export function parseArgs(args) {
     if (args.length !== 3 || !args[0] || args[0].startsWith('-') || args[1] !== '--agent-reply' || !args[2]) throw new UsageError('reply requires PAGE --agent-reply TEXT');
     return { reply: true, page: args[0], text: args[2] };
   }
-  if (!['listen', 'stop', 'status', 'url', 'publish', 'tasks'].includes(target)) throw new UsageError(`unknown command ${target}`);
+  if (!['listen', 'stop', 'status', 'url', 'publish', 'tasks', 'target'].includes(target)) throw new UsageError(`unknown command ${target}`);
   const command = target;
   const result = { hub: command };
   if (command === 'publish') {
     result.file = args.shift();
     if (!result.file || result.file.startsWith('-')) throw new UsageError('publish requires a file');
   }
+  if (command === 'target' && args[0] && !args[0].startsWith('-')) result.rev = args.shift();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--workspace') {
       if (result.workspace || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--workspace requires one value');
       result.workspace = args[++i];
-    } else if ((command === 'publish' && ['--id', '--title', '--metadata-file'].includes(arg)) || (command === 'tasks' && arg === '--file')) {
+    } else if (arg === '--session' || (command === 'publish' && ['--id', '--title', '--metadata-file'].includes(arg)) || (command === 'tasks' && arg === '--file') || (['listen', 'target'].includes(command) && ['--base', '--title'].includes(arg)) || (command === 'listen' && arg === '--rev')) {
       const key = arg === '--metadata-file' ? 'metadataFile' : arg.slice(2);
       if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
       result[key] = args[++i];
+    } else if (['listen', 'target'].includes(command) && arg === '--no-base') {
+      if (result.noBase) throw new UsageError('--no-base given twice');
+      result.noBase = true;
     } else if (command === 'status' && arg === '--view') {
       if (result.view !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--view requires one value');
       result.view = args[++i];
@@ -69,6 +76,13 @@ export function parseArgs(args) {
       result[key] = true;
     } else throw new UsageError(`unknown argument ${arg}`);
   }
+  try {
+    if (result.session !== undefined) validateSessionId(result.session);
+    if (['listen', 'target'].includes(command) && result.title !== undefined) result.title = validateSessionTitle(result.title);
+  } catch (error) { throw new UsageError(error.message); }
+  if (result.base !== undefined && result.noBase) throw new UsageError('--base and --no-base are mutually exclusive');
+  if (command === 'listen' && result.session !== undefined && result.title === undefined) throw new UsageError('listen with --session requires --title');
+  if (command === 'target' && result.rev === undefined && result.base === undefined && !result.noBase && result.title === undefined) throw new UsageError('target requires REV, --base, --no-base, or --title');
   if (command === 'publish' && !result.id) throw new UsageError('publish requires --id');
   if (command === 'tasks' && !result.file) throw new UsageError('tasks requires --file');
   return result;
@@ -102,7 +116,16 @@ export async function main(args = process.argv.slice(2)) {
       return 0;
     }
     if (options.reply) return await reply(options.page, options.text);
+    let session;
+    try { session = resolveSessionId(options); } catch (error) { throw new UsageError(error.message); }
+    if (options.hub === 'listen' && session && options.title === undefined) throw new UsageError('listen with --session requires --title');
     if (options.hub === 'listen') return await runHubOwner(options);
+    if (options.hub === 'target') {
+      const body = await prepareTargetRequest(options);
+      const result = await callHub('target', { ...options, body });
+      console.log(`Hub target: ${result.target || '(working copy)'}${result.base ? `; base: ${result.base}` : ''}${result.title ? `; title: ${result.title}` : ''}.`);
+      return 0;
+    }
     if (options.hub === 'url') { console.log(await hubUrl(options)); return 0; }
     if (['publish', 'tasks'].includes(options.hub)) {
       const body = options.hub === 'publish'
@@ -119,7 +142,7 @@ export async function main(args = process.argv.slice(2)) {
     if (options.hub === 'status' && options.view) await callHub('navigate', { ...options, body: { id: options.view } });
     const result = await callHub(options.hub, options);
     if (options.open) await callHub('open', { ...options, ...(options.view ? { body: { view: options.view } } : {}) });
-    console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}.`);
+    console.log(options.hub === 'stop' ? 'Hub owner stopping.' : `Hub owner running for ${result.workspace}${result.available ? '' : ' (workspace unavailable)'}${result.session ? `; session: ${result.session}` : ''}${result.title ? `; title: ${result.title}` : ''}${result.target ? `; target: ${result.target}` : ''}${result.base ? `; base: ${result.base}` : ''}.`);
     return 0;
   } catch (error) {
     if (error instanceof UsageError) { console.error(error.message ? `lavish-hub: ${error.message}\n${usage}` : usage); return 2; }

@@ -14,6 +14,32 @@ import { runtimeEnv, lavishCli } from '../src/runtime.mjs';
 
 const cli = path.resolve('bin/lavish-hub');
 
+test('session CLI flags, mandatory title, and LAVISH_HUB_SESSION parsing and URL prediction', async t => {
+  for (const args of [['listen', '--session', 'x'], ['listen', '--session', '../x', '--title', 'X'], ['listen', '--title', '  '], ['status', '--session', 'a/b']]) assert.throws(() => parseArgs(args));
+  assert.deepEqual(parseArgs(['listen', '--session', 's', '--title', '  Review  ', '--rev', '@', '--base', 'main']), { hub: 'listen', session: 's', title: 'Review', rev: '@', base: 'main' });
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'session-url-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const repo = path.join(dir, 'repo'), child = path.join(dir, 'child');
+  await mkdir(repo); execFileSync('jj', ['git', 'init'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('jj', ['workspace', 'add', child], { cwd: repo, stdio: 'ignore' });
+  const env = { ...process.env, HOME: dir, XDG_DATA_HOME: path.join(dir, 'data'), LAVISH_AXI_STATE_DIR: path.join(dir, 'state'), LAVISH_HUB_SESSION: 'session-one' };
+  const deps = { client: () => ({ verifyIfRunning: async () => null }) };
+  const url = await hubUrl({ workspace: repo, env }, deps);
+  assert.equal(await hubUrl({ workspace: child, env }, deps), url);
+  assert.notEqual(await hubUrl({ workspace: repo, session: 'other', env }, deps), url);
+  await assert.rejects(stat(path.join(dir, 'data')), { code: 'ENOENT' });
+  for (const [args, session] of [[['listen', '--workspace', repo], 'abc'], [['status', '--workspace', repo], 'bad/session']]) {
+    const result = spawnSync(process.execPath, [cli, ...args], { env: { ...env, LAVISH_HUB_SESSION: session }, encoding: 'utf8' });
+    assert.equal(result.status, 2, result.stderr);
+  }
+});
+
+test('target command argument parsing', () => {
+  assert.deepEqual(parseArgs(['target', '@-', '--base', 'main', '--title', ' Review ', '--session', 's']), { hub: 'target', rev: '@-', base: 'main', title: 'Review', session: 's' });
+  assert.deepEqual(parseArgs(['target', '--no-base']), { hub: 'target', noBase: true });
+  for (const args of [['target'], ['target', '--base', 'a', '--no-base'], ['target', '--rev', 'x'], ['target', '--title', '\n']]) assert.throws(() => parseArgs(args));
+});
+
 test('hub-only CLI rejects removed commands', () => {
   for (const command of ['hub', 'diff', 'file', 'pr', 'task', 'retarget', '-']) {
     const result = spawnSync(process.execPath, [cli, command], { encoding: 'utf8' });

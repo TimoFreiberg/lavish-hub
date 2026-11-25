@@ -35,7 +35,7 @@ export async function createHubCommands(directory, cwd, validate = async () => t
       try {
         if (closing) throw new Error('Hub owner is stopping');
         result = await new Promise(resolve => {
-          const child = spawn(body.argv[0], body.argv.slice(1), { cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+          const child = spawn(body.argv[0], body.argv.slice(1), { cwd: typeof cwd === 'function' ? cwd() : cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
           const state = { child, cancelled: false, timedOut: false };
           running.set(body.id, state);
           let remaining = outputLimit, stdout = [], stderr = [], truncated = false, failure;

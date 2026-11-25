@@ -2,10 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
-import { createHubJj } from './hub-jj.mjs';
+import { createHubJj, discoverStartupTarget, isWorkingCopyRev, resolveTargetRev } from './hub-jj.mjs';
 import { createHubDocuments } from './hub-documents.mjs';
 import { createHubCommands } from './hub-commands.mjs';
-import { resolveWorkspace, resolveRecordedWorkspace, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
+import { resolveWorkspace, resolveRecordedWorkspace, resolveHubSession, resolveRecordedSession, resolveSessionId, primaryRootForRepo, repoMatches, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
 import { computeHubUrl } from './hub-url.mjs';
 import { prepareReview, presentReview } from './lavish.mjs';
 import { createLavishClient } from './lavish-http.mjs';
@@ -38,6 +38,51 @@ async function workspace(dir, env = process.env) {
   try { return await resolveRecordedWorkspace(current.root, env); }
   catch (error) { if (error.code !== 'ENOENT') throw error; return current; }
 }
+export async function resolveHubIdentity(options = {}) {
+  const env = options.env || process.env;
+  const session = resolveSessionId(options, env);
+  if (!session) return workspace(options.workspace, env);
+  let current;
+  try { current = await resolveHubSession(options.workspace, session, env); }
+  catch (error) {
+    if (!options.workspace) throw error;
+    try { return await resolveRecordedSession(options.workspace, session, env); } catch { throw error; }
+  }
+  try { return await resolveRecordedSession(current.root, session, env); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; return current; }
+}
+
+export function validateSessionTitle(title) {
+  if (typeof title !== 'string' || /[\x00-\x1f\x7f]/.test(title)) throw new Error('Invalid session title');
+  const trimmed = title.trim();
+  if (!trimmed || trimmed.length > 240) throw new Error('Invalid session title');
+  return trimmed;
+}
+
+async function readTarget(directory) {
+  let target;
+  try { target = await readJson(path.join(directory, 'target.json')); }
+  catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+  if (!target || typeof target !== 'object' || Array.isArray(target) || Object.keys(target).some(key => !['rev', 'base', 'title'].includes(key))) throw new Error('Invalid target record');
+  for (const key of ['rev', 'base']) {
+    if (target[key] === undefined) continue;
+    const rev = target[key];
+    if (!rev || typeof rev !== 'object' || Array.isArray(rev) || Object.keys(rev).some(k => !['input', 'revset', 'kind', 'changeId'].includes(k)) || typeof rev.input !== 'string' || !rev.input.trim() || typeof rev.revset !== 'string' || !rev.revset.trim() || isWorkingCopyRev(rev.revset) || /[\x00-\x1f\x7f]/.test(rev.input + rev.revset) || !['change', 'bookmark', 'remote-bookmark', 'revset'].includes(rev.kind) || (rev.kind === 'change' ? !/^[a-z]{32}$/.test(rev.changeId || '') || rev.revset !== `change_id(${rev.changeId})` : rev.changeId !== undefined)) throw new Error('Invalid target record');
+  }
+  if (target.title !== undefined && validateSessionTitle(target.title) !== target.title) throw new Error('Invalid target record');
+  return target;
+}
+
+export async function prepareTargetRequest(options = {}) {
+  const body = {};
+  for (const key of ['rev', 'base']) {
+    if (options[key] !== undefined) body[key] = isWorkingCopyRev(options[key]) ? (await resolveTargetRev(options.workspace || process.cwd(), options[key])).changeId : options[key];
+  }
+  if (options.noBase) body.clearBase = true;
+  if (options.title !== undefined) body.title = options.title;
+  return body;
+}
+
 async function acquire(identity, instance) {
   await mkdir(identity.directory, { recursive: true, mode: 0o700 });
   const lock = path.join(identity.directory, 'owner');
@@ -68,7 +113,10 @@ async function release(lock, instance) {
 }
 
 export async function runHubOwner(options = {}, { prepare = prepareReview } = {}) {
-  const identity = await workspace(options.workspace);
+  const identity = await resolveHubIdentity(options);
+  if (identity.session && options.title === undefined) throw new Error('listen with --session requires --title');
+  const title = options.title === undefined ? undefined : validateSessionTitle(options.title);
+  const primaryRoot = primaryRootForRepo(identity.repo), repoName = path.basename(primaryRoot);
   const instance = randomUUID();
   const lock = await acquire(identity, instance);
   const abort = new AbortController();
@@ -83,6 +131,23 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) process.once(signal, stop);
   try {
+    let currentTarget = await readTarget(identity.directory);
+    const isDetached = () => Boolean(identity.session || currentTarget.rev);
+    const isAvailable = () => isDetached() ? repoMatches(identity) : workspaceMatches(identity);
+    const repoOk = await repoMatches(identity);
+    if (!repoOk && (options.rev !== undefined || options.base !== undefined)) throw new Error('Repository is unavailable or has changed');
+    if (repoOk) {
+      const invocationDir = options.workspace || process.cwd();
+      const resolveStartup = value => isWorkingCopyRev(value) ? resolveTargetRev(invocationDir, value) : resolveTargetRev(primaryRoot, value, { ignoreWorkingCopy: true });
+      const next = { ...currentTarget };
+      if (options.rev !== undefined) next.rev = await resolveStartup(options.rev);
+      else if (identity.session && !next.rev) next.rev = await discoverStartupTarget(invocationDir);
+      if (options.base !== undefined) next.base = await resolveStartup(options.base);
+      if (options.noBase) delete next.base;
+      if (title !== undefined) next.title = title;
+      if (Object.keys(next).length || JSON.stringify(next) !== JSON.stringify(currentTarget)) await atomicJson(path.join(identity.directory, 'target.json'), next);
+      currentTarget = next;
+    }
     let recorded = {};
     try { recorded = await readJson(recordFile); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (!recorded || typeof recorded !== 'object' || Array.isArray(recorded)) throw new Error('Invalid generated document ownership record');
@@ -96,7 +161,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       if (current !== null) recovered.push({ target, current });
     }
     for (const { target, current } of recovered) { generatedSiblings.add(target); siblingContents.set(target, current); }
-    if (!(await workspaceMatches(identity))) console.error('Workspace is unavailable or has changed; repository actions are disabled.');
+    if (!(await isAvailable())) console.error('Workspace is unavailable or has changed; repository actions are disabled.');
     await recordWorkspace(identity);
     const page = path.join(identity.directory, 'hub.html');
     const canonicalPage = await realpath(page).catch(async error => {
@@ -105,7 +170,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     });
     const sessionKey = createHash('sha256').update(canonicalPage).digest('hex').slice(0, 16);
     const browserUrl = `/hub-proxy/${sessionKey}`;
-    const jj = createHubJj(identity.root, { validate: () => workspaceMatches(identity) });
+    const jj = createHubJj(() => isDetached() ? primaryRoot : identity.root, { target: currentTarget, validate: isAvailable });
     const guardSource = async file => {
       const withinWorkspace = candidate => {
         const relative = path.relative(identity.root, candidate);
@@ -117,7 +182,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       }
     };
     const documents = await createHubDocuments(identity.directory, { guardSource });
-    commands = await createHubCommands(identity.directory, identity.root, () => workspaceMatches(identity));
+    commands = await createHubCommands(identity.directory, () => isDetached() ? primaryRoot : identity.root, isAvailable);
     let reviewUrl;
     const workspaceName = path.basename(identity.root);
     const directUrl = id => reviewUrl ? `${reviewUrl}?view=${encodeURIComponent(id)}` : undefined;
@@ -144,7 +209,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         const nav = `<style>html { padding-left: 200px; box-sizing: border-box; } #lavish-hub-sidebar { position: fixed; inset: 0 auto 0 0; width: 200px; box-sizing: border-box; z-index: 2147483647; overflow: auto; padding: 16px 10px; background: var(--ob-surface); color: var(--ob-fg); border-right: 1px solid var(--ob-border); font: 14px system-ui, sans-serif; } #lavish-hub-sidebar nav { display: flex; flex-direction: column; gap: 4px; } #lavish-hub-sidebar nav a { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 10px; border-radius: 5px; color: var(--ob-fg); text-decoration: none; overflow-wrap: anywhere; } #lavish-hub-sidebar nav a:hover, #lavish-hub-sidebar nav a:focus-visible { background: var(--ob-raised); } #lavish-hub-sidebar nav a[aria-current] { color: var(--ob-orange); background: var(--ob-raised); } #lavish-hub-sidebar .nav-label { min-width: 0; overflow-wrap: anywhere; } #lavish-hub-sidebar .nav-badge { font-size: 11px; font-weight: 600; line-height: 1.2; padding: 1px 6px; border-radius: 999px; flex: none; white-space: nowrap; } #lavish-hub-sidebar .nav-badge-attention { background: var(--ob-orange); color: var(--ob-on-accent); } #lavish-hub-sidebar .nav-badge-new { background: var(--ob-cyan); color: var(--ob-on-accent); } #lavish-hub-sidebar [role=status] { margin: 12px 10px; color: var(--ob-muted); } #lavish-hub-sidebar [role=status][data-error] { color: var(--ob-red); } #lavish-hub-sidebar aside { margin: 16px 10px; overflow-wrap: anywhere; color: var(--ob-muted); }</style><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-attention" hidden>Needs attention</span><span id="lavish-hub-desc-new" hidden>New publication</span><nav aria-label="Hub navigation">${destinations.map(item => { const kind = item.attention ? 'attention' : item.unseen ? 'new' : ''; return `<a href="${item.href}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}${kind ? ` title="${kind === 'attention' ? 'Needs attention' : 'New publication'}" aria-describedby="lavish-hub-desc-${kind}" data-${kind === 'attention' ? 'attention' : 'unseen'}="true"` : ''}><span class="nav-label">${escapeHtml(item.title)}</span>${kind ? `<span class="nav-badge nav-badge-${kind}" aria-hidden="true">${kind === 'attention' ? 'Attention' : 'New'}</span>` : ''}</a>`; }).join('')}</nav><div role="status" aria-live="polite"></div>`;
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope">${scope}</aside>` : '';
-        const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id, version: doc.version, title: doc.title, workspaceName }).replaceAll('<', '\\u003c');
+        const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id, version: doc.version, title: doc.title, workspaceName, repoName, sessionTitle: currentTarget.title || '' }).replaceAll('<', '\\u003c');
         const navigation = `${nav}${reviewedScope}</div><script>${confirmNavigation}</script><script>{const c=${navConfig};c.url=new URL(c.url,location.href).href;const cut=(t,l)=>{let o='';for(const ch of t){if(o.length+ch.length>l)break;o+=ch}return o};const formatTitle=(v,w)=>{const ws=w?cut(w,60):'';if(!ws)return cut(v,120);const s=' · '+ws,m=120-s.length;return (v.length>m?cut(v,Math.max(1,m-1)).trimEnd()+'…':v)+s};const setTabTitle=()=>{globalThis.lavish?.setDocumentMeta?.({title:formatTitle(c.title,c.workspaceName)})};setTabTitle();window.addEventListener('lavish:ready',setTabTitle);let navigating=false,dirty=false,leaving=false,edits=0,navGeneration=0,paused=false,polling=false,timer,leaveTimer,readController,readTimer,attemptedSelection='',navigationCancelled=false,navigationUncertain=false,warmed=false,catchup=false,acknowledged=false,ackPending=false;function pause(){paused=true;clearTimeout(timer);readController?.abort()}function resume(){clearTimeout(leaveTimer);leaving=false;if(!paused)return;paused=false;nav.removeAttribute('aria-busy');if(!feedback.hasAttribute('data-error'))feedback.textContent=navigationUncertain?'Navigation may still be in progress; select a destination to continue':'';if(!polling)timer=setTimeout(refresh,0)}function leave(url,id){pause();leaving=true;attemptedSelection=id;if(!window.navigation)leaveTimer=setTimeout(()=>{navigationUncertain=true;resume()},1000);location.href=url}window.navigation?.addEventListener('navigate',e=>{if(leaving)e.signal.addEventListener('abort',()=>{navigationUncertain=false;navigationCancelled=true;feedback.dataset.error='';feedback.textContent='Navigation cancelled. Select a destination to try again.';resume()},{once:true})});window.addEventListener('pageshow',e=>{if(e.persisted){navigationUncertain=false;resume()}});for(const type of ['input','change'])document.addEventListener(type,e=>{if(e.isTrusted&&!e.target.closest('[data-lavish-action],[data-lavish-ui]')){dirty=true;edits++}},true);window.addEventListener('beforeunload',e=>{if(dirty&&!leaving){e.preventDefault();e.returnValue=''}});const action=async(operation,body={},signal)=>{const r=await fetch(c.url+'/action',{method:'POST',headers:{'content-type':'application/json','x-lavish-capability':c.capability},body:JSON.stringify({...body,operation}),...(signal?{signal}:{})});const d=await r.json().catch(()=>({}));if(r.status===403&&d.error==='Unauthorized'&&!dirty&&!leaving&&performance.now()>1e4){leaving=true;pause();location.reload()}if(!r.ok)throw Error('Hub action failed');return d.result};const nav=document.querySelector('#lavish-hub-sidebar nav');const feedback=document.querySelector('#lavish-hub-sidebar [role=status]');for(const a of nav.querySelectorAll('a'))a.href=new URL(a.getAttribute('href'),location.href).href;const readyToAck=()=>document.readyState!=='loading';const acknowledgeCurrent=()=>{if(!readyToAck()||acknowledged||ackPending||!c.version)return;ackPending=true;action('acknowledge',{id:c.id,version:c.version},AbortSignal.timeout(10000)).then(()=>{acknowledged=true},()=>{}).finally(()=>{ackPending=false})};if(readyToAck())acknowledgeCurrent();else document.addEventListener('DOMContentLoaded',acknowledgeCurrent,{once:true});nav.addEventListener('click',async e=>{const a=e.target.closest('a[data-hub-id]');if(!a||!nav.contains(a))return;e.preventDefault();if(navigating||leaving)return;navigating=true;pause();navGeneration++;const labelText=a.querySelector('.nav-label')?.textContent||a.textContent;feedback.removeAttribute('data-error');feedback.textContent='Opening '+labelText+'…';nav.setAttribute('aria-busy','true');try{let approved=false,approvedEdits=edits;if(dirty){approved=await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.');if(!approved)return}await action('navigate',{id:a.dataset.hubId},AbortSignal.timeout(10000));if((!approved||approvedEdits!==edits)&&dirty&&!(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.')))return;navigationUncertain=false;navigationCancelled=false;leave(a.href,a.dataset.hubId)}catch{feedback.dataset.error='';feedback.textContent='Could not open '+labelText+'. Select it again to retry.'}finally{navigating=false;if(!leaving){resume();nav.removeAttribute('aria-busy');if(!feedback.hasAttribute('data-error'))feedback.textContent=navigationUncertain?'Navigation may still be in progress; select a destination to continue':''}}});async function refresh(){if(paused||polling||(warmed&&document.visibilityState==='hidden'))return;warmed=true;polling=true;const generation=navGeneration;readController=new AbortController();readTimer=setTimeout(()=>readController?.abort(),10000);try{const [state,list]=await Promise.all([action('status',{},readController.signal),action('documents',{},readController.signal)]);if(paused)return;if(!acknowledged)acknowledgeCurrent();const items=[...Object.entries({commits:'Commits',changes:'Changes',tasks:'Tasks'}).map(([id,title])=>({id,title,attention:false,unseen:false})),...list.documents.map(d=>({...d,unseen:d.id===c.id?d.version!==c.version:d.viewedVersion!==d.version}))];const focused=nav.contains(document.activeElement)?document.activeElement:null;const existing=new Map([...nav.querySelectorAll('a[data-hub-id]')].map(a=>[a.dataset.hubId,a]));let next=nav.firstElementChild;for(const item of items){const a=existing.get(item.id)||document.createElement('a');existing.delete(item.id);a.dataset.hubId=item.id;let label=a.querySelector('.nav-label');if(!label){label=document.createElement('span');label.className='nav-label';a.replaceChildren(label)}if(label.textContent!==item.title)label.textContent=item.title;const badgeKind=item.attention?'attention':item.unseen?'new':'';let badge=a.querySelector('.nav-badge');if(badgeKind){if(!badge){badge=document.createElement('span');badge.setAttribute('aria-hidden','true');a.append(badge)}badge.className='nav-badge nav-badge-'+badgeKind;badge.textContent=badgeKind==='attention'?'Attention':'New';a.title=badgeKind==='attention'?'Needs attention':'New publication';a.setAttribute('aria-describedby','lavish-hub-desc-'+badgeKind);if(badgeKind==='attention'){a.dataset.attention='true';delete a.dataset.unseen}else{a.dataset.unseen='true';delete a.dataset.attention}}else{badge?.remove();a.removeAttribute('title');a.removeAttribute('aria-describedby');delete a.dataset.attention;delete a.dataset.unseen}const href=new URL(item.source?.toLowerCase().endsWith('.html')?item.sibling:'hub.html',location.href).href;if(a.href!==href)a.href=href;if(item.id===c.id)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');if(a!==next)nav.insertBefore(a,next);next=a.nextElementSibling}for(const a of existing.values())a.remove();if(focused?.isConnected&&document.activeElement!==focused)focused.focus();if(generation===navGeneration&&!navigating&&!leaving&&attemptedSelection&&state.selected&&state.selected!==attemptedSelection){attemptedSelection='';if(navigationCancelled){navigationCancelled=false;feedback.removeAttribute('data-error');feedback.textContent=''}}if(generation===navGeneration&&!navigating&&!leaving&&!navigationUncertain&&!dirty&&!feedback.hasAttribute('data-error')&&state.selected&&state.selected!==c.id&&state.selected!==attemptedSelection){const doc=list.documents.find(d=>d.id===state.selected);const destination=new URL(doc&&doc.source.toLowerCase().endsWith('.html')?doc.sibling:'hub.html',location.href).href;leave(destination,state.selected);return}}catch{}finally{clearTimeout(readTimer);readController=undefined;polling=false;const immediate=catchup;catchup=false;if(!paused&&document.visibilityState!=='hidden')timer=setTimeout(refresh,immediate?0:2000)}}document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(document.visibilityState==='hidden'||paused)return;if(polling){catchup=true;return}timer=setTimeout(refresh,0)});timer=setTimeout(refresh,2000)}</script>`;
         authored = composeHubHtml(authored, base, navigation);
         const name = siblingName(doc);
@@ -193,6 +258,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       selectionRevision++;
       return { selected };
     };
+    let register, targetSerial = Promise.resolve();
     transport = await createHubTransport({
       navigate: body => select(body.id),
       acknowledge: body => documents.acknowledge(body),
@@ -210,10 +276,30 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       attach: body => documents.attach(body),
       readDocument: body => documents.read(body),
       saveDocument: async body => {
-        if (!(await workspaceMatches(identity))) throw new Error('Workspace is unavailable or has changed; saving is disabled');
+        if (!(await isAvailable())) throw new Error('Workspace is unavailable or has changed; saving is disabled');
         return documents.save(body);
       },
-      status: async () => ({ workspace: identity.root, instance, selected, selectionRevision, ...(reviewUrl ? { url: reviewUrl } : {}), available: await workspaceMatches(identity) }),
+      target: body => {
+        const update = targetSerial.then(async () => {
+          const keys = Object.keys(body).filter(key => key !== 'operation');
+          if (!keys.length || keys.some(key => !['rev', 'base', 'clearBase', 'title'].includes(key)) || ['rev', 'base', 'title'].some(key => body[key] !== undefined && typeof body[key] !== 'string') || (body.clearBase !== undefined && typeof body.clearBase !== 'boolean') || (body.base !== undefined && body.clearBase)) throw new Error('Invalid target request');
+          if ((body.rev !== undefined || body.base !== undefined || body.clearBase !== undefined) && !(await repoMatches(identity))) throw new Error('Repository is unavailable or has changed');
+          if (!(await isAvailable())) throw new Error('Workspace is unavailable or has changed');
+          const next = { ...currentTarget };
+          if (body.rev !== undefined) next.rev = await resolveTargetRev(primaryRoot, body.rev, { ignoreWorkingCopy: true });
+          if (body.base !== undefined) next.base = await resolveTargetRev(primaryRoot, body.base, { ignoreWorkingCopy: true });
+          if (body.clearBase) delete next.base;
+          if (body.title !== undefined) next.title = validateSessionTitle(body.title);
+          await atomicJson(path.join(identity.directory, 'target.json'), next);
+          currentTarget = next;
+          jj.setTarget(next);
+          if (body.title !== undefined && register) await register().catch(error => console.error(`Hub registration failed: ${error.message}`));
+          return { target: next.rev?.input ?? null, base: next.base?.input ?? null, title: next.title ?? null };
+        });
+        targetSerial = update.catch(() => {});
+        return update;
+      },
+      status: async () => ({ workspace: identity.root, repoName, ...(identity.session ? { session: identity.session } : {}), ...(currentTarget.title ? { title: currentTarget.title } : {}), ...(currentTarget.rev ? { target: currentTarget.rev.input } : {}), ...(currentTarget.base ? { base: currentTarget.base.input } : {}), instance, selected, selectionRevision, ...(reviewUrl ? { url: reviewUrl } : {}), available: await isAvailable() }),
       snapshot: ({ force, knownVersion }) => jj.snapshot({ force: force === true, knownVersion }),
       diffFiles: body => jj.diffFiles(body),
       describe: body => jj.describe(body),
@@ -223,7 +309,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const dist = await ensureHubAssets();
     const [script, style, diffScript, diffStyle, markdownScript, documentStyle] = await Promise.all([readFile(new URL('hub-app.mjs', web), 'utf8'), readFile(new URL('hub.css', web), 'utf8'), readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'), readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8')]);
     await writeSiblings();
-    const config = JSON.stringify({ url: browserUrl, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root, workspaceName }).replaceAll('<', '\\u003c');
+    const config = JSON.stringify({ url: browserUrl, capability: transport.capability, resourceKey: transport.resourceKey, workspace: identity.root, workspaceName, repoName, sessionTitle: currentTarget.title || '' }).replaceAll('<', '\\u003c');
     async function asset(content, extension) {
       const name = `hub-asset-${digest(content)}.${extension}`;
       const target = path.join(identity.directory, name);
@@ -247,10 +333,10 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     if (review.ended) return 1;
     reviewUrl = review.url;
     const client = createLavishClient({ signal: abort.signal, vendored: true });
-    const register = async () => {
+    register = async () => {
       let summary = null;
       try { summary = await jj.summary(); } catch { /* The workspace may be unavailable. */ }
-      return client.registerHub(page, transport, { label: path.basename(identity.root), summary });
+      return client.registerHub(page, transport, { label: currentTarget.title ? `${currentTarget.title} · ${repoName}` : path.basename(identity.root), summary });
     };
     if (!(await register())) return 0;
     registeredPage = page;
@@ -263,7 +349,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       if (batch.session.status === 'feedback') {
         const sourceFor = sibling => siblingSources.get(sibling) ?? null;
         const prompts = batch.prompts.map(prompt => typeof prompt === 'object' && prompt !== null && sourceFor(prompt.page) ? { ...prompt, document: sourceFor(prompt.page) } : prompt);
-        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, instance, page, prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, snapshotDocument: sourceFor(batch.snapshot_page), failures: batch.artifact_failures || [], reply: `lavish-hub reply ${quote(page)} --agent-reply '...'` }));
+        console.log(JSON.stringify({ type: 'agent-notification', workspace: identity.root, ...(identity.session ? { session: identity.session } : {}), instance, page, prompts, context: batch.dom_snapshot, snapshotPage: batch.snapshot_page ?? null, snapshotDocument: sourceFor(batch.snapshot_page), failures: batch.artifact_failures || [], reply: `lavish-hub reply ${quote(page)} --agent-reply '...'` }));
       }
       if (batch.session.status === 'ended' || batch.session.session_ended) break;
     }
@@ -291,7 +377,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
 }
 
 export async function callHub(operation, options = {}) {
-  const identity = await workspace(options.workspace, options.env);
+  const identity = await resolveHubIdentity(options);
   let runtime;
   try { runtime = await readJson(path.join(identity.directory, 'owner', 'runtime.json')); }
   catch { throw new Error(`No live hub owner. ${startup}`); }
@@ -306,7 +392,7 @@ export async function callHub(operation, options = {}) {
 }
 
 export async function hubUrl(options = {}, deps = {}) {
-  const identity = await workspace(options.workspace, options.env);
+  const identity = await resolveHubIdentity(options);
   try {
     const status = await callHub('status', options);
     if (status?.url) return status.url;

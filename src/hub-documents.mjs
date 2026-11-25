@@ -68,6 +68,7 @@ export async function createHubDocuments(directory, { guardSource = async () => 
   };
   return {
     list: () => ({ documents: Object.values(state.documents), attachments: { ...state.attachments } }),
+    refreshPublished: generate => locked(() => generate(Object.values(state.documents))),
     publish: (body, generate = async (_documents, commit) => commit()) => locked(async () => {
       if (typeof body.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(body.id) || builtins.has(body.id)) throw new Error('Invalid document ID');
       if (body.title !== undefined && (typeof body.title !== 'string' || !body.title.trim() || body.title.length > 512)) throw new Error('Invalid document title');
@@ -111,6 +112,7 @@ export async function createHubDocuments(directory, { guardSource = async () => 
       const target = lookup(body.id);
       if (!target || typeof body.version !== 'string' || body.version !== target.version) throw new Error('Document target changed; reload before saving');
       if (path.extname(target.source).toLowerCase() === '.html') throw new Error('HTML source editing is not supported');
+      await guardSource(target.source);
       return saveDocument({ baseHash: body.baseHash, text: body.text }, { sourceFile: target.source });
     }),
   };
