@@ -219,6 +219,7 @@ const whiteboardCloseButton = /** @type {HTMLButtonElement} */ (document.getElem
 const whiteboardError = /** @type {HTMLDivElement} */ (document.getElementById("whiteboardError"));
 const artifactSrc = frame.dataset.artifactSrc || frame.getAttribute?.("data-artifact-src") || frame.src || "";
 let pendingInitialView = typeof sessionData.initialView === "string" ? sessionData.initialView : "";
+let pendingUrlChange = null;
 // Protocol 1 keeps the generation in the injected SDK context rather than in
 // the document URL.  In particular, a real user-authored `index.html` must not
 // acquire the legacy revision/token query pair: that pair intentionally selects
@@ -5031,14 +5032,12 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   if (!selectedDestination) return recoverLater();
   let frameDestination = selectedDestination;
   if (useInitialView && pendingInitialView) {
-    const sep = selectedDestination.includes("?") ? "&" : "?";
-    frameDestination = `${selectedDestination}${sep}__lavish_hub_view=${encodeURIComponent(pendingInitialView)}`;
+    const [path, fragment] = selectedDestination.split("#", 2);
+    const sep = path.includes("?") ? "&" : "?";
+    frameDestination = `${path}${sep}__lavish_hub_view=${encodeURIComponent(pendingInitialView)}${location.hash || (fragment ? `#${fragment}` : "")}`;
     pendingInitialView = "";
-    try {
-      const cleaned = new URL(location.href);
-      cleaned.searchParams.delete("view");
-      history.replaceState(null, "", cleaned.pathname + cleaned.search + cleaned.hash);
-    } catch { /* ignore */ }
+  } else if (location.hash && !frameDestination.includes("#")) {
+    frameDestination += location.hash;
   }
   artifactLoadDestination = stripOneShotViewParameter(selectedDestination);
   if (modernArtifactProtocol && load?.page && load?.page_proof && load?.served_route) {
@@ -6085,6 +6084,32 @@ function setDocumentIcon(href) {
   else document.head.appendChild(link);
 }
 
+const HUB_VIEW_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+function syncOuterUrl(msg) {
+  if (msg.view !== undefined && (typeof msg.view !== "string" || !HUB_VIEW_ID.test(msg.view))) return;
+  if (msg.hash !== undefined && typeof msg.hash !== "string") return;
+  const mode = msg.mode === "push" ? "push" : "replace";
+  if (mode === "replace" && pendingUrlChange) return;
+  if (mode === "push") pendingUrlChange = null;
+  const url = new URL(location.href);
+  if (msg.view !== undefined) url.searchParams.set("view", msg.view);
+  if (msg.hash !== undefined) {
+    const hash = msg.hash.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 512);
+    url.hash = hash && !hash.startsWith("#") ? `#${hash}` : hash;
+  }
+  const next = url.pathname + url.search + url.hash;
+  if (next === location.pathname + location.search + location.hash) return;
+  history[mode === "push" ? "pushState" : "replaceState"]({ lavishHubUrl: true }, "", next);
+}
+
+window.addEventListener("popstate", () => {
+  const view = new URL(location.href).searchParams.get("view") || "";
+  const change = { view: HUB_VIEW_ID.test(view) ? view : "", hash: location.hash || "" };
+  if (currentArtifactBinding) postToFrame({ type: "lavish:urlChange", ...change });
+  else pendingUrlChange = change;
+});
+
 function handleArtifactMessage(event, binding = null) {
   if (binding) {
     if (currentArtifactBinding !== binding || (event.target !== binding.port && event.currentTarget !== binding.port))
@@ -6251,6 +6276,7 @@ function handleArtifactMessage(event, binding = null) {
     );
   }
   if (msg.type === "lavish:documentMeta") applyDocumentMeta(msg);
+  if (msg.type === "lavish:syncUrl") syncOuterUrl(msg);
   if (msg.type === "lavish:scroll") {
     setScrollPosition(Number(msg.x) || 0, Number(msg.y) || 0, binding ? binding.page : undefined);
   }
@@ -6498,6 +6524,10 @@ function challengeArtifactDocument(expectedDocumentId = "", chromeAuth = "") {
     channel.port1.addEventListener("message", (boundEvent) => handleArtifactMessage(boundEvent, binding));
     channel.port1.start?.();
     channel.port1.postMessage({ type: "lavish:activate", ...bindingTuple(binding) });
+    if (pendingUrlChange) {
+      postToFrame({ type: "lavish:urlChange", ...pendingUrlChange });
+      pendingUrlChange = null;
+    }
     postQueuedAnchors(true);
     postQueuedDiffAnchors(true);
     artifactSpokeToken = binding.token;
@@ -6507,7 +6537,9 @@ function challengeArtifactDocument(expectedDocumentId = "", chromeAuth = "") {
     // Release the retained chrome state only after the accepted binding exists.
     postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
     if (!resumed) {
-      postToFrame({ type: "lavish:restoreScroll", x: lastScroll.x, y: lastScroll.y });
+      if (!location.hash && !binding.destination?.includes("#")) {
+        postToFrame({ type: "lavish:restoreScroll", x: lastScroll.x, y: lastScroll.y });
+      }
       if (lastReviewState) postToFrame({ type: "lavish:restoreReviewState", state: lastReviewState });
     }
   });
@@ -6897,7 +6929,9 @@ frame.addEventListener("load", () => {
   postToFrame({ type: "lavish:setAnnotationMode", enabled: annotation && !ended });
   if (modernArtifactProtocol && currentArtifactBinding) postQueuedDiffAnchors(true);
   if (!modernArtifactProtocol) {
-    postToFrame({ type: "lavish:restoreScroll", x: lastScroll.x, y: lastScroll.y });
+    if (!location.hash && !artifactLoadDestination?.includes("#")) {
+      postToFrame({ type: "lavish:restoreScroll", x: lastScroll.x, y: lastScroll.y });
+    }
     if (lastReviewState) postToFrame({ type: "lavish:restoreReviewState", state: lastReviewState });
     postQueuedAnchors(true);
     postQueuedDiffAnchors(true);

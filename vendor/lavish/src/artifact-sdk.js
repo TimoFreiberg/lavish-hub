@@ -2970,6 +2970,11 @@ export function createArtifactSdk(
     postArtifactMessage("lavish:documentMeta", payload);
   }
 
+  /** @param {{ view?: string, hash?: string, mode?: "push" | "replace" }} [update] */
+  function syncUrl(update) {
+    postArtifactMessage("lavish:syncUrl", { ...update });
+  }
+
   let annotationRequestId = 0;
   const annotationRequests = new Map();
   /** @type {Window & { lavish?: unknown }} */ (window).lavish = {
@@ -2990,6 +2995,7 @@ export function createArtifactSdk(
     reportDiffPlacements: (generation, placements) => postArtifactMessage("lavish:diffPlacements", { generation, placements }),
     setStatus: (message) => postArtifactMessage("lavish:status", { message: String(message) }),
     setDocumentMeta,
+    syncUrl,
     setAnnotationMode: (enabled) => {
       if (typeof enabled !== "boolean") return Promise.resolve(false);
       const requestId = ++annotationRequestId;
@@ -3018,6 +3024,12 @@ export function createArtifactSdk(
         Number(msg.artifact_revision) !== Number(artifactRevision))
     )
       return;
+    if (msg.type === "lavish:urlChange") {
+      window.dispatchEvent(new CustomEvent("lavish:urlChange", { detail: {
+        view: typeof msg.view === "string" ? msg.view : "",
+        hash: typeof msg.hash === "string" ? msg.hash : "",
+      } }));
+    }
     if (msg.type === "lavish:setAnnotationMode") setAnnotationMode(msg.enabled);
     if (msg.type === "lavish:setQueueEpoch" && !transportPort) {
       if (!event.isTrusted || !legacyChromeOrigin || event.origin !== legacyChromeOrigin) return;
