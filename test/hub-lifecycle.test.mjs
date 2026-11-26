@@ -23,6 +23,20 @@ function fixture(withNavigation = false) {
   return { env, guard, listeners, navListeners, timers, setDirty: value => { dirty = value; }, setNow: value => { now = value; }, setConfirms: (...values) => { confirms = values; }, get state() { return { paused, resumed, statuses, reloads, href }; }, fireTimer() { const [id, timer] = timers.entries().next().value; timers.delete(id); assert.equal(timer.ms, 1000); timer.fn(); } };
 }
 
+test('Older disclosure follows active items and preserves manual choices', () => {
+  const controller = sandbox.lavishHubLifecycle.createOlderDisclosureController(), details = { open: false, hidden: false };
+  controller.sync(details, { count: 1, activeOlderId: 'one' });
+  assert.equal(details.open, true); controller.onUserToggle(details);
+  details.open = false; controller.onUserToggle(details);
+  controller.sync(details, { count: 1, activeOlderId: 'one' }); assert.equal(details.open, false);
+  controller.sync(details, { count: 1, activeOlderId: 'two' }); assert.equal(details.open, true); controller.onUserToggle(details);
+  controller.sync(details, { count: 1, activeOlderId: null }); assert.equal(details.open, false); controller.onUserToggle(details);
+  details.open = true; controller.onUserToggle(details);
+  controller.sync(details, { count: 1, activeOlderId: 'two' });
+  controller.sync(details, { count: 1, activeOlderId: null }); assert.equal(details.open, true);
+  controller.sync(details, { count: 0, activeOlderId: null }); assert.equal(details.hidden, true);
+});
+
 test('tab titles truncate without splitting Unicode code points', () => {
   assert.equal(formatTabTitle('', ''), '');
   assert.equal(formatTabTitle('View', ''), 'View');

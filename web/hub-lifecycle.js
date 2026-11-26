@@ -19,6 +19,27 @@ globalThis.lavishHubLifecycle = {
       delete el.dataset.unseen; delete el.dataset.attention;
     }
   },
+  applyCollapseToggle(button, title, collapsed) {
+    const label = `${collapsed ? 'Restore' : 'Hide'} ${title}`;
+    if (button.getAttribute('aria-label') === label && button.title === label && button.querySelector('svg')) return;
+    button.setAttribute('aria-label', label); button.title = label;
+    button.innerHTML = `<svg aria-hidden="true" viewBox="0 0 24 24"><path d="${collapsed ? 'M4 14v5h16v-5M12 16V4m-4 4 4-4 4 4' : 'M4 14v5h16v-5M12 4v12m-4-4 4 4 4-4'}"/></svg>`;
+  },
+  createOlderDisclosureController({ initialOpen = false } = {}) {
+    let manualOpen = null, lastActiveOlderId = null, pendingOpen = initialOpen ? true : null;
+    return {
+      sync(details, { count, activeOlderId }) {
+        details.hidden = count === 0;
+        if (activeOlderId && activeOlderId !== lastActiveOlderId && !details.open) { pendingOpen = true; details.open = true; }
+        else if (!activeOlderId && lastActiveOlderId && manualOpen !== true && details.open) { pendingOpen = false; details.open = false; }
+        lastActiveOlderId = activeOlderId || null;
+      },
+      onUserToggle(details) {
+        if (pendingOpen !== null && details.open === pendingOpen) { pendingOpen = null; return; }
+        pendingOpen = null; manualOpen = details.open;
+      },
+    };
+  },
   createLeaveGuard({ isDirty, onPause, onResume, onStatus, env = globalThis }) {
     let leaving = false, uncertain = false, cancelled = false, timer;
     function resume() { env.clearTimeout(timer); leaving = false; onResume(); }

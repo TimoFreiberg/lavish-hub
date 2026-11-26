@@ -632,7 +632,10 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   await frame.getByRole('button', { name: 'Tasks', exact: true }).click();
   await frame.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 20000 });
   assert.equal(await page.title(), 'Session title · Lavish');
-  await frame.getByRole('button', { name: 'Review', exact: true }).click();
+  const reviewButton = frame.locator('button[data-hub-id="review"]');
+  await reviewButton.waitFor({ state: 'attached' });
+  if (await reviewButton.evaluate(el => Boolean(el.closest('details:not([open])')))) await frame.locator('.nav-older summary').click();
+  await reviewButton.click();
   await page.frameLocator('#artifact').getByText('Replacement document').waitFor({ timeout: 20000 });
   await page.waitForFunction(() => document.title === 'Session title · Lavish');
   const hubsBackLink = page.getByRole('link', { name: 'Hubs', exact: true });

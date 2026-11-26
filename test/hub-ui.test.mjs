@@ -22,6 +22,55 @@ async function assertEditButton(button, label) {
   await button.press('Enter');
 }
 
+test('hub sidebar hides and restores artifacts without acknowledging unread', { timeout: 30000 }, async t => {
+  const doc = { id: 'review', title: 'Review', source: 'review.md', version: 'v1', viewedVersion: null, collapsed: false };
+  let polls = 0;
+  const other = { id: 'other', title: 'Other', source: 'other.md', version: 'v1', viewedVersion: 'v1', collapsed: false };
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }), documents: () => { polls++; return { documents: [{ ...doc }, { ...other }] }; },
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: ({ id }) => ({ selected: id }), readDocument: () => ({ text: '# Review', hash: 'h', version: 'v1' }),
+    setDocumentCollapsed: ({ collapsed }) => { doc.collapsed = collapsed; return true; },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await browser.newPage({ viewport: { width: 500, height: 800 } });
+  const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
+  await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}</script><script type="module">${script}</script>`);
+  const hide = page.getByRole('button', { name: 'Hide Review' });
+  await hide.focus(); await hide.press('Enter');
+  const details = page.locator('.nav-older');
+  await page.waitForFunction(() => document.querySelector('.nav-older-count')?.textContent === '1');
+  assert.equal(await details.locator('summary').evaluate(el => document.activeElement === el), true);
+  await details.locator('summary').press('Enter');
+  assert.equal(await details.locator('[data-unseen]').count(), 1);
+  const layout = await page.evaluate(() => { const nav = document.querySelector('#navigation'), primary = nav.querySelector('.nav-primary'), older = nav.querySelector('.nav-older'); const p = primary.getBoundingClientRect(), o = older.getBoundingClientRect(), n = nav.getBoundingClientRect(); return { direction: getComputedStyle(nav).flexDirection, scroll: getComputedStyle(primary).overflowX, below: o.top >= p.bottom - 1, fits: o.right <= n.right + 1 && o.left >= n.left - 1 }; });
+  assert.deepEqual(layout, { direction: 'column', scroll: 'auto', below: true, fits: true });
+  const restore = page.getByRole('button', { name: 'Restore Review' });
+  await restore.focus(); await restore.press('Enter');
+  await page.waitForFunction(() => document.querySelector('[aria-label="Hide Review"]') === document.activeElement);
+  assert.equal(doc.collapsed, false); assert.equal(doc.viewedVersion, null);
+  await details.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: 'Review', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[data-hub-id="review"]')?.getAttribute('aria-current') === 'page');
+  await page.getByRole('button', { name: 'Hide Review' }).click();
+  await page.waitForFunction(() => document.querySelector('.nav-older')?.open);
+  await details.locator('summary').click();
+  assert.equal(await details.getAttribute('open'), null);
+  await page.evaluate(() => { globalThis.previousIcon = document.querySelector('[aria-label="Hide Other"] svg'); });
+  const previousPolls = polls;
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  assert.ok(polls > previousPolls);
+  assert.equal(await page.evaluate(() => globalThis.previousIcon === document.querySelector('[aria-label="Hide Other"] svg')), true);
+  assert.equal(await details.getAttribute('open'), null);
+  const otherToggle = page.getByRole('button', { name: 'Hide Other' });
+  await otherToggle.focus();
+  other.collapsed = true;
+  await page.waitForFunction(() => document.querySelector('.nav-older [aria-label="Restore Other"]'));
+  assert.equal(await details.locator('summary').evaluate(el => document.activeElement === el), true);
+  assert.equal(await details.getAttribute('open'), null);
+});
+
 test('sidebar uses workspace name until a session title is set', { timeout: 30000 }, async t => {
   let title = '';
   const transport = await createHubTransport({

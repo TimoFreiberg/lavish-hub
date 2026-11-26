@@ -542,6 +542,10 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(await siblingPage.evaluate(() => window.assetLoaded), true);
   assert.equal(await siblingPage.locator('p').evaluate(el => getComputedStyle(el).color), 'rgb(1, 2, 3)');
   assert.equal(await siblingPage.getByAltText('asset').evaluate(el => el.naturalWidth), 2);
+  async function openInsideIfOlder(page, item = page.locator('button[data-hub-id="inside"]')) {
+    await item.waitFor({ state: 'attached' });
+    if (await item.evaluate(el => Boolean(el.closest('details:not([open])')))) await page.locator('.nav-older summary').click();
+  }
   for (const fromHub of [true, false]) {
     await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
     const slowPage = await browser.newPage();
@@ -550,7 +554,9 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     const gate = new Promise(resolve => { releaseDestination = resolve; });
     const destination = fromHub ? sibling : 'hub.html';
     await slowPage.route(url => url.pathname.endsWith(`/${destination}`), async route => { requests++; await gate; await route.continue().catch(() => {}); });
-    await slowPage.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
+    const destinationLink = slowPage.locator(fromHub ? 'button[data-hub-id="inside"]' : 'a[data-hub-id="tasks"]');
+    await openInsideIfOlder(slowPage, destinationLink);
+    await destinationLink.click({ noWaitAfter: true });
     for (let i = 0; i < 200 && !requests; i++) await delay(30);
     assert.equal(requests, 1);
     await delay(2500);
@@ -568,6 +574,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     const page = await browser.newPage();
     await page.addInitScript(() => { Object.defineProperty(window, 'navigation', { value: undefined }); });
     await page.goto(`${browserBase}/${fromHub ? 'hub.html' : sibling}`);
+    if (fromHub) await openInsideIfOlder(page);
     let release, attempts = 0, polls = 0;
     const gate = new Promise(resolve => { release = resolve; });
     page.on('request', req => { if (req.postDataJSON()?.operation === 'documents') polls++; });
@@ -594,6 +601,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     const page = await browser.newPage();
     await page.addInitScript(() => { Object.defineProperty(window, 'navigation', { value: undefined }); });
     await page.goto(`${browserBase}/hub.html`);
+    await openInsideIfOlder(page);
     await page.evaluate(() => { window.blockLeave = e => { e.preventDefault(); e.returnValue = ''; }; window.addEventListener('beforeunload', window.blockLeave); });
     const dialog = page.waitForEvent('dialog');
     await page.getByRole('button', { name: 'inside.html', exact: true }).click({ noWaitAfter: true });
@@ -648,6 +656,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     const cancelled = await browser.newPage();
     if (disableNavigationApi) await cancelled.addInitScript(() => { Object.defineProperty(window, 'navigation', { value: undefined }); });
     await cancelled.goto(`${browserBase}/${fromHub ? 'hub.html' : sibling}`);
+    if (fromHub) await openInsideIfOlder(cancelled);
     let refreshesAfterCancel = 0;
     cancelled.on('request', req => { if (req.postDataJSON()?.operation === 'documents') refreshesAfterCancel++; });
     await cancelled.evaluate(() => { window.blockLeave = e => { e.preventDefault(); e.returnValue = ''; }; window.addEventListener('beforeunload', window.blockLeave); });
@@ -692,6 +701,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await request('navigate', { id: fromHub ? 'tasks' : 'inside' });
     const page = await browser.newPage();
     await page.goto(`${browserBase}/${fromHub ? 'hub.html' : sibling}`);
+    if (fromHub) await openInsideIfOlder(page);
     await page.evaluate(() => { window.blockLeave = e => { e.preventDefault(); e.returnValue = ''; }; window.addEventListener('beforeunload', window.blockLeave); });
     let dialog = page.waitForEvent('dialog');
     await page.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
@@ -713,6 +723,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal((await request('status')).selected, 'changes');
   await run(process.execPath, [cli, '--workspace', repo, '--view', 'inside'], { env });
   await siblingPage.locator('#hub-toast').getByText('Selected: inside.html').waitFor();
+  await openInsideIfOlder(siblingPage);
   await siblingPage.getByRole('button', { name: 'inside.html', exact: true }).click();
   await siblingPage.getByLabel('Frame draft').fill('Authored draft');
   let refreshes = 0;

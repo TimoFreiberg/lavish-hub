@@ -28,7 +28,7 @@ async function sidebarPage(browser, { hidden = false, identity = false } = {}) {
   await page.goto('http://lavish.test/published.html');
   const script = shippedSidebarScript(identity ? { repoName: 'repo', sessionTitle: 'Original' } : {});
   const header = identity ? '<div class="hub-identity"><div class="hub-session-title">Original</div><div class="hub-repo-name">repo</div></div>' : '';
-  const sidebar = `<div id="lavish-hub-sidebar" data-lavish-action>${header}<nav aria-label="Hub navigation"><a href="hub.html" data-hub-id="doc">Document</a></nav><div role="status" aria-live="polite"></div></div>`;
+  const sidebar = `<div id="lavish-hub-sidebar" data-lavish-action>${header}<nav aria-label="Hub navigation"><div class="nav-primary"><a href="hub.html" data-hub-id="doc">Document</a></div><details class="nav-older" hidden><summary>Older (<span class="nav-older-count">0</span>)</summary><div class="nav-older-list"></div></details></nav><div role="status" aria-live="polite"></div></div>`;
   // The stub counts status polls, parks one while __hold is set, answers with an
   // error while __fail is set, and never answers while __hang is set. The page
   // itself never leaves the document view. Like a real fetch, a parked or hung
@@ -51,11 +51,61 @@ async function updatePage(browser, controls = '<label>Draft <input id="draft" va
   await page.goto('http://lavish.test/published.html');
   const config = JSON.stringify({ url: 'http://lavish.test/hub-proxy/test', capability: 'c'.repeat(64), id: 'doc', version: 'v1', workspaceName: 'workspace', repoName: 'repo' });
   const navigation = renderSiblingNavigation({ destinations: [{ id: 'doc', title: 'Document', href: 'published.html' }], doc: { id: 'doc' }, identity: {}, repoName: 'repo', workspaceName: 'workspace', reviewedScope: '', confirmNavigation: 'globalThis.confirmDraftNavigation = async () => true;', hubLifecycle, navConfig: config });
-  const stub = `<script>${noNavigationApi ? "Object.defineProperty(window, 'navigation', { value: undefined });" : ''}globalThis.__doc={id:'doc',title:'Document',source:'doc.html',sibling:'published.html',version:'v1'};globalThis.__selected='doc';globalThis.__revision=1;globalThis.__polls=0;globalThis.fetch=async (_url,options)=>({ok:true,json:async()=>({result:JSON.parse(options.body).operation==='status'?(globalThis.__polls++,{selected:globalThis.__selected,selectionRevision:globalThis.__revision}):JSON.parse(options.body).operation==='documents'?{documents:[globalThis.__doc]}:{}})});</script>`;
+  const stub = `<script>${noNavigationApi ? "Object.defineProperty(window, 'navigation', { value: undefined });" : ''}globalThis.__doc={id:'doc',title:'Document',source:'doc.html',sibling:'published.html',version:'v1'};globalThis.__selected='doc';globalThis.__revision=1;globalThis.__polls=0;globalThis.fetch=async (_url,options)=>({ok:true,json:async()=>({result:JSON.parse(options.body).operation==='status'?(globalThis.__polls++,{selected:globalThis.__selected,selectionRevision:globalThis.__revision}):JSON.parse(options.body).operation==='documents'?{documents:[globalThis.__doc,...(globalThis.__extra||[])]}:{}})});</script>`;
   await page.setContent(`<!doctype html><html lang="en" data-theme="orangebox"><head><title>Document</title><style>${themeCss}</style></head><body>${stub}${navigation}<main>${controls}</main></body></html>`);
   return page;
 }
 const advance = (page, update = {}) => page.evaluate(update => { Object.assign(globalThis.__doc, { version: 'v2', ...update }); document.dispatchEvent(new Event('visibilitychange')); }, update);
+
+test('sibling sidebar renders Older and restores without losing authored input', { timeout: 30000 }, async () => {
+  const page = await browser.newPage();
+  await page.route('http://lavish.test/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>blank</title>' }));
+  await page.goto('http://lavish.test/published.html');
+  const doc = { id: 'doc', title: 'Document', href: 'published.html', source: 'doc.html', sibling: 'published.html', version: 'v1', viewedVersion: 'v1', collapsed: true };
+  const config = JSON.stringify({ url: 'http://lavish.test/action', capability: 'c', id: 'doc', version: 'v1', repoName: 'repo' });
+  const navigation = renderSiblingNavigation({ destinations: [doc], doc, identity: {}, repoName: 'repo', workspaceName: 'workspace', reviewedScope: '', confirmNavigation: '', hubLifecycle, navConfig: config });
+  const stub = `<script>globalThis.__doc=${JSON.stringify(doc)};globalThis.fetch=async (_url,options)=>{const body=JSON.parse(options.body);if(body.operation==='setDocumentCollapsed'){if(globalThis.__failCollapse){__failCollapse=false;return {ok:false,status:500,json:async()=>({error:'Try again'})}} __doc.collapsed=body.collapsed;}return {ok:true,json:async()=>({result:body.operation==='documents'?{documents:[{...__doc}]}:body.operation==='status'?{selected:'doc'}:true})}}</script>`;
+  await page.setContent(`<!doctype html><html lang="en" data-theme="orangebox"><head><title>Document</title><style>${themeCss}</style></head><body>${stub}${navigation}<main><label>Draft <input id="draft"></label></main></body></html>`);
+  assert.equal(await page.locator('.nav-older').getAttribute('open'), '');
+  assert.equal(await page.getByRole('button', { name: 'Restore Document' }).isVisible(), true);
+  const result = await scanDocument(page), geometry = await page.evaluate(inspectGeometry);
+  assert.deepEqual(result.accessibility, []); assert.equal(geometry.horizontalOverflow, false);
+  assert.deepEqual(geometry.clippedText, []); assert.deepEqual(geometry.narrowText, []); assert.deepEqual(geometry.controls, []);
+  await page.locator('#draft').fill('unsaved');
+  await page.evaluate(() => { globalThis.__failCollapse = true; });
+  await page.getByRole('button', { name: 'Restore Document' }).click();
+  const feedback = page.locator('#lavish-hub-sidebar [role=status]');
+  await page.waitForFunction(() => document.querySelector('#lavish-hub-sidebar [role=status]')?.hasAttribute('data-error'));
+  assert.match(await feedback.textContent(), /Try again/);
+  await page.getByRole('button', { name: 'Restore Document' }).click();
+  assert.equal(await feedback.getAttribute('data-error'), null);
+  assert.equal(await feedback.textContent(), '');
+  assert.equal(await page.locator('#draft').inputValue(), 'unsaved');
+  assert.equal(await page.locator('.nav-older').isVisible(), false);
+  assert.equal(await page.locator('.nav-older').getAttribute('open'), null);
+  await page.getByRole('button', { name: 'Hide Document' }).click();
+  assert.equal(await page.locator('.nav-older').getAttribute('open'), '');
+  assert.equal(await page.locator('#draft').inputValue(), 'unsaved');
+});
+
+test('sibling polling opens Older when the active document moves there', { timeout: 30000 }, async () => {
+  const page = await updatePage(browser);
+  await page.waitForFunction(() => globalThis.__polls > 0 && document.querySelector('[data-hub-id="doc"]')?.closest('.nav-primary'));
+  assert.equal(await page.locator('.nav-older').getAttribute('open'), null);
+  const polls = await page.evaluate(() => globalThis.__polls);
+  await page.evaluate(() => { globalThis.__doc.collapsed = true; document.dispatchEvent(new Event('visibilitychange')); });
+  await page.waitForFunction(previous => globalThis.__polls > previous && document.querySelector('.nav-older[open] [data-hub-id="doc"]'), polls);
+  const details = page.locator('.nav-older');
+  assert.equal(await details.getAttribute('open'), '');
+  await details.locator('summary').click();
+  await page.evaluate(() => { globalThis.__extra = [{ id: 'other', title: 'Other', source: 'other.md', version: 'v1', viewedVersion: 'v1', collapsed: false }]; document.dispatchEvent(new Event('visibilitychange')); });
+  const toggle = page.getByRole('button', { name: 'Hide Other' });
+  await toggle.waitFor(); await toggle.focus();
+  await page.evaluate(() => { globalThis.__extra[0].collapsed = true; document.dispatchEvent(new Event('visibilitychange')); });
+  await page.waitForFunction(() => document.querySelector('.nav-older [aria-label="Restore Other"]'));
+  assert.equal(await details.locator('summary').evaluate(el => document.activeElement === el), true);
+  assert.equal(await details.getAttribute('open'), null);
+});
 
 test('published HTML deep links validate views and guard authored edits', { timeout: 30000 }, async () => {
   const page = await updatePage(browser, '<label>Draft <input id="draft" value="initial"></label><a id="unknown" href="?view=missing">unknown</a><a id="target" href="?view=changes&file=a.txt&line=3">target</a><a id="external" href="https://example.com/">external</a>');
@@ -215,7 +265,7 @@ test('published HTML sidebar defers reload while navigation is in flight or fail
 test('published HTML queues URL changes during departure and replays them if it stays', { timeout: 30000 }, async () => {
   const page = await browser.newPage();
   const script = shippedSidebarScript();
-  const content = `<base href="http://lavish.test/"><div id="lavish-hub-sidebar"><nav><a href="hub.html" data-hub-id="tasks">Tasks</a></nav><div role="status"></div></div><div id="lavish-hub-toast" hidden></div><script>globalThis.updates=[]; globalThis.navigations=[]; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'doc', hash: '#back' } })); globalThis.leavingEventDelivered=true; }}; globalThis.fetch=async (_url, options) => { const {operation,id}=JSON.parse(options.body); if(operation==='navigate') navigations.push(id); return {ok:true,json:async()=>({result:operation==='status'?{selected:'doc'}:operation==='documents'?{documents:[]}: {}})}; };</script><script>${hubLifecycle}</script><script>${script}</script>`;
+  const content = `<base href="http://lavish.test/"><div id="lavish-hub-sidebar"><nav><div class="nav-primary"><a href="hub.html" data-hub-id="tasks">Tasks</a></div><details class="nav-older" hidden><summary>Older (<span class="nav-older-count">0</span>)</summary><div class="nav-older-list"></div></details></nav><div role="status"></div></div><div id="lavish-hub-toast" hidden></div><script>globalThis.updates=[]; globalThis.navigations=[]; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'doc', hash: '#back' } })); globalThis.leavingEventDelivered=true; }}; globalThis.fetch=async (_url, options) => { const {operation,id}=JSON.parse(options.body); if(operation==='navigate') navigations.push(id); return {ok:true,json:async()=>({result:operation==='status'?{selected:'doc'}:operation==='documents'?{documents:[]}: {}})}; };</script><script>${hubLifecycle}</script><script>${script}</script>`;
   await page.route('http://lavish.test/**', route => route.fulfill({ contentType: 'text/html', body: route.request().url().endsWith('/published.html') ? content : '<iframe id="published-frame" src="/published.html"></iframe>' }));
   await page.goto('http://lavish.test/');
   const frame = page.frameLocator('#published-frame');

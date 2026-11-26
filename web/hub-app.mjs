@@ -147,7 +147,7 @@ document.addEventListener('click', event => {
   const hash = link.getAttribute('href'); event.preventDefault(); pendingHash = hash; currentViewHash = hash;
   replaceFrameHash(hash); syncUrl({ view: selected, hash, mode: 'push' }); scrollToFragment(hash);
 });
-const { formatTabTitle, applyNavBadge, createLeaveGuard } = globalThis.lavishHubLifecycle;
+const { formatTabTitle, applyNavBadge, applyCollapseToggle, createLeaveGuard, createOlderDisclosureController } = globalThis.lavishHubLifecycle;
 function updateTabTitle() {
   const title = formatTabTitle('', sessionTitle || repoName);
   document.title = title;
@@ -178,7 +178,7 @@ function editButton(label, action) {
 }
 async function action(operation, body = {}) {
   let response;
-  try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument', 'diffFiles', 'navigate', 'acknowledge'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
+  try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument', 'diffFiles', 'navigate', 'acknowledge', 'setDocumentCollapsed'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
   catch { throw new Error('Hub actions are unreachable. Your edits remain on this page. Local actions require the running hub owner.'); }
   const data = await response.json();
   leaveGuard.handleUnauthorized(response, data);
@@ -193,32 +193,70 @@ function status(text) {
   const connection = (navigationError || notice) && ['Connected', 'Connecting…'].includes(connectionStatus) ? '' : connectionStatus;
   document.querySelector('#connection').textContent = [navigationError, connection, notice].filter(Boolean).join(' · ');
 }
+const olderDisclosure = createOlderDisclosureController();
+let collapseRevision = 0;
+async function toggleDocumentCollapsed(id, toggle) {
+  const doc = documents.find(item => item.id === id);
+  if (!doc) return;
+  const collapsed = !doc.collapsed, version = doc.version;
+  toggle.disabled = true; collapseRevision++;
+  try {
+    await action('setDocumentCollapsed', { id, version, collapsed });
+    const current = documents.find(item => item.id === id && item.version === version);
+    if (current) current.collapsed = collapsed;
+    collapseRevision++; renderNav(); toggle.disabled = false;
+    if (toggle.isConnected && !toggle.closest('details:not([open])')) toggle.focus();
+    else document.querySelector('#navigation .nav-older summary')?.focus();
+  } catch (error) { status(error.message); }
+  finally { toggle.disabled = false; }
+}
 function renderNav() {
   const nav = document.querySelector('#navigation');
   const focused = nav.contains(document.activeElement) ? document.activeElement : null;
+  let primary = nav.querySelector('.nav-primary'), details = nav.querySelector('.nav-older');
+  if (!primary) { primary = el('div', null, { class: 'nav-primary' }); nav.append(primary); }
+  if (!details) {
+    details = el('details', null, { class: 'nav-older' });
+    const summary = el('summary'); summary.append('Older (', el('span', '0', { class: 'nav-older-count' }), ')');
+    details.append(summary, el('div', null, { class: 'nav-older-list' })); nav.append(details);
+    details.addEventListener('toggle', () => olderDisclosure.onUserToggle(details));
+  }
+  const older = details.querySelector('.nav-older-list');
   const existing = new Map([...nav.querySelectorAll('button[data-hub-id]')].map(b => [b.dataset.hubId, b]));
-  const items = [
-    ...Object.entries(labels).map(([id, label]) => ({ id, label, unseen: false })),
-    ...documents.map(doc => ({ id: doc.id, label: doc.title, unseen: doc.viewedVersion !== doc.version })),
-  ];
-  let next = nav.firstElementChild;
+  const items = [...Object.entries(labels).map(([id, label]) => ({ id, label })), ...documents.map(doc => ({ ...doc, label: doc.title, unseen: doc.viewedVersion !== doc.version }))];
+  const next = new Map([[primary, primary.firstElementChild], [older, older.firstElementChild]]);
   for (const item of items) {
     let b = existing.get(item.id);
-    if (!b) {
-      b = button('', () => select(item.id));
-      b.dataset.hubId = item.id;
-    } else existing.delete(item.id);
+    if (!b) { b = button('', () => select(item.id)); b.dataset.hubId = item.id; }
+    else existing.delete(item.id);
     let label = b.querySelector('.nav-label');
     if (!label) { label = el('span', item.label, { class: 'nav-label' }); b.replaceChildren(label); }
     else if (label.textContent !== item.label) label.textContent = item.label;
     applyNavBadge(b, item.unseen ? 'new' : '', 'hub-nav-desc');
-    if (item.id === selected) b.setAttribute('aria-current', 'page');
-    else b.removeAttribute('aria-current');
-    if (b !== next) nav.insertBefore(b, next);
-    next = b.nextElementSibling;
+    if (item.id === selected) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    let node = b;
+    if (!Object.hasOwn(labels, item.id)) {
+      let row = b.parentElement?.classList.contains('nav-row') ? b.parentElement : null;
+      if (!row) { row = el('div', null, { class: 'nav-row' }); row.append(b); const toggle = button('', () => toggleDocumentCollapsed(item.id, toggle)); toggle.className = 'nav-collapse-toggle'; row.append(toggle); }
+      const toggle = row.querySelector('.nav-collapse-toggle');
+      applyCollapseToggle(toggle, item.label, item.collapsed); node = row;
+    }
+    const target = item.collapsed ? older : primary;
+    const previous = node.parentElement;
+    if (previous !== target && next.get(previous) === node) next.set(previous, node.nextElementSibling);
+    const before = next.get(target);
+    if (node !== before) target.insertBefore(node, before);
+    next.set(target, node.nextElementSibling);
   }
-  for (const b of existing.values()) b.remove();
-  if (focused?.isConnected && document.activeElement !== focused) focused.focus();
+  for (const b of existing.values()) (b.closest('.nav-row') || b).remove();
+  const count = documents.filter(doc => doc.collapsed).length;
+  details.querySelector('.nav-older-count').textContent = String(count);
+  olderDisclosure.sync(details, { count, activeOlderId: documents.find(doc => doc.id === selected && doc.collapsed)?.id || null });
+  if (focused?.isConnected) {
+    const closed = focused.closest('details:not([open])');
+    if (closed) closed.querySelector('summary')?.focus();
+    else if (document.activeElement !== focused) focused.focus();
+  }
 }
 let navigationRevision = 0, navigationPending = false, editRevision = 0;
 let lastSelectionRevision = null;
@@ -398,7 +436,7 @@ async function refresh(force = false) {
   busy = true;
   // This run honours the owed follow-up; anything asked for while it runs is queued again.
   refreshRequested = false;
-  const navigationAtStart = navigationRevision;
+  const navigationAtStart = navigationRevision, collapseAtStart = collapseRevision;
   let pauseRevision;
   try {
     const [state, list] = await Promise.all([action('status'), action('documents')]);
@@ -416,8 +454,13 @@ async function refresh(force = false) {
       document.querySelector('.hub-repo-name').textContent = identityName();
       updateTabTitle();
     }
-    let oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSelectedDoc = JSON.stringify(documents.find(item => item.id === selected) || null);
+    const withoutCollapse = doc => { if (!doc) return null; const { collapsed, ...rest } = doc; return rest; };
+    let oldSelected = selected, oldDocuments = JSON.stringify(documents), oldSelectedDoc = JSON.stringify(withoutCollapse(documents.find(item => item.id === selected)));
     const oldSnapshot = snapshot, snapshotWasLoading = snapshotLoading();
+    if (collapseAtStart !== collapseRevision) {
+      for (const doc of list.documents) { const local = documents.find(item => item.id === doc.id && item.version === doc.version); if (local) doc.collapsed = local.collapsed; }
+      queueRefresh();
+    }
     documents = list.documents;
     if (!rendered && queuedUrlChange) {
       initialView = queuedUrlChange.view; pendingHash = queuedUrlChange.hash; currentViewHash = queuedUrlChange.hash;
@@ -519,7 +562,7 @@ async function refresh(force = false) {
     }
     if (!rendered || oldSelected !== selected || oldDocuments !== JSON.stringify(documents)) renderNav();
     if (displayedDoc && displayedDoc.id === selected) acknowledgeDisplayed(displayedDoc.id, displayedDoc.version);
-    const currentSelectedDoc = JSON.stringify(documents.find(item => item.id === selected) || null);
+    const currentSelectedDoc = JSON.stringify(withoutCollapse(documents.find(item => item.id === selected)));
     // The loading flag is part of the comparison: a snapshot request that fails
     // before any snapshot exists must still replace the loading notice, and one
     // that settles back onto unchanged content must drop the refreshing notice. A

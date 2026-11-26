@@ -5,7 +5,7 @@ const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<
 
 function siblingSidebarClient(c) {
   c.url = new URL(c.url, location.href).href;
-  const { formatTabTitle, applyNavBadge, createLeaveGuard } = globalThis.lavishHubLifecycle;
+  const { formatTabTitle, applyNavBadge, applyCollapseToggle, createLeaveGuard, createOlderDisclosureController } = globalThis.lavishHubLifecycle;
   const setTabTitle = () => {
     const title = formatTabTitle('', c.sessionTitle || c.repoName || c.workspaceName || '');
     document.title = title;
@@ -49,6 +49,16 @@ function siblingSidebarClient(c) {
   let pendingUpdate = null, flashedVersion = '', flashTimer, lavishRetryTimer, lastLavishInputAt = 0;
   const touched = new Set(), initialEditable = new WeakMap();
   const nav = document.querySelector('#lavish-hub-sidebar nav');
+  const primary = nav.querySelector('.nav-primary'), details = nav.querySelector('.nav-older'), older = details.querySelector('.nav-older-list');
+  const disclosure = createOlderDisclosureController({ initialOpen: details.open });
+  let collapseRevision = 0;
+  function syncOlder() {
+    const count = older.children.length;
+    details.querySelector('.nav-older-count').textContent = String(count);
+    disclosure.sync(details, { count, activeOlderId: older.querySelector('[data-current]') ? c.id : null });
+  }
+  details.addEventListener('toggle', () => disclosure.onUserToggle(details));
+  syncOlder();
   const feedback = document.querySelector('#lavish-hub-sidebar [role=status]');
   const toast = document.querySelector('#lavish-hub-toast');
   function hideToast() { clearTimeout(toastTimer); toast.hidden = true; }
@@ -217,7 +227,26 @@ function siblingSidebarClient(c) {
     const destination = sibling ? link.href : new URL('hub.html?' + params, location.href).href;
     navigateTo(target.view, destination, link?.querySelector('.nav-label')?.textContent || target.view);
   });
-  nav.addEventListener('click', e => {
+  nav.addEventListener('click', async e => {
+    const toggle = e.target.closest('button.nav-collapse-toggle');
+    if (toggle && nav.contains(toggle)) {
+      e.preventDefault();
+      const { hubId: id, hubVersion: version, hubCollapsed } = toggle.dataset, collapsed = hubCollapsed !== 'true';
+      toggle.disabled = true; collapseRevision++;
+      try {
+        await action('setDocumentCollapsed', { id, version, collapsed }, AbortSignal.timeout(10000));
+        toggle.dataset.hubCollapsed = String(collapsed);
+        const row = toggle.closest('.nav-row'), title = row.querySelector('.nav-label').textContent;
+        applyCollapseToggle(toggle, title, collapsed);
+        feedback.removeAttribute('data-error'); feedback.textContent = '';
+        (collapsed ? older : primary).append(row); syncOlder(); collapseRevision++; toggle.disabled = false;
+        if (!toggle.closest('details:not([open])')) toggle.focus(); else details.querySelector('summary').focus();
+        catchup = true;
+        if (!polling && !paused) { clearTimeout(timer); timer = setTimeout(refresh, 0); }
+      } catch (error) { feedback.dataset.error = ''; feedback.textContent = error.message; }
+      finally { toggle.disabled = false; }
+      return;
+    }
     const reload = e.target.closest('button.nav-reload');
     if (reload && nav.contains(reload)) { e.preventDefault(); if (!navigating && !leaveGuard.isLeaving() && pendingUpdate) applyUpdate(pendingUpdate); return; }
     const a = e.target.closest('a[data-hub-id]');
@@ -239,7 +268,7 @@ function siblingSidebarClient(c) {
   async function refresh() {
     if (paused || polling || (warmed && document.visibilityState === 'hidden')) return;
     warmed = true; polling = true;
-    const generation = navGeneration;
+    const generation = navGeneration, collapseAtStart = collapseRevision;
     readController = new AbortController(); readTimer = setTimeout(() => readController?.abort(), 10000);
     try {
       const [state, list] = await Promise.all([action('status', {}, readController.signal), action('documents', {}, readController.signal)]);
@@ -262,16 +291,24 @@ function siblingSidebarClient(c) {
         pendingUpdate = { version: current.version, dest: dest.href, samePage: dest.pathname === location.pathname };
         if (maybeApplyPendingUpdate(generation)) return;
       } else pendingUpdate = null;
+      if (collapseAtStart !== collapseRevision) {
+        for (const doc of list.documents) {
+          const toggle = [...nav.querySelectorAll('.nav-collapse-toggle')].find(item => item.dataset.hubId === doc.id && item.dataset.hubVersion === doc.version);
+          if (toggle) doc.collapsed = toggle.dataset.hubCollapsed === 'true';
+        }
+        catchup = true;
+      }
       const items = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, unseen: false })), ...list.documents.map(d => ({ ...d, unseen: d.id === c.id ? d.version !== c.version : d.viewedVersion !== d.version }))];
       const focused = nav.contains(document.activeElement) ? document.activeElement : null;
       const existing = new Map([...nav.querySelectorAll('a[data-hub-id]')].map(a => [a.dataset.hubId, a]));
-      let next = nav.firstElementChild;
+      const next = new Map([[primary, primary.firstElementChild], [older, older.firstElementChild]]);
       for (const item of items) {
         const a = existing.get(item.id) || document.createElement('a'); existing.delete(item.id); a.dataset.hubId = item.id;
         let row = a.parentElement?.classList.contains('nav-row') ? a.parentElement : null;
         if (!row) {
           row = document.createElement('div'); row.className = 'nav-row';
-          if (a.parentElement === nav) { nav.insertBefore(row, a); if (next === a) next = row; }
+          const parent = a.parentElement;
+          if (parent === primary || parent === older) { parent.insertBefore(row, a); if (next.get(parent) === a) next.set(parent, row); }
           row.append(a);
         }
         row.toggleAttribute('data-current', item.id === c.id);
@@ -289,18 +326,32 @@ function siblingSidebarClient(c) {
             button = document.createElement('button'); button.type = 'button'; button.className = 'nav-reload';
             button.setAttribute('aria-label', 'Reload updated document'); button.title = 'Document updated — reload';
             button.innerHTML = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.5-3"/></svg>';
-            row.append(button);
+            row.insertBefore(button, row.querySelector('.nav-collapse-toggle'));
           }
           if (flashedVersion !== pendingUpdate.version) {
             flashedVersion = pendingUpdate.version; row.classList.remove('nav-updated-flash'); void row.offsetWidth; row.classList.add('nav-updated-flash');
             clearTimeout(flashTimer); flashTimer = setTimeout(() => row.classList.remove('nav-updated-flash'), 1200);
           }
         } else button?.remove();
-        if (row !== next) nav.insertBefore(row, next);
-        next = row.nextElementSibling;
+        if (item.version) {
+          let toggle = row.querySelector('.nav-collapse-toggle');
+          if (!toggle) { toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'nav-collapse-toggle'; row.append(toggle); }
+          toggle.dataset.hubId = item.id; toggle.dataset.hubVersion = item.version; toggle.dataset.hubCollapsed = String(Boolean(item.collapsed));
+          applyCollapseToggle(toggle, item.title, Boolean(item.collapsed));
+        }
+        const target = item.collapsed ? older : primary, previous = row.parentElement;
+        if (previous !== target && next.get(previous) === row) next.set(previous, row.nextElementSibling);
+        const before = next.get(target);
+        if (row !== before) target.insertBefore(row, before);
+        next.set(target, row.nextElementSibling);
       }
       for (const a of existing.values()) { const row = a.parentElement?.classList.contains('nav-row') ? a.parentElement : a; row.remove(); }
-      if (focused?.isConnected && document.activeElement !== focused) focused.focus();
+      syncOlder();
+      if (focused?.isConnected) {
+        const closed = focused.closest('details:not([open])');
+        if (closed) closed.querySelector('summary')?.focus();
+        else if (document.activeElement !== focused) focused.focus();
+      }
     } catch {} finally {
       clearTimeout(readTimer); readController = undefined; polling = false;
       const immediate = catchup; catchup = false;
@@ -320,9 +371,13 @@ export function siblingSidebarScript(navConfigJson) {
 
 export function renderSiblingNavigation({ destinations, doc, sessionTitle = '', identity, repoName, workspaceName, reviewedScope, confirmNavigation, hubLifecycle, navConfig }) {
   if (!hubLifecycle) throw new Error('hubLifecycle is required');
-  const items = destinations.map(item => {
-    return `<div class="nav-row"${item.id === doc.id ? ' data-current' : ''}><a href="${escapeHtml(item.href)}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}${item.unseen ? ' title="New publication" aria-describedby="lavish-hub-desc-new" data-unseen="true"' : ''}><span class="nav-label">${escapeHtml(item.title)}</span>${item.unseen ? '<span class="nav-badge nav-badge-new" aria-hidden="true">New</span>' : ''}</a></div>`;
-  }).join('');
+  const renderItem = item => {
+    const label = `${item.collapsed ? 'Restore' : 'Hide'} ${item.title}`;
+    const toggle = item.version ? `<button type="button" class="nav-collapse-toggle" data-hub-id="${escapeHtml(item.id)}" data-hub-version="${escapeHtml(item.version)}" data-hub-collapsed="${Boolean(item.collapsed)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="${item.collapsed ? 'M4 14v5h16v-5M12 16V4m-4 4 4-4 4 4' : 'M4 14v5h16v-5M12 4v12m-4-4 4 4 4-4'}"/></svg></button>` : '';
+    return `<div class="nav-row"${item.id === doc.id ? ' data-current' : ''}><a href="${escapeHtml(item.href)}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}${item.unseen ? ' title="New publication" aria-describedby="lavish-hub-desc-new" data-unseen="true"' : ''}><span class="nav-label">${escapeHtml(item.title)}</span>${item.unseen ? '<span class="nav-badge nav-badge-new" aria-hidden="true">New</span>' : ''}</a>${toggle}</div>`;
+  };
+  const older = destinations.filter(item => item.collapsed);
+  const items = `<div class="nav-primary">${destinations.filter(item => !item.collapsed).map(renderItem).join('')}</div><details class="nav-older"${older.length ? '' : ' hidden'}${older.some(item => item.id === doc.id) ? ' open' : ''}><summary>Older (<span class="nav-older-count">${older.length}</span>)</summary><div class="nav-older-list">${older.map(renderItem).join('')}</div></details>`;
   return `<style>
 html { padding-left: 200px; box-sizing: border-box; }
 #lavish-hub-sidebar { position: fixed; inset: 0 auto 0 0; width: 200px; box-sizing: border-box; z-index: 2147483647; overflow: auto; padding: 16px 10px; background: var(--ob-surface); color: var(--ob-fg); border-right: 1px solid var(--ob-border); font: 14px system-ui, sans-serif; }
@@ -330,7 +385,13 @@ html { padding-left: 200px; box-sizing: border-box; }
 #lavish-hub-sidebar .hub-session-title { font-weight: 600; color: var(--ob-fg); }
 #lavish-hub-sidebar .hub-session-title[hidden] { display: none; }
 #lavish-hub-sidebar .hub-repo-name { color: var(--ob-muted); font-size: 12px; }
-#lavish-hub-sidebar nav { display: flex; flex-direction: column; gap: 4px; }
+#lavish-hub-sidebar nav, #lavish-hub-sidebar .nav-primary, #lavish-hub-sidebar .nav-older-list { display: flex; flex-direction: column; gap: 4px; }
+#lavish-hub-sidebar details.nav-older { margin: 0; padding: 0; border: 0; background: transparent; color: var(--ob-fg); font: inherit; }
+#lavish-hub-sidebar details.nav-older[hidden], #lavish-hub-sidebar details.nav-older:not([open]) .nav-older-list { display: none; }
+#lavish-hub-sidebar .nav-older summary { margin: 0; padding: 8px 10px; border: 0; background: transparent; color: var(--ob-muted); font: inherit; cursor: pointer; }
+#lavish-hub-sidebar .nav-collapse-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin: 0 4px 0 0; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ob-muted); font: inherit; cursor: pointer; }
+#lavish-hub-sidebar .nav-collapse-toggle:hover, #lavish-hub-sidebar .nav-collapse-toggle:focus-visible { color: var(--ob-fg); outline: 2px solid var(--ob-cyan); }
+#lavish-hub-sidebar .nav-collapse-toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #lavish-hub-sidebar .nav-row { display: flex; align-items: center; gap: 4px; border-radius: 5px; }
 #lavish-hub-sidebar .nav-row[data-current] { background: var(--ob-raised); }
 #lavish-hub-sidebar nav a { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 10px; border-radius: 5px; color: var(--ob-fg); text-decoration: none; overflow-wrap: anywhere; }

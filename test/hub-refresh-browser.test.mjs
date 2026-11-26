@@ -68,7 +68,7 @@ test('URL changes are ignored after cross-page navigation is confirmed', { timeo
   await page.goto('http://app.test/');
   const app = page.frameLocator('#app-frame');
   await app.getByText('No commits in this range.').waitFor();
-  await app.getByRole('button', { name: 'Published' }).click();
+  await app.getByRole('button', { name: 'Published', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#app-frame').contentWindow.leavingEventDelivered === true);
   assert.deepEqual(await app.locator('#app').evaluate(() => globalThis.navigations), ['published']);
   assert.deepEqual(await app.locator('#app').evaluate(() => globalThis.updates.at(-1)), { view: 'published', hash: '', mode: 'push' });
@@ -122,7 +122,7 @@ test('cross-page navigation pauses pending refresh and resumes after failure', {
   await page.getByText('No commits in this range.').waitFor();
   await page.getByRole('button', { name: 'Refresh' }).click();
   await assertEventually(() => assert.equal(statusCalls, 2));
-  await page.getByRole('button', { name: 'Published' }).click();
+  await page.getByRole('button', { name: 'Published', exact: true }).click();
   await assertEventually(() => assert.equal(navigations, 1));
   releaseStatus();
   await page.waitForTimeout(2200);
@@ -862,7 +862,7 @@ test('a snapshot that settles during a leaving pause renders when the navigation
   await page.getByRole('button', { name: 'Refresh' }).click();
   await assertEventually(() => assert.equal(snapshots, 2));
   // Leaving for the published page pauses polling while that request is still in flight.
-  await page.getByRole('button', { name: 'Published' }).click();
+  await page.getByRole('button', { name: 'Published', exact: true }).click();
   await assertEventually(() => assert.equal(navigations, 1));
   releaseSnapshot();
   // The paused page renders nothing, so the older snapshot stays on screen.
