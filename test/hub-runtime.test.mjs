@@ -36,8 +36,16 @@ async function sessionFixture(t, repoName = 'repo') {
   await writeFile(path.join(repo, 'second.txt'), 'second\n');
   execFileSync('jj', ['workspace', 'add', child], { cwd: repo, stdio: 'ignore' });
   const displays = new Map(), app = express();
+  const registrationControl = { hold: null };
   const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events: new EventEmitter(), jsonParser: express.json() });
-  app.post('/api/hub-proxy/register', proxy.control, (req, res, next) => { displays.set(req.body.key, req.body.display); next(); }, proxy.register);
+  app.post('/api/hub-proxy/register', proxy.control, async (req, res, next) => {
+    if (registrationControl.hold) {
+      const hold = registrationControl.hold; registrationControl.hold = null;
+      hold.entered(); await hold.wait;
+    }
+    displays.set(req.body.key, req.body.display); next();
+  }, proxy.register);
+  app.get('/api/hubs', proxy.dashboard);
   app.post('/api/hub-proxy/unregister', proxy.control, proxy.unregister);
   app.use('/hub-proxy', (req, res, next) => { if (req.headers.origin) req.headers.origin = 'null'; next(); }, proxy.handle);
   app.use((req, res) => {
@@ -71,7 +79,8 @@ async function sessionFixture(t, repoName = 'repo') {
     const stop = async () => { const done = new Promise(resolve => owner.once('exit', resolve)); await request('stop'); await done; };
     return { identity, request, stop, owner, connection };
   };
-  return { dir, repo, child, state, env, run, start, displays };
+  const listHubs = async () => (await (await fetch(`http://127.0.0.1:${server.address().port}/api/hubs`)).json()).hubs;
+  return { dir, repo, child, state, env, run, start, displays, registrationControl, listHubs };
 }
 
 test('publish derives IDs and scope, and accepts explicit PR metadata', async t => {
@@ -104,6 +113,36 @@ test('publish derives IDs and scope, and accepts explicit PR metadata', async t 
   await hub.stop();
 });
 
+test('publish and acknowledge update dashboard unread immediately', async t => {
+  const f = await sessionFixture(t), hub = await f.start(f.repo, 'unread', 'Unread', { rev: '@' });
+  const source = path.join(f.dir, 'unread.md');
+  await writeFile(source, '# Unread');
+  const doc = await hub.request('publish', { id: 'unread', title: ' \tUnread\ntitle\u007f ', file: source });
+  assert.deepEqual((await f.listHubs())[0].unread, [{ id: 'unread', title: 'Unread title' }]);
+  assert.equal(await hub.request('acknowledge', { id: doc.id, version: doc.version }), true);
+  assert.deepEqual((await f.listHubs())[0].unread, []);
+  await hub.stop();
+});
+
+test('serialized registration prevents stale heartbeat overwriting unread state', async t => {
+  const f = await sessionFixture(t), hub = await f.start(f.repo, 'serial', 'Serial', { rev: '@' });
+  const source = path.join(f.dir, 'serial.md');
+  await writeFile(source, '# Serial');
+  let release, entered;
+  const wait = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  f.registrationControl.hold = { wait, entered };
+  await started;
+  const publishing = hub.request('publish', { id: 'serial', file: source });
+  await delay(100);
+  release();
+  const doc = await publishing;
+  assert.deepEqual((await f.listHubs())[0].unread, [{ id: 'serial', title: 'serial.md' }]);
+  assert.equal(await hub.request('acknowledge', { id: doc.id, version: doc.version }), true);
+  assert.deepEqual((await f.listHubs())[0].unread, []);
+  await hub.stop();
+});
+
 test('provider titles refresh without persistence and explicit titles take precedence', async t => {
   const f = await sessionFixture(t);
   const records = path.join(f.env.XDG_DATA_HOME, 'polytoken', 'sessions-v1', 'provider');
@@ -125,35 +164,26 @@ test('provider titles refresh without persistence and explicit titles take prece
   const restarted = await f.start(f.child, 'provider', undefined, { rev: '@' });
   assert.match(await readFile(path.join(restarted.identity.directory, sibling), 'utf8'), /hub-session-title">Provider first<\/div>/);
   await setTitle('Provider updated');
-  let status;
+  let status, display;
   for (let i = 0; i < 100; i++) {
     status = await restarted.request('status');
-    if (status.title === 'Provider updated' && [...f.displays.values()].some(display => display.title === 'Provider updated')) break;
+    display = [...f.displays.values()][0];
+    if (status.title === 'Provider updated' && display?.label === 'Provider updated') break;
     await delay(50);
   }
   assert.equal(status.title, 'Provider updated');
-  const display = [...f.displays.values()].find(item => item.title === 'Provider updated');
   assert.ok(display);
   assert.equal(display.repo, 'repo');
   assert.equal(display.workspace, null);
-  assert.equal(display.label, 'Provider updated · repo');
+  assert.equal(display.label, 'Provider updated');
   assert.equal(JSON.parse(await readFile(targetFile, 'utf8')).title, undefined);
   await restarted.request('target', { title: 'Explicit' });
   await setTitle('Ignored');
   await delay(200);
   assert.equal((await restarted.request('status')).title, 'Explicit');
   assert.equal(JSON.parse(await readFile(targetFile, 'utf8')).title, 'Explicit');
-  assert.ok([...f.displays.values()].some(item => item.title === 'Explicit'));
+  assert.ok([...f.displays.values()].some(item => item.label === 'Explicit'));
   await restarted.stop();
-  const longTitle = 'x'.repeat(240), longRepo = 'repository-name-that-exceeds-the-label-limit';
-  const g = await sessionFixture(t, longRepo);
-  const long = await g.start(g.repo, 'long-title', longTitle, { rev: '@' });
-  assert.equal((await long.request('status')).title, longTitle);
-  const longDisplay = [...g.displays.values()].find(item => item.title === longTitle);
-  assert.ok(longDisplay);
-  assert.equal(Array.from(longDisplay.label).length, 255);
-  assert.equal(longDisplay.label, Array.from(`${longTitle} · ${longRepo}`).slice(0, 255).join(''));
-  await long.stop();
 });
 
 test('concurrent repo-scoped sessions run independently against the same primary repo', async t => {
@@ -162,7 +192,7 @@ test('concurrent repo-scoped sessions run independently against the same primary
   assert.notEqual(a.identity.directory, b.identity.directory);
   assert.equal((await a.request('status')).session, 'one');
   assert.equal((await b.request('status')).session, 'two');
-  assert.deepEqual(new Set([...f.displays.values()].map(display => display.label)), new Set(['First session · repo', 'Second session · repo']));
+  assert.deepEqual(new Set([...f.displays.values()].map(display => display.label)), new Set(['First session', 'Second session']));
   const source = path.join(f.dir, 'review.html');
   await writeFile(source, '<p>Review</p>');
   const published = await a.request('publish', { id: 'review', file: source });
@@ -192,7 +222,7 @@ test('session startup rejects a replacement repository without snapshotting it',
 test('working-copy target preparation and startup reject a replaced child checkout', async t => {
   const f = await sessionFixture(t), original = await f.start(f.child);
   const display = [...f.displays.values()][0];
-  assert.deepEqual({ repo: display.repo, workspace: display.workspace, label: display.label }, { repo: 'repo', workspace: 'child', label: 'repo (child)' });
+  assert.deepEqual({ repo: display.repo, workspace: display.workspace, label: display.label }, { repo: 'repo', workspace: 'workspace', label: 'child' });
   await original.stop();
   await rename(f.child, path.join(f.dir, 'old-child'));
   await mkdir(f.child); execFileSync('jj', ['git', 'init'], { cwd: f.child, stdio: 'ignore' });
@@ -247,7 +277,7 @@ test('lavish-hub target retargets active session and preserves or updates base a
   assert.equal(status.title, 'Updated'); assert.equal(status.base, 'root()');
   assert.notEqual(status.target, initial.target);
   assert.match(await readFile(path.join(a.identity.directory, sibling), 'utf8'), /hub-session-title">Updated<\/div>/);
-  assert.ok([...f.displays.values()].some(display => display.label === 'Updated · repo'));
+  assert.ok([...f.displays.values()].some(display => display.label === 'Updated'));
   const after = await a.request('snapshot');
   assert.notEqual(before.version, after.version);
   await f.run(['target', '@-', '--session', 'target'], f.child);

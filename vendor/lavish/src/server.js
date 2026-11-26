@@ -857,7 +857,7 @@ export async function serve({
     });
   }
 
-  const hubProxy = createHubProxy({ store, events, jsonParser: express.json({ limit: "4kb" }) });
+  const hubProxy = createHubProxy({ store, events, jsonParser: express.json({ limit: "64kb" }) });
   app.get("/hubs", (req, res) =>
     res
       .set({

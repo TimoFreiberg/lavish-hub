@@ -16,11 +16,35 @@ const maxBody = 64 * 1024;
 // phase that can stall on local state.
 const defaultLimits = { actionMs: 120000, lookupMs: 10000, resourceMs: 20000, identityMs: 5000 };
 
-function validDisplayText(value, max, codePoints = false) {
-  return (
+function validateDisplay(display) {
+  const validText = (value, max) =>
     typeof value === "string" &&
-    (codePoints ? Array.from(value).length : value.length) <= max &&
-    !Array.from(value).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+    Array.from(value).length <= max &&
+    !Array.from(value).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
+  const optionalText = (value, max) => value == null || validText(value, max);
+  return (
+    display &&
+    typeof display === "object" &&
+    !Array.isArray(display) &&
+    validText(display.label, 255) &&
+    display.label.trim().length > 0 &&
+    (display.summary === null || (typeof display.summary === "string" && display.summary.length <= 240)) &&
+    optionalText(display.repo, 255) &&
+    optionalText(display.workspace, 64) &&
+    (display.startedAt === undefined || (Number.isSafeInteger(display.startedAt) && display.startedAt >= 0)) &&
+    (display.unread === undefined ||
+      (Array.isArray(display.unread) &&
+        display.unread.length <= 50 &&
+        display.unread.every(
+          (item) =>
+            item &&
+            typeof item === "object" &&
+            !Array.isArray(item) &&
+            typeof item.id === "string" &&
+            /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(item.id) &&
+            validText(item.title, 255) &&
+            item.title.trim().length > 0,
+        )))
   );
 }
 
@@ -135,15 +159,7 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
       !Array.isArray(assets) ||
       assets.length > 3 ||
       !assets.every((name) => typeof name === "string" && /^hub-asset-[a-f0-9]{64}\.js$/.test(name)) ||
-      (display !== undefined &&
-        (!display ||
-          typeof display !== "object" ||
-          ![display.label, display.repo].some((value) => typeof value === "string" && value.length > 0) ||
-          !(display.label === undefined || validDisplayText(display.label, 255, true)) ||
-          !(display.title == null || validDisplayText(display.title, 240)) ||
-          !(display.repo == null || validDisplayText(display.repo, 255)) ||
-          !(display.workspace == null || validDisplayText(display.workspace, 255)) ||
-          !(display.summary == null || (typeof display.summary === "string" && display.summary.length <= 240))))
+      (display !== undefined && !validateDisplay(display))
     ) {
       return res.status(400).json({ error: "Invalid registration" });
     }
@@ -160,6 +176,7 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
       return res.status(404).json({ code: "HUB_SESSION_ENDED", error: "Session not active" });
     if (registration.ended || !session) return res.status(404).json({ error: "Session not active" });
     const target = targets.get(key);
+    const registeredAt = target && target.expires > Date.now() ? target.registeredAt : Date.now();
     if (
       !target ||
       target.port !== port ||
@@ -171,13 +188,15 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
       targets.set(key, { port, capability, resourceKey, identityKey, assets });
     }
     const current = targets.get(key);
+    current.registeredAt = registeredAt;
     current.display = display
       ? {
-          label: display.label || display.repo,
-          summary: display.summary === undefined ? '' : display.summary,
-          title: display.title ?? null,
-          repo: display.repo || display.label,
+          label: display.label,
+          summary: display.summary,
+          repo: display.repo ?? null,
           workspace: display.workspace ?? null,
+          startedAt: display.startedAt ?? registeredAt,
+          unread: (display.unread || []).map(({ id, title }) => ({ id, title })),
         }
       : null;
     current.expires = Date.now() + 45000;

@@ -132,6 +132,7 @@ async function release(lock, instance) {
 }
 
 export async function runHubOwner(options = {}, { prepare = prepareReview } = {}) {
+  const startedAt = Date.now();
   const identity = await resolveHubIdentity(options);
   if (identity.session && options.rev === undefined) throw new Error('listen with --session requires --rev');
   const title = options.title === undefined ? undefined : validateSessionTitle(options.title);
@@ -296,7 +297,11 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       },
       navigate: body => select(body.id),
       select: body => select(body.id, true),
-      acknowledge: body => documents.acknowledge(body),
+      acknowledge: async body => {
+        const acknowledged = await documents.acknowledge(body);
+        if (acknowledged && register) await register({ refreshSummary: false }).catch(error => console.error(`Hub registration failed: ${error.message}`));
+        return acknowledged;
+      },
       open: async (body = {}) => {
         if (!reviewUrl) throw new Error('Hub review is not ready');
         if (body.view !== undefined && !hasView(body.view)) throw new Error('Unknown view');
@@ -313,6 +318,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
           catch { throw new HubError('WORKSPACE_UNAVAILABLE', 'refresh', 'Cannot determine review scope; pass --no-scope or explicit scope flags'); }
         }
         const document = await documents.publish(body, (docs, commit, id) => writeSiblings(docs, commit, id));
+        if (register) await register({ refreshSummary: false }).catch(error => console.error(`Hub registration failed: ${error.message}`));
         return { ...document, scope: Object.keys(document.metadata || {}).length ? document.metadata : null, ...(reviewUrl ? { url: directUrl(document.id) } : {}) };
       },
       attach: body => documents.attach(body),
@@ -380,13 +386,26 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     if (review.ended) return 1;
     reviewUrl = review.url;
     const client = createLavishClient({ signal: abort.signal, vendored: true });
-    register = async () => {
-      await refreshProviderTitle();
-      let summary = null;
-      try { summary = await jj.summary(); } catch { /* The workspace may be unavailable. */ }
-      const title = effectiveTitle();
-      const label = Array.from(title ? `${title} · ${repoName}` : workspaceName !== repoName ? `${repoName} (${workspaceName})` : repoName).slice(0, 255).join('');
-      return client.registerHub(page, transport, { title, repo: repoName, workspace: workspaceName !== repoName ? workspaceName : null, summary, label });
+    let lastSummary = null, registerSerial = Promise.resolve();
+    register = ({ refreshSummary = true } = {}) => {
+      const run = registerSerial.then(async () => {
+        if (refreshSummary) {
+          await refreshProviderTitle();
+          lastSummary = await jj.summary().catch(() => null);
+        }
+        const title = effectiveTitle();
+        const unread = documents.list().documents.filter(doc => doc.viewedVersion !== doc.version).slice(0, 50).map(doc => ({ id: doc.id, title: Array.from(String(doc.title ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim() || doc.id).slice(0, 255).join('') }));
+        return client.registerHub(page, transport, {
+          label: Array.from(title || workspaceName).slice(0, 255).join(''),
+          repo: repoName,
+          workspace: identity.session || title ? null : 'workspace',
+          startedAt,
+          summary: lastSummary,
+          unread,
+        });
+      });
+      registerSerial = run.catch(() => {});
+      return run;
     };
     if (!(await register())) return 0;
     registeredPage = page;

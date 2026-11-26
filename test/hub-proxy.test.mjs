@@ -90,7 +90,7 @@ test('hub proxy confines actions and resources to an active authenticated regist
 test('dashboard exposes only live display metadata and relative session links', async t => {
   const events = new EventEmitter();
   const app = express();
-  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events, jsonParser: express.json() });
+  const proxy = createHubProxy({ store: { findByKey: async () => ({ status: 'open' }) }, events, jsonParser: express.json({ limit: '64kb' }) });
   app.post('/register', proxy.control, proxy.register); app.get('/hubs', proxy.dashboard);
   const server = http.createServer(app), port = await listen(server); t.after(() => close(server));
   const base = `http://127.0.0.1:${port}`;
@@ -99,26 +99,41 @@ test('dashboard exposes only live display metadata and relative session links', 
   const list = async () => (await (await fetch(`${base}/hubs`)).json()).hubs;
   assert.deepEqual(await list(), []);
   assert.equal((await register(registration)).status, 200);
-  assert.deepEqual(await list(), [{ label: '<workspace>', summary: 'first', title: null, repo: '<workspace>', workspace: null, url: `/session/${key}` }]);
-  const display = { label: 'old label', title: 'Title', repo: 'primary', workspace: 'secondary', summary: 'commit' };
+  const first = (await list())[0];
+  assert.deepEqual(first, { label: '<workspace>', summary: 'first', repo: null, workspace: null, startedAt: first.startedAt, unread: [], url: `/session/${key}` });
+  assert.ok(Number.isSafeInteger(first.startedAt));
+  const display = { label: 'label', repo: 'primary', workspace: 'workspace', summary: 'commit', startedAt: 42, unread: [{ id: 'doc-1', title: 'Document', extra: 'discard' }], extra: 'discard' };
   assert.equal((await register({ ...registration, display })).status, 200);
-  assert.deepEqual(await list(), [{ ...display, url: `/session/${key}` }]);
-  assert.equal((await register({ ...registration, display: { repo: 'primary' } })).status, 200);
-  assert.deepEqual(await list(), [{ label: 'primary', summary: '', title: null, repo: 'primary', workspace: null, url: `/session/${key}` }]);
-  assert.equal((await register({ ...registration, display: { label: '', repo: 'primary' } })).status, 200);
-  assert.equal((await list())[0].label, 'primary');
-  assert.equal((await register({ ...registration, display: { label: '😀'.repeat(255), repo: 'primary' } })).status, 200);
-  assert.equal((await list())[0].label, '😀'.repeat(255));
+  assert.deepEqual(await list(), [{ label: 'label', repo: 'primary', workspace: 'workspace', summary: 'commit', startedAt: 42, unread: [{ id: 'doc-1', title: 'Document' }], url: `/session/${key}` }]);
+  const unread = Array.from({ length: 50 }, (_, i) => ({ id: `doc-${i}`, title: 'x'.repeat(255) }));
+  const large = { ...registration, display: { ...display, unread } };
+  assert.ok(Buffer.byteLength(JSON.stringify(large)) > 4096);
+  assert.ok(Buffer.byteLength(JSON.stringify(large)) < 65536);
+  assert.equal((await register(large)).status, 200);
+  assert.deepEqual((await list())[0].unread, unread);
+  const emoji = '😀'.repeat(255);
+  assert.equal((await register({ ...registration, display: { label: emoji, repo: emoji, workspace: '😀'.repeat(64), summary: null, unread: [{ id: 'ok', title: emoji }] } })).status, 200);
   for (const bad of [
-    {}, { label: '', repo: '' }, { label: null, repo: 'repo' },
-    ...Object.entries({ label: 255, title: 240, repo: 255, workspace: 255, summary: 240 }).map(([field, max]) => ({ label: 'valid', [field]: 'x'.repeat(max + 1) })),
-    ...['label', 'title', 'repo', 'workspace'].flatMap(field => ['\u0000', '\n', '\u007f'].map(char => ({ label: 'valid', [field]: `bad${char}text` }))),
-    { label: 'valid', title: 3 }, { label: 'valid', summary: false },
+    {}, { label: null, summary: null }, { label: 'valid' },
+    ...['', '   '].map(label => ({ label, summary: null })),
+    ...['\u0000', '\n', '\u007f'].flatMap(control => [
+      ...['label', 'repo', 'workspace'].map(field => ({ label: 'valid', summary: null, [field]: `a${control}b` })),
+      { label: 'valid', summary: null, unread: [{ id: 'ok', title: `a${control}b` }] },
+    ]),
+    ...Object.entries({ label: 255, repo: 255, workspace: 64, summary: 240 }).map(([field, max]) => ({ label: 'valid', summary: null, [field]: 'x'.repeat(max + 1) })),
+    ...[-1, 1.5, Number.MAX_SAFE_INTEGER + 1, null].map(startedAt => ({ label: 'valid', summary: null, startedAt })),
+    ...[null, {}, [null], [{ id: '../bad', title: 'x' }], [{ id: 'ok', title: '  ' }], [{ id: 'ok', title: 'x'.repeat(256) }], Array.from({ length: 51 }, () => ({ id: 'ok', title: 'x' }))].map(unread => ({ label: 'valid', summary: null, unread })),
   ]) assert.equal((await register({ ...registration, display: bad })).status, 400, JSON.stringify(bad));
   assert.equal((await register({ ...registration, display: { label: 'next', summary: null } })).status, 200);
-  assert.deepEqual(await list(), [{ label: 'next', summary: null, title: null, repo: 'next', workspace: null, url: `/session/${key}` }]);
+  assert.equal((await list())[0].startedAt, first.startedAt);
   const original = Date.now;
-  try { Date.now = () => original() + 46000; assert.deepEqual(await list(), []); } finally { Date.now = original; }
+  try {
+    Date.now = () => original() + 46000;
+    assert.equal((await register({ ...registration, display: { label: 'next', summary: null } })).status, 200);
+    assert.ok((await list())[0].startedAt > first.startedAt);
+    Date.now = () => original() + 92000;
+    assert.deepEqual(await list(), []);
+  } finally { Date.now = original; }
   assert.equal((await register(registration)).status, 200);
   events.emit('ended', key);
   assert.deepEqual(await list(), []);
