@@ -4,14 +4,11 @@ import anchor from 'markdown-it-anchor';
 import frontMatter from 'markdown-it-front-matter';
 import shiki from '@shikijs/markdown-it';
 import { parse, stringify } from 'yaml';
-import { createDocumentEditor } from './document-editor.mjs';
 import { accessibleCodeBlocks } from '../src/markdown-accessibility.mjs';
 import { syntaxTheme } from '../src/orangebox.mjs';
 
 let highlighting;
-export const byId = id => document.getElementById(id);
-export const status = text => { byId('status').textContent = text; };
-export function markdownRenderer(body, preview, { hideFrontMatter = false, onTaskToggle, afterRender = () => {}, onError = error => status(`Syntax highlighting unavailable: ${error.message}`) } = {}) {
+export function markdownRenderer(body, preview, { hideFrontMatter = false, onTaskToggle, afterRender = () => {}, onError = error => { const el = document.getElementById('status'); if (el) el.textContent = `Syntax highlighting unavailable: ${error.message}`; } } = {}) {
   const md = new MarkdownIt({ html: true, linkify: true });
   let metadata = '';
   md.use(taskLists, { label: true }).use(anchor, { permalink: anchor.permalink.linkInsideHeader({ symbol: '#' }) });
@@ -45,25 +42,4 @@ export function markdownRenderer(body, preview, { hideFrontMatter = false, onTas
   highlighting ||= shiki({ theme: syntaxTheme, fallbackLanguage: 'text' });
   highlighting.then(plugin => { md.use(plugin).use(accessibleCodeBlocks); render(); }).catch(onError);
   return render;
-}
-export function documentEditor(options) {
-  return createDocumentEditor({ ...options, changed: value => { byId('changed').hidden = !value; }, status });
-}
-export function wireDocumentControls(editor, { body, preview, render, inputs = [body], save = editor.save }) {
-  byId('save').onclick = save;
-  byId('reload').onclick = editor.reload;
-  byId('keep').onclick = editor.keep;
-  for (const view of ['edit', 'rendered']) byId(view).onclick = () => {
-    body.hidden = view !== 'edit'; preview.hidden = view !== 'rendered';
-    byId('edit').setAttribute('aria-pressed', String(view === 'edit'));
-    byId('rendered').setAttribute('aria-pressed', String(view === 'rendered'));
-    if (view === 'rendered') render();
-  };
-  for (const input of inputs) input.addEventListener('input', () => status(editor.dirty() ? 'Unsent edits' : 'Saved — up to date with disk'));
-  document.addEventListener('keydown', event => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault(); event.stopPropagation(); status('Use the page Send button to save edits and send queued comments.');
-    }
-  }, true);
-  window.addEventListener('beforeunload', event => { if (editor.dirty()) { event.preventDefault(); event.returnValue = ''; } });
 }

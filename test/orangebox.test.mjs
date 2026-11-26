@@ -1,12 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
-import { createRequire } from 'node:module';
+import MarkdownIt from 'markdown-it';
+import shiki from '@shikijs/markdown-it';
 import { composeHubHtml } from '../src/hub-html.mjs';
-import { renderMarkdown } from '../src/markdown.mjs';
-import { palette, themeCss } from '../src/orangebox.mjs';
-
-const require = createRequire(import.meta.url);
+import { accessibleCodeBlocks } from '../src/markdown-accessibility.mjs';
+import { palette, syntaxTheme, themeCss } from '../src/orangebox.mjs';
 
 test('published HTML defaults to Orangebox without overriding authored styles or themes', async t => {
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
@@ -26,11 +25,13 @@ test('published HTML defaults to Orangebox without overriding authored styles or
 });
 
 test('Markdown uses the shared Shiki theme and palette tokens', async () => {
-  const result = await renderMarkdown('```js\nconst n = 42; // hello\n```', { resolve: require.resolve });
-  assert.match(result.body, /#F3A762/i);
-  assert.match(result.body, /#D9A5BF/i);
-  assert.match(result.body, /#A89A86/i);
-  assert.match(result.body, /font-style:italic/i);
+  const md = new MarkdownIt({ html: true, linkify: true });
+  md.use(await shiki({ theme: syntaxTheme, fallbackLanguage: 'text' })).use(accessibleCodeBlocks);
+  const result = md.render('```js\nconst n = 42; // hello\n```');
+  assert.match(result, /#F3A762/i);
+  assert.match(result, /#D9A5BF/i);
+  assert.match(result, /#A89A86/i);
+  assert.match(result, /font-style:italic/i);
   assert.match(themeCss, /--color-base-300: #171412/);
   assert.equal(palette.border, '#463c36');
 });
