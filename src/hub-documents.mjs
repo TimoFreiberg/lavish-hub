@@ -63,7 +63,10 @@ export async function createHubDocuments(directory, { guardSource = async () => 
   try { state = JSON.parse(await readFile(stateFile, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; state = { documents: {}, attachments: {} }; }
   for (const doc of Object.values(state.documents || {})) {
-    if (doc && typeof doc === 'object' && !Object.hasOwn(doc, 'viewedVersion')) doc.viewedVersion = doc.version ?? null;
+    if (doc && typeof doc === 'object') {
+      delete doc.attention;
+      if (!Object.hasOwn(doc, 'viewedVersion')) doc.viewedVersion = doc.version ?? null;
+    }
   }
   const file = path.join(directory, 'tasks.md');
   try { await writeFile(file, '', { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -100,9 +103,8 @@ export async function createHubDocuments(directory, { guardSource = async () => 
       const metadata = body.metadata === undefined ? {} : validateMetadata(body.metadata);
       if (Buffer.byteLength(JSON.stringify(metadata)) > maxMetadata) throw new Error('Metadata exceeds 16 KiB');
       const previous = Object.hasOwn(state.documents, id) ? state.documents[id] : null;
-      const attention = body.attention === true ? true : Boolean(previous?.attention);
       const viewedVersion = previous && Object.hasOwn(previous, 'viewedVersion') ? previous.viewedVersion : null;
-      const document = { id, title: body.title || path.basename(file), source: file, metadata, version: randomUUID(), publishedAt: new Date().toISOString(), attention, viewedVersion };
+      const document = { id, title: body.title || path.basename(file), source: file, metadata, version: randomUUID(), publishedAt: new Date().toISOString(), viewedVersion };
       const next = { ...state, documents: { ...state.documents, [id]: document } };
       await generate(Object.values(next.documents), () => persist(next), id);
       return document;
@@ -112,8 +114,8 @@ export async function createHubDocuments(directory, { guardSource = async () => 
       if (typeof id !== 'string' || typeof version !== 'string' || !version || !Object.hasOwn(state.documents, id)) return false;
       const current = state.documents[id];
       if (current.version !== version) return false;
-      if (current.viewedVersion === version && !current.attention) return false;
-      const next = { ...state, documents: { ...state.documents, [id]: { ...current, viewedVersion: version, attention: false } } };
+      if (current.viewedVersion === version) return false;
+      const next = { ...state, documents: { ...state.documents, [id]: { ...current, viewedVersion: version } } };
       await persist(next);
       return true;
     }),

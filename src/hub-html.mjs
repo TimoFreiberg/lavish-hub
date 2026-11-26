@@ -65,10 +65,10 @@ function siblingSidebarClient(c) {
     for (const doc of list) {
       const previous = seenDocs.get(doc.id);
       if (notificationBaseline && doc.id !== c.id) {
-        const kind = !previous ? 'New' : previous.version !== doc.version ? 'Updated' : !previous.attention && doc.attention ? 'Attention' : '';
+        const kind = !previous ? 'New' : previous.version !== doc.version ? 'Updated' : '';
         if (kind) notice = { id: doc.id, label: kind + ': ' + doc.title };
       }
-      seenDocs.set(doc.id, { version: doc.version, attention: Boolean(doc.attention) });
+      seenDocs.set(doc.id, { version: doc.version });
     }
     const selectionTarget = state.selectionTarget ?? state.selected;
     if (notificationBaseline && !notice && !leaving && state.selectionRevision > lastSelectionRevision && selectionTarget && selectionTarget !== c.id) {
@@ -286,7 +286,7 @@ function siblingSidebarClient(c) {
         pendingUpdate = { version: current.version, dest: dest.href, samePage: dest.pathname === location.pathname };
         if (maybeApplyPendingUpdate(generation)) return;
       } else pendingUpdate = null;
-      const items = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, attention: false, unseen: false })), ...list.documents.map(d => ({ ...d, unseen: d.id === c.id ? d.version !== c.version : d.viewedVersion !== d.version }))];
+      const items = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, unseen: false })), ...list.documents.map(d => ({ ...d, unseen: d.id === c.id ? d.version !== c.version : d.viewedVersion !== d.version }))];
       const focused = nav.contains(document.activeElement) ? document.activeElement : null;
       const existing = new Map([...nav.querySelectorAll('a[data-hub-id]')].map(a => [a.dataset.hubId, a]));
       let next = nav.firstElementChild;
@@ -302,14 +302,14 @@ function siblingSidebarClient(c) {
         let label = a.querySelector('.nav-label');
         if (!label) { label = document.createElement('span'); label.className = 'nav-label'; a.replaceChildren(label); }
         if (label.textContent !== item.title) label.textContent = item.title;
-        const badgeKind = item.attention ? 'attention' : item.unseen && !(item.id === c.id && pendingUpdate) ? 'new' : '';
+        const unseen = item.unseen && !(item.id === c.id && pendingUpdate);
         let badge = a.querySelector('.nav-badge');
-        if (badgeKind) {
+        if (unseen) {
           if (!badge) { badge = document.createElement('span'); badge.setAttribute('aria-hidden', 'true'); a.append(badge); }
-          badge.className = 'nav-badge nav-badge-' + badgeKind; badge.textContent = badgeKind === 'attention' ? 'Attention' : 'New';
-          a.title = badgeKind === 'attention' ? 'Needs attention' : 'New publication'; a.setAttribute('aria-describedby', 'lavish-hub-desc-' + badgeKind);
-          if (badgeKind === 'attention') { a.dataset.attention = 'true'; delete a.dataset.unseen; } else { a.dataset.unseen = 'true'; delete a.dataset.attention; }
-        } else { badge?.remove(); a.removeAttribute('title'); a.removeAttribute('aria-describedby'); delete a.dataset.attention; delete a.dataset.unseen; }
+          badge.className = 'nav-badge nav-badge-new'; badge.textContent = 'New';
+          a.title = 'New publication'; a.setAttribute('aria-describedby', 'lavish-hub-desc-new');
+          a.dataset.unseen = 'true';
+        } else { badge?.remove(); a.removeAttribute('title'); a.removeAttribute('aria-describedby'); delete a.dataset.unseen; }
         const href = docUrl(item).href;
         if (a.href !== href) a.href = href;
         if (item.id === c.id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -350,8 +350,7 @@ export function siblingSidebarScript(navConfigJson) {
 
 export function renderSiblingNavigation({ destinations, doc, sessionTitle = '', identity, repoName, workspaceName, reviewedScope, confirmNavigation, navConfig }) {
   const items = destinations.map(item => {
-    const kind = item.attention ? 'attention' : item.unseen ? 'new' : '';
-    return `<div class="nav-row"${item.id === doc.id ? ' data-current' : ''}><a href="${escapeHtml(item.href)}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}${kind ? ` title="${kind === 'attention' ? 'Needs attention' : 'New publication'}" aria-describedby="lavish-hub-desc-${kind}" data-${kind === 'attention' ? 'attention' : 'unseen'}="true"` : ''}><span class="nav-label">${escapeHtml(item.title)}</span>${kind ? `<span class="nav-badge nav-badge-${kind}" aria-hidden="true">${kind === 'attention' ? 'Attention' : 'New'}</span>` : ''}</a></div>`;
+    return `<div class="nav-row"${item.id === doc.id ? ' data-current' : ''}><a href="${escapeHtml(item.href)}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}${item.unseen ? ' title="New publication" aria-describedby="lavish-hub-desc-new" data-unseen="true"' : ''}><span class="nav-label">${escapeHtml(item.title)}</span>${item.unseen ? '<span class="nav-badge nav-badge-new" aria-hidden="true">New</span>' : ''}</a></div>`;
   }).join('');
   return `<style>
 html { padding-left: 200px; box-sizing: border-box; }
@@ -368,7 +367,6 @@ html { padding-left: 200px; box-sizing: border-box; }
 #lavish-hub-sidebar .nav-row[data-current] > a[aria-current] { color: var(--ob-orange); background: transparent; }
 #lavish-hub-sidebar .nav-label { min-width: 0; overflow-wrap: anywhere; }
 #lavish-hub-sidebar .nav-badge { font-size: 11px; font-weight: 600; line-height: 1.2; padding: 1px 6px; border-radius: 999px; flex: none; white-space: nowrap; }
-#lavish-hub-sidebar .nav-badge-attention { background: var(--ob-orange); color: var(--ob-on-accent); }
 #lavish-hub-sidebar .nav-badge-new { background: var(--ob-cyan); color: var(--ob-on-accent); }
 #lavish-hub-sidebar .nav-reload { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-right: 4px; padding: 0; border: 0; border-radius: 4px; background: var(--ob-green); color: var(--ob-on-accent); cursor: pointer; }
 #lavish-hub-sidebar .nav-reload:hover, #lavish-hub-sidebar .nav-reload:focus-visible { outline: 2px solid var(--ob-fg); outline-offset: 1px; }
@@ -382,7 +380,7 @@ html { padding-left: 200px; box-sizing: border-box; }
 #lavish-hub-toast[hidden] { display: none; }
 #lavish-hub-toast span { min-width: 0; overflow-wrap: anywhere; }
 #lavish-hub-toast button { flex: none; border: 1px solid var(--ob-border); border-radius: 4px; padding: 4px 8px; background: var(--ob-accent, var(--ob-orange)); color: var(--ob-on-accent); font: inherit; cursor: pointer; }
-</style><div id="lavish-hub-toast" data-lavish-action role="status" aria-live="polite" hidden></div><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-attention" hidden>Needs attention</span><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${siblingSidebarScript(navConfig)}</script>`;
+</style><div id="lavish-hub-toast" data-lavish-action role="status" aria-live="polite" hidden></div><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${siblingSidebarScript(navConfig)}</script>`;
 }
 
 // Edit only parser-located tags, leaving authored scripts, doctype and formatting intact.

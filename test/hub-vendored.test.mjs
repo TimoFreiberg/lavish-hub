@@ -494,11 +494,12 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   t.diagnostic(`Normal click to navigate response: ${(normalResponse - normalStart).toFixed(1)}ms; click to Commits heading: ${(performance.now() - normalStart).toFixed(1)}ms`);
   const markdown = path.join(dir, 'notes.md');
   await writeFile(markdown, '# Notes\nOriginal\n');
-  await run(process.execPath, [path.resolve('bin/lavish-hub'), 'publish', markdown, '--id', 'notes', '--title', 'Notes', '--attention', '--workspace', repo], { env });
+  await run(process.execPath, [path.resolve('bin/lavish-hub'), 'publish', markdown, '--id', 'notes', '--title', 'Notes', '--workspace', repo], { env });
   const notesButton = frame.getByRole('button', { name: 'Notes', exact: true });
   await notesButton.waitFor();
-  assert.equal(await notesButton.getAttribute('data-attention'), 'true');
-  assert.equal(await notesButton.getAttribute('aria-describedby'), 'hub-nav-desc-attention');
+  assert.equal(await notesButton.getAttribute('data-unseen'), 'true');
+  assert.equal(await notesButton.getAttribute('data-attention'), null);
+  assert.equal(await notesButton.getAttribute('aria-describedby'), 'hub-nav-desc-new');
   assert.equal(await page.title(), 'repo · Lavish');
   // Opening a direct link in the same tab overrides any retained sibling destination in sessionStorage.
   // Also verify a transient acknowledge failure retries on the next poll while the rendered view stays open.

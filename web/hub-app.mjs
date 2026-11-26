@@ -165,14 +165,14 @@ function acknowledgeDisplayed(id, version) {
   if (!id || !version) return;
   const doc = documents.find(item => item.id === id);
   if (!doc || doc.version !== version) return;
-  if (!doc.attention && (!Object.hasOwn(doc, 'viewedVersion') || doc.viewedVersion === version)) return;
+  if (doc.viewedVersion === version) return;
   const key = `${id}\0${version}`;
   if (ackInFlight === key) return;
   ackInFlight = key;
   action('acknowledge', { id, version }).then(cleared => {
     if (!cleared) return;
     const current = documents.find(item => item.id === id);
-    if (current && current.version === version) { current.attention = false; current.viewedVersion = version; renderNav(); }
+    if (current && current.version === version) { current.viewedVersion = version; renderNav(); }
   }).catch(() => {}).finally(() => { if (ackInFlight === key) ackInFlight = ''; });
 }
 const el = (tag, text, attrs = {}) => { const node = document.createElement(tag); if (text != null) node.textContent = text; for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
@@ -214,8 +214,8 @@ function renderNav() {
   const focused = nav.contains(document.activeElement) ? document.activeElement : null;
   const existing = new Map([...nav.querySelectorAll('button[data-hub-id]')].map(b => [b.dataset.hubId, b]));
   const items = [
-    ...Object.entries(labels).map(([id, label]) => ({ id, label, attention: false, unseen: false })),
-    ...documents.map(doc => ({ id: doc.id, label: doc.title, attention: Boolean(doc.attention), unseen: Object.hasOwn(doc, 'viewedVersion') && doc.viewedVersion !== doc.version })),
+    ...Object.entries(labels).map(([id, label]) => ({ id, label, unseen: false })),
+    ...documents.map(doc => ({ id: doc.id, label: doc.title, unseen: doc.viewedVersion !== doc.version })),
   ];
   let next = nav.firstElementChild;
   for (const item of items) {
@@ -227,21 +227,18 @@ function renderNav() {
     let label = b.querySelector('.nav-label');
     if (!label) { label = el('span', item.label, { class: 'nav-label' }); b.replaceChildren(label); }
     else if (label.textContent !== item.label) label.textContent = item.label;
-    const badgeKind = item.attention ? 'attention' : item.unseen ? 'new' : '';
     let badge = b.querySelector('.nav-badge');
-    if (badgeKind) {
+    if (item.unseen) {
       if (!badge) { badge = el('span', '', { 'aria-hidden': 'true' }); b.append(badge); }
-      badge.className = `nav-badge nav-badge-${badgeKind}`;
-      badge.textContent = badgeKind === 'attention' ? 'Attention' : 'New';
-      b.title = badgeKind === 'attention' ? 'Needs attention' : 'New publication';
-      b.setAttribute('aria-describedby', `hub-nav-desc-${badgeKind}`);
-      if (badgeKind === 'attention') { b.dataset.attention = 'true'; delete b.dataset.unseen; }
-      else { b.dataset.unseen = 'true'; delete b.dataset.attention; }
+      badge.className = 'nav-badge nav-badge-new';
+      badge.textContent = 'New';
+      b.title = 'New publication';
+      b.setAttribute('aria-describedby', 'hub-nav-desc-new');
+      b.dataset.unseen = 'true';
     } else {
       badge?.remove();
       b.removeAttribute('title');
       b.removeAttribute('aria-describedby');
-      delete b.dataset.attention;
       delete b.dataset.unseen;
     }
     if (item.id === selected) b.setAttribute('aria-current', 'page');
@@ -271,10 +268,10 @@ function noteUpdates(state, list) {
   for (const doc of list) {
     const previous = seenDocs.get(doc.id);
     if (notificationBaseline && doc.id !== selected) {
-      const kind = !previous ? 'New' : previous.version !== doc.version ? 'Updated' : !previous.attention && doc.attention ? 'Attention' : '';
+      const kind = !previous ? 'New' : previous.version !== doc.version ? 'Updated' : '';
       if (kind) notice = { id: doc.id, label: `${kind}: ${doc.title}` };
     }
-    seenDocs.set(doc.id, { version: doc.version, attention: Boolean(doc.attention) });
+    seenDocs.set(doc.id, { version: doc.version });
   }
   const selectionTarget = state.selectionTarget ?? state.selected;
   if (notificationBaseline && !notice && !leavingConfirmed && state.selectionRevision > lastSelectionRevision && selectionTarget && selectionTarget !== selected) {
@@ -828,7 +825,7 @@ async function renderViewContent(focusChangeId) {
   } else view.append(area, save);
   view.append(info);
 }
-app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><span id="hub-nav-desc-attention" hidden>Needs attention</span><span id="hub-nav-desc-new" hidden>New publication</span><div class="hub-sidebar"><div class="hub-identity"><div class="hub-session-title"></div><div class="hub-repo-name"></div></div><nav id="navigation" aria-label="Workspace views"></nav></div><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
+app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><span id="hub-nav-desc-new" hidden>New publication</span><div class="hub-sidebar"><div class="hub-identity"><div class="hub-session-title"></div><div class="hub-repo-name"></div></div><nav id="navigation" aria-label="Workspace views"></nav></div><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
 document.querySelector('#view').addEventListener('click', event => {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const link = event.target.closest?.('a[href]');

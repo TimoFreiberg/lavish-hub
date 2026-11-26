@@ -51,28 +51,20 @@ test('hub registrations persist, replace metadata, and protect save targets', as
   const a = path.join(dir, 'a.md'), b = path.join(dir, 'b.md');
   await writeFile(a, '- [ ] one\n'); await writeFile(b, '- [x] two\n');
   let store = await createHubDocuments(path.join(dir, 'state'));
-  const first = await store.publish({ id: 'review', file: a, metadata: { reviewedRepository: 'Example', headCommit: 'a'.repeat(40) }, attention: true });
+  const first = await store.publish({ id: 'review', file: a, metadata: { reviewedRepository: 'Example', headCommit: 'a'.repeat(40) } });
   store = await createHubDocuments(path.join(dir, 'state'));
   assert.equal(store.list().documents[0].metadata.reviewedRepository, 'Example');
-  assert.equal(store.list().documents[0].attention, true);
+  assert.equal(Object.hasOwn(store.list().documents[0], 'attention'), false);
   assert.equal(store.list().documents[0].viewedVersion, null);
   assert.ok(Date.parse(store.list().documents[0].publishedAt) > 0);
-  // Plain republish preserves an unacknowledged attention flag.
   const republished = await store.publish({ id: 'review', file: b });
   assert.deepEqual(store.list().documents[0].metadata, {});
-  assert.equal(store.list().documents[0].attention, true);
   assert.equal(store.list().documents[0].viewedVersion, null);
-  // Acknowledging a stale version must not clear the current version's flags.
   assert.equal(await store.acknowledge({ id: 'review', version: first.version }), false);
-  assert.equal(store.list().documents[0].attention, true);
-  // Acknowledging the current version marks it viewed and clears attention.
   assert.equal(await store.acknowledge({ id: 'review', version: republished.version }), true);
-  assert.equal(store.list().documents[0].attention, false);
   assert.equal(store.list().documents[0].viewedVersion, republished.version);
   assert.equal(await store.acknowledge({ id: 'review', version: republished.version }), false);
-  // A subsequent plain republish marks the new version unseen without re-raising attention.
   const third = await store.publish({ id: 'review', file: b });
-  assert.equal(store.list().documents[0].attention, false);
   assert.equal(store.list().documents[0].viewedVersion, republished.version);
   assert.notEqual(store.list().documents[0].viewedVersion, third.version);
   await store.attach({ kind: 'tasks', file: a });
@@ -85,6 +77,18 @@ test('hub registrations persist, replace metadata, and protect save targets', as
   await writeFile(b, 'external');
   assert.match((await store.save({ id: 'tasks', version: current.version, baseHash: current.hash, text: 'draft' })).reply, /Conflict/);
   assert.equal(await readFile(b, 'utf8'), 'external');
+});
+
+test('legacy attention documents load and are omitted from subsequent writes', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-legacy-documents-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'review.md');
+  await writeFile(source, 'review');
+  await writeFile(path.join(dir, 'documents.json'), JSON.stringify({ documents: { review: { id: 'review', title: 'Review', source, version: 'v1', viewedVersion: null, attention: true } }, attachments: {} }));
+  const store = await createHubDocuments(dir);
+  assert.equal(Object.hasOwn(store.list().documents[0], 'attention'), false);
+  assert.equal(await store.acknowledge({ id: 'review', version: 'v1' }), true);
+  assert.equal(Object.hasOwn(JSON.parse(await readFile(path.join(dir, 'documents.json'), 'utf8')).documents.review, 'attention'), false);
 });
 
 test('obsolete attachments are ignored without affecting tasks or published documents', async t => {
@@ -114,7 +118,6 @@ test('hub metadata validation and CLI options', async t => {
   await writeFile(file, JSON.stringify({ reviewedRepository: 'x'.repeat(17000) }));
   await assert.rejects(readMetadata(file), /16 KiB/);
   assert.deepEqual(parseArgs(['publish', 'review.md', '--id', 'review', '--metadata-file', 'meta.json']), { hub: 'publish', file: 'review.md', id: 'review', metadataFile: 'meta.json' });
-  assert.deepEqual(parseArgs(['publish', 'review.md', '--id', 'review', '--attention']), { hub: 'publish', file: 'review.md', id: 'review', attention: true });
-  assert.throws(() => parseArgs(['publish', 'review.md', '--id', 'review', '--attention', '--attention']), /given twice/);
+  assert.throws(() => parseArgs(['publish', 'review.md', '--attention']), /unknown argument --attention/);
   assert.deepEqual(parseArgs(['publish', 'review.md']), { hub: 'publish', file: 'review.md' });
 });

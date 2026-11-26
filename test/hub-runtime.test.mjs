@@ -760,21 +760,20 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   const metadata = path.join(dir, 'metadata.json');
   await writeFile(metadata, JSON.stringify({ reviewedRepository: 'Reviewed repo', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40) }));
   const selectedBeforePublish = (await request('status')).selected;
-  const publishOutput = await run(process.execPath, [cli, 'publish', document, '--id', 'review', '--metadata-file', metadata, '--attention', '--workspace', repo], { env });
+  const publishOutput = await run(process.execPath, [cli, 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env });
   assert.match(publishOutput.stdout, /\?view=review/);
   assert.equal((await request('status')).selected, selectedBeforePublish);
   const publishedReview = (await request('documents')).documents.find(doc => doc.id === 'review');
-  assert.equal(publishedReview.attention, true);
+  assert.equal(Object.hasOwn(publishedReview, 'attention'), false);
+  assert.notEqual(publishedReview.viewedVersion, publishedReview.version);
   assert.equal(publishedReview.metadata.reviewedRepository, 'Reviewed repo');
   await request('navigate', { id: 'review' });
   assert.equal((await request('status')).selected, 'review');
-  // Navigating alone does not clear attention until the displayed version is acknowledged.
-  assert.equal((await request('documents')).documents.find(doc => doc.id === 'review').attention, true);
+  assert.notEqual((await request('documents')).documents.find(doc => doc.id === 'review').viewedVersion, publishedReview.version);
   assert.equal(await request('acknowledge', { id: 'review', version: 'wrong-version' }), false);
-  assert.equal((await request('documents')).documents.find(doc => doc.id === 'review').attention, true);
+  assert.notEqual((await request('documents')).documents.find(doc => doc.id === 'review').viewedVersion, publishedReview.version);
   assert.equal(await request('acknowledge', { id: 'review', version: publishedReview.version }), true);
   const acknowledgedReview = (await request('documents')).documents.find(doc => doc.id === 'review');
-  assert.equal(acknowledgedReview.attention, false);
   assert.equal(acknowledgedReview.viewedVersion, publishedReview.version);
   await writeFile(metadata, JSON.stringify({ unknown: 'invalid' }));
   await assert.rejects(run(process.execPath, [cli, 'publish', document, '--id', 'review', '--metadata-file', metadata, '--workspace', repo], { env }), /metadata/i);
