@@ -28,7 +28,7 @@ test('hub actions work from the real Lavish opaque-origin iframe', { timeout: 12
     await transport.close();
     await rm(dir, { recursive: true, force: true });
   });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+  const script = (await readFile(new URL('../web/hub-lifecycle.js', import.meta.url), 'utf8')) + '\n' + (await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8'));
   const config = JSON.stringify({ url: transport.url, capability: transport.capability, resourceKey: transport.resourceKey, workspace: 'test' });
   await writeFile(file, `<!doctype html><html><body>Hub action test<div id="app"></div><script>globalThis.hubConfig=${config}</script><script type="module">${script}</script></body></html>`);
   const output = execFileSync('lavish-axi', [file, '--no-open'], { encoding: 'utf8' });

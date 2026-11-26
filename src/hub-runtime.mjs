@@ -220,7 +220,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const recentBatches = new Map();
     const siblingName = doc => `document-${createHash('sha256').update(JSON.stringify([doc.id, doc.source])).digest('hex')}.html`;
     const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
-    const confirmNavigation = await readFile(new URL('../web/confirm-navigation.js', import.meta.url), 'utf8');
+    const [confirmNavigation, hubLifecycle] = await Promise.all(['confirm-navigation.js', 'hub-lifecycle.js'].map(name => readFile(new URL(`../web/${name}`, import.meta.url), 'utf8')));
     async function writeSiblings(docs = documents.list().documents, commit = async () => {}, requiredId = null) {
       const htmlDocs = docs.filter(doc => doc.source.toLowerCase().endsWith('.html'));
       const staged = [];
@@ -240,7 +240,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope">${scope}</aside>` : '';
         const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id, version: doc.version, workspaceName, repoName, session: Boolean(identity.session), sessionTitle: effectiveTitle() || '' }).replaceAll('<', '\\u003c');
-        const navigation = renderSiblingNavigation({ destinations, doc, sessionTitle: effectiveTitle() || '', identity, repoName, workspaceName, reviewedScope, confirmNavigation, navConfig });
+        const navigation = renderSiblingNavigation({ destinations, doc, sessionTitle: effectiveTitle() || '', identity, repoName, workspaceName, reviewedScope, confirmNavigation, hubLifecycle, navConfig });
         authored = composeHubHtml(authored, base, navigation);
         const name = siblingName(doc);
         const target = path.join(identity.directory, name);
@@ -379,7 +379,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     ]);
     transport.assets = [diffAsset, markdownAsset, appAsset];
     // Media references stay unloaded until requested and export as data URLs without executing scripts.
-    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(effectiveTitle() || repoName)}</title><link rel="stylesheet" href="${cssAsset}"></head><body><div id="app"></div><script>${confirmNavigation}</script><script>globalThis.hubConfig=${config};</script><audio preload="none" data-hub-bundle="diff" src="${diffAsset}"></audio><audio preload="none" data-hub-bundle="markdown" src="${markdownAsset}"></audio><script src="${appAsset}"></script></body></html>`;
+    const html = `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(effectiveTitle() || repoName)}</title><link rel="stylesheet" href="${cssAsset}"></head><body><div id="app"></div><script>${confirmNavigation}</script><script>${hubLifecycle}</script><script>globalThis.hubConfig=${config};</script><audio preload="none" data-hub-bundle="diff" src="${diffAsset}"></audio><audio preload="none" data-hub-bundle="markdown" src="${markdownAsset}"></audio><script src="${appAsset}"></script></body></html>`;
     await writeFile(page, html, { mode: 0o600 });
     await chmod(page, 0o600);
     const review = await prepare(page, { reopen: options.reopen, log: console.error, vendored: true });

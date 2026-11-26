@@ -6,6 +6,8 @@ import { createHubTransport } from '../src/hub-transport.mjs';
 import { build } from 'esbuild';
 import { themeCss } from '../src/orangebox.mjs';
 
+const script = (await readFile(new URL('../web/hub-lifecycle.js', import.meta.url), 'utf8')) + '\n' + (await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8'));
+
 test('navigation renders before snapshot and serializes delayed owner updates', { timeout: 30000 }, async t => {
   let releaseSnapshot, releaseNavigation;
   const snapshotGate = new Promise(resolve => { releaseSnapshot = resolve; });
@@ -20,7 +22,6 @@ test('navigation renders before snapshot and serializes delayed owner updates', 
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseSnapshot(); releaseNavigation(); await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
@@ -47,7 +48,6 @@ test('URL changes correct stale ready replacements and retry the resolved view',
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}; globalThis.updates=[]; globalThis.lavish={syncUrl: update => updates.push(update)};</script><script type="module">${script}</script>`);
   await page.getByText('No commits in this range.').waitFor();
@@ -62,7 +62,6 @@ test('URL changes correct stale ready replacements and retry the resolved view',
 test('URL changes are ignored after cross-page navigation is confirmed', { timeout: 30000 }, async t => {
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   const content = `<div id="app"></div><script>globalThis.hubConfig={url:'http://app.test',capability:'test',workspace:'test'}; globalThis.updates=[]; globalThis.navigations=[]; globalThis.fetch=async (_url,options) => { const {operation,id}=JSON.parse(options.body); if (operation==='navigate') navigations.push(id); const result=operation==='status'?{available:true,selected:'commits'}:operation==='documents'?{documents:[{id:'published',title:'Published',source:'index.html',sibling:'http://example.test/published.html'}]}:operation==='snapshot'?{base:'a'.repeat(40),head:'b'.repeat(40),commits:[]}:{}; return {ok:true,json:async()=>({result})}; }; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'tasks', hash: '#back' } })); globalThis.leavingEventDelivered = true; }};</script><script type="module">${script}</script>`;
   await page.route('http://app.test/**', route => route.fulfill({ contentType: 'text/html', body: route.request().url().endsWith('/hub.html') ? content : '<iframe id="app-frame" src="/hub.html"></iframe>' }));
@@ -92,7 +91,6 @@ test('unchanged snapshot polls keep the rendered repository and manual refresh f
   t.after(() => transport.close());
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
   const empty = page.getByText('No commits in this range.');
@@ -119,7 +117,6 @@ test('cross-page navigation pauses pending refresh and resumes after failure', {
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseStatus(); releaseNavigation(); await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
   await page.getByText('No commits in this range.').waitFor();
@@ -148,7 +145,6 @@ test('remote selection or publication does not switch views and shows auto-dismi
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
@@ -185,7 +181,6 @@ test('document failure does not also display a renderer failure', { timeout: 300
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseRead(); await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
@@ -208,7 +203,6 @@ test('a stale document render cannot append another editor', { timeout: 30000 },
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseRead(); await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
@@ -238,7 +232,6 @@ test('failed navigation survives polling and can be retried without losing a dra
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
@@ -281,7 +274,6 @@ test('refresh updates clean documents and retains dirty drafts and their target'
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
@@ -311,7 +303,6 @@ test('unchanged snapshots preserve the focused editor and external changes rende
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
   await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
@@ -337,7 +328,6 @@ for (const activation of ['click', 'keyboard']) test(`activating an upper commit
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
   await page.getByRole('button', { name: 'Edit Description dddddddddddd' }).click();
@@ -369,7 +359,6 @@ test('commit descriptions render safely and retain draft targets across rewrites
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
   const page = await browser.newPage();
   page.setDefaultTimeout(5000);
@@ -419,7 +408,6 @@ test('successful description save survives an old snapshot and renders literal t
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
   await page.getByRole('button', { name: 'Edit Description cccccccccccc' }).click();
@@ -449,7 +437,6 @@ test('consecutive saves retain the latest target across an intermediate snapshot
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { releaseSecond?.(); await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
   const edit = page.getByRole('button', { name: 'Edit Description cccccccccccc' });
@@ -489,7 +476,6 @@ test('long rendered descriptions and statistics have resize handles, immutable c
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
@@ -518,7 +504,6 @@ test('description lines scroll horizontally without wrapping or changing text', 
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
   const page = await browser.newPage({ viewport: { width: 2200, height: 900 } });
   await page.setContent(`<style>${css}</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><script type="module">${script}</script>`);
@@ -552,7 +537,6 @@ test('Markdown controls save task toggles and retain failed drafts', { timeout: 
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const css = await readFile(new URL('../web/hub.css', import.meta.url), 'utf8');
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   const page = await browser.newPage();
@@ -590,7 +574,6 @@ async function assertEventually(check, timeout = 5000) {
 
 let markdownScript;
 async function pollingPage(browser, transport, { hidden = false } = {}) {
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   markdownScript ??= (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   // Polling pauses in a hidden tab, so drive visibility rather than waiting it out.
   const visibility = `<script>globalThis.__hidden = ${hidden}; Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => globalThis.__hidden ? 'hidden' : 'visible' });</script>`;

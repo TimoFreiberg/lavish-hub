@@ -7,6 +7,7 @@ import { createHubTransport } from '../src/hub-transport.mjs';
 import { ensureHubAssets } from '../src/deps.mjs';
 import path from 'node:path';
 import { build } from 'esbuild';
+const script = (await readFile(new URL('../web/hub-lifecycle.js', import.meta.url), 'utf8')) + '\n' + (await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8'));
 const markdownBundle = async () => (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
 const penPath = 'M4 20l4-.8L19 8.2 15.8 5 4.8 16 4 20zm10.6-13.8l3.2 3.2';
 async function assertEditButton(button, label) {
@@ -29,7 +30,6 @@ test('sidebar uses workspace name until a session title is set', { timeout: 3000
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace/child', workspaceName: 'child', repoName: 'repo' })}; globalThis.lavish={setDocumentMeta: value => { globalThis.metaTitle=value.title; }};</script><script type="module">${script}</script>`);
   await page.getByRole('heading', { name: 'Commits' }).waitFor();
@@ -62,7 +62,6 @@ test('published Markdown previews relative assets and retains conflicting edits'
   }, { resource: id => id === 'review' ? source : undefined });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); await rm(dir, { recursive: true, force: true }); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const markdown = await markdownBundle();
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, resourceKey: transport.resourceKey, workspace: 'test' })}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
@@ -94,7 +93,6 @@ test('hub bounds a hung diff file read, keeps the patch, and retries the expansi
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const dist = await ensureHubAssets();
   const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_HUB_LANGUAGES: '[]' } })).outputFiles[0].text;
   const markdown = await markdownBundle();
@@ -125,7 +123,6 @@ test('hub gives up on a navigation the owner never answers and lets the next one
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_HUB_LANGUAGES: '[]' } })).outputFiles[0].text;
   const markdown = await markdownBundle();
   const page = await browser.newPage(); page.setDefaultTimeout(5000);
@@ -143,7 +140,6 @@ test('hub reloads itself when a restarted owner rejects its access token', { tim
   const transport = await createHubTransport({ status: () => ({ available: true }), documents: () => ({ documents: [] }), snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '', patch: '', commits: [] }) });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_HUB_LANGUAGES: '[]' } })).outputFiles[0].text;
   const markdown = await markdownBundle();
   const page = await browser.newPage(); page.setDefaultTimeout(5000);
@@ -166,7 +162,6 @@ test('hub keeps an unavailable file expansion notice until that file expands', {
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const dist = await ensureHubAssets();
   const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_HUB_LANGUAGES: '[]' } })).outputFiles[0].text;
   const markdown = await markdownBundle();
@@ -208,7 +203,6 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
   const dist = await ensureHubAssets();
   const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_HUB_LANGUAGES: '[]' } })).outputFiles[0].text;
   const markdown = await markdownBundle();

@@ -5,6 +5,7 @@ import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
 import { createHubTransport } from '../src/hub-transport.mjs';
 
+const script = (await readFile('web/hub-lifecycle.js', 'utf8')) + '\n' + (await readFile('web/hub-app.mjs', 'utf8'));
 const bundle = async entry => (await build({ entryPoints: [entry], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_HUB_LANGUAGES: '[]' } })).outputFiles[0].text;
 
 test('Markdown links reveal Changes and Commits, report unknown views, and retain drafts', { timeout: 45000 }, async t => {
@@ -21,7 +22,7 @@ test('Markdown links reveal Changes and Commits, report unknown views, and retai
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
-  const script = await readFile('web/hub-app.mjs', 'utf8'), css = await readFile('web/diff.css', 'utf8'), hubCss = await readFile('web/hub.css', 'utf8');
+  const css = await readFile('web/diff.css', 'utf8'), hubCss = await readFile('web/hub.css', 'utf8');
   const diff = await bundle('web/diff-app.mjs'), markdown = await bundle('web/hub-markdown.mjs');
   const page = await browser.newPage();
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -131,7 +132,6 @@ test('reveal reports unavailable expansion and added or deleted bounds', { timeo
 test('unknown initial view stays in hub when selected document is a sibling', { timeout: 30000 }, async t => {
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(() => browser.close());
-  const script = await readFile('web/hub-app.mjs', 'utf8');
   const page = await browser.newPage();
   await page.route('http://hub.test/**', route => {
     if (route.request().url().endsWith('/action')) {

@@ -17,7 +17,7 @@ try {
   const extract = spawnSync('tar', ['-xzf', archive, '-C', temp], { encoding: 'utf8' });
   assert.equal(extract.status, 0, extract.stderr);
   const root = path.join(temp, 'package'), cli = path.join(root, 'bin/lavish-hub');
-  for (const file of ['vendor/lavish/dist/cli.mjs', 'vendor/lavish/dist/server.mjs', 'vendor/lavish/dist/design/daisyui.css', 'vendor/lavish/dist/whiteboard/whiteboard.js', 'vendor/lavish/dist/whiteboard/fonts/Excalifont', 'node_modules/express/package.json', 'dist/hub-markdown.js']) await readFile(path.join(root, file)).catch(async error => { if (error.code !== 'EISDIR') throw error; });
+  for (const file of ['vendor/lavish/dist/cli.mjs', 'vendor/lavish/dist/server.mjs', 'vendor/lavish/dist/design/daisyui.css', 'vendor/lavish/dist/whiteboard/whiteboard.js', 'vendor/lavish/dist/whiteboard/fonts/Excalifont', 'node_modules/express/package.json', 'dist/hub-markdown.js', 'web/hub-lifecycle.js']) await readFile(path.join(root, file)).catch(async error => { if (error.code !== 'EISDIR') throw error; });
   const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   assert.match(pkg.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/);
   assert.deepEqual(Object.keys(pkg.bin), ['lavish-hub']);

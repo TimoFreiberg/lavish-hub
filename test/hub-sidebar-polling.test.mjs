@@ -1,10 +1,15 @@
 import test, { before, after, afterEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 import { siblingSidebarScript, renderSiblingNavigation } from '../src/hub-html.mjs';
 import { themeCss } from '../src/orangebox.mjs';
 import { inspectGeometry, scanDocument } from '../scripts/visual/checks.mjs';
 
+const hubLifecycle = await readFile(new URL('../web/hub-lifecycle.js', import.meta.url), 'utf8');
+test('sibling navigation requires the lifecycle script', () => {
+  assert.throws(() => renderSiblingNavigation({ destinations: [], doc: {} }), /hubLifecycle is required/);
+});
 function shippedSidebarScript(extraConfig = {}) {
   return siblingSidebarScript(JSON.stringify({ url: 'http://lavish.test/hub-proxy/test', capability: 'c'.repeat(64), id: 'doc', ...extraConfig }));
 }
@@ -29,7 +34,7 @@ async function sidebarPage(browser, { hidden = false, identity = false } = {}) {
   // itself never leaves the document view. Like a real fetch, a parked or hung
   // request rejects when its signal aborts.
   const stub = `<script>globalThis.__hidden = ${hidden}; Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => globalThis.__hidden ? 'hidden' : 'visible' }); globalThis.confirmDraftNavigation = async () => true; globalThis.__status = 0; globalThis.__title = ${identity ? "'Original'" : "undefined"}; globalThis.lavish = { setDocumentMeta: value => { globalThis.__metaTitle = value.title; } }; globalThis.__hold = false; globalThis.__hang = false; globalThis.__fail = false; globalThis.__failNavigate = false; globalThis.__aborted = 0; globalThis.__parked = []; globalThis.__release = () => { globalThis.__hold = false; for (const resolve of globalThis.__parked.splice(0)) resolve(); }; const aborted = signal => new Promise((resolve, reject) => { const rejectAborted = () => { globalThis.__aborted++; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }; if (signal?.aborted) return rejectAborted(); signal?.addEventListener('abort', rejectAborted, { once: true }); }); globalThis.fetch = async (_url, options) => { const { operation } = JSON.parse(options.body); if (operation === 'navigate' && globalThis.__failNavigate) return { ok: false, status: 500, json: async () => ({}) }; if (operation === 'navigate' && globalThis.__hangNavigate) { globalThis.__hangNavigate = false; await aborted(options.signal); } if (operation === 'status') { globalThis.__status++; if (globalThis.__fail) { globalThis.__fail = false; return { ok: false, status: 500, json: async () => ({}) }; } if (globalThis.__hold) await new Promise(resolve => globalThis.__parked.push(resolve)); if (globalThis.__hang) await aborted(options.signal); } const result = operation === 'status' ? { available: true, selected: 'doc', title: globalThis.__title } : operation === 'documents' ? { documents: [{ id: 'doc', title: 'Document', source: 'doc.md' }] } : {}; return { ok: true, json: async () => ({ result }) }; };</script>`;
-  await page.setContent(`${sidebar}${stub}<script>${script}</script>`);
+  await page.setContent(`${sidebar}${stub}<script>${hubLifecycle}</script><script>${script}</script>`);
   return page;
 }
 
@@ -45,7 +50,7 @@ async function updatePage(browser, controls = '<label>Draft <input id="draft" va
   await page.route('http://lavish.test/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Reloaded</title>' }));
   await page.goto('http://lavish.test/published.html');
   const config = JSON.stringify({ url: 'http://lavish.test/hub-proxy/test', capability: 'c'.repeat(64), id: 'doc', version: 'v1', workspaceName: 'workspace', repoName: 'repo' });
-  const navigation = renderSiblingNavigation({ destinations: [{ id: 'doc', title: 'Document', href: 'published.html' }], doc: { id: 'doc' }, identity: {}, repoName: 'repo', workspaceName: 'workspace', reviewedScope: '', confirmNavigation: 'globalThis.confirmDraftNavigation = async () => true;', navConfig: config });
+  const navigation = renderSiblingNavigation({ destinations: [{ id: 'doc', title: 'Document', href: 'published.html' }], doc: { id: 'doc' }, identity: {}, repoName: 'repo', workspaceName: 'workspace', reviewedScope: '', confirmNavigation: 'globalThis.confirmDraftNavigation = async () => true;', hubLifecycle, navConfig: config });
   const stub = `<script>${noNavigationApi ? "Object.defineProperty(window, 'navigation', { value: undefined });" : ''}globalThis.__doc={id:'doc',title:'Document',source:'doc.html',sibling:'published.html',version:'v1'};globalThis.__selected='doc';globalThis.__revision=1;globalThis.__polls=0;globalThis.fetch=async (_url,options)=>({ok:true,json:async()=>({result:JSON.parse(options.body).operation==='status'?(globalThis.__polls++,{selected:globalThis.__selected,selectionRevision:globalThis.__revision}):JSON.parse(options.body).operation==='documents'?{documents:[globalThis.__doc]}:{}})});</script>`;
   await page.setContent(`<!doctype html><html lang="en" data-theme="orangebox"><head><title>Document</title><style>${themeCss}</style></head><body>${stub}${navigation}<main>${controls}</main></body></html>`);
   return page;
@@ -210,7 +215,7 @@ test('published HTML sidebar defers reload while navigation is in flight or fail
 test('published HTML queues URL changes during departure and replays them if it stays', { timeout: 30000 }, async () => {
   const page = await browser.newPage();
   const script = shippedSidebarScript();
-  const content = `<base href="http://lavish.test/"><div id="lavish-hub-sidebar"><nav><a href="hub.html" data-hub-id="tasks">Tasks</a></nav><div role="status"></div></div><div id="lavish-hub-toast" hidden></div><script>globalThis.updates=[]; globalThis.navigations=[]; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'doc', hash: '#back' } })); globalThis.leavingEventDelivered=true; }}; globalThis.fetch=async (_url, options) => { const {operation,id}=JSON.parse(options.body); if(operation==='navigate') navigations.push(id); return {ok:true,json:async()=>({result:operation==='status'?{selected:'doc'}:operation==='documents'?{documents:[]}: {}})}; };</script><script>${script}</script>`;
+  const content = `<base href="http://lavish.test/"><div id="lavish-hub-sidebar"><nav><a href="hub.html" data-hub-id="tasks">Tasks</a></nav><div role="status"></div></div><div id="lavish-hub-toast" hidden></div><script>globalThis.updates=[]; globalThis.navigations=[]; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'doc', hash: '#back' } })); globalThis.leavingEventDelivered=true; }}; globalThis.fetch=async (_url, options) => { const {operation,id}=JSON.parse(options.body); if(operation==='navigate') navigations.push(id); return {ok:true,json:async()=>({result:operation==='status'?{selected:'doc'}:operation==='documents'?{documents:[]}: {}})}; };</script><script>${hubLifecycle}</script><script>${script}</script>`;
   await page.route('http://lavish.test/**', route => route.fulfill({ contentType: 'text/html', body: route.request().url().endsWith('/published.html') ? content : '<iframe id="published-frame" src="/published.html"></iframe>' }));
   await page.goto('http://lavish.test/');
   const frame = page.frameLocator('#published-frame');

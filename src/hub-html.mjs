@@ -5,9 +5,9 @@ const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<
 
 function siblingSidebarClient(c) {
   c.url = new URL(c.url, location.href).href;
-  const cut = (text, limit) => { let out = ''; for (const ch of text) { if (out.length + ch.length > limit) break; out += ch; } return out; };
+  const { formatTabTitle, applyNavBadge, createLeaveGuard } = globalThis.lavishHubLifecycle;
   const setTabTitle = () => {
-    const title = cut(c.sessionTitle || c.repoName || c.workspaceName || '', 120);
+    const title = formatTabTitle('', c.sessionTitle || c.repoName || c.workspaceName || '');
     document.title = title;
     globalThis.lavish?.setDocumentMeta?.({ title });
   };
@@ -41,9 +41,9 @@ function siblingSidebarClient(c) {
     const hash = a.getAttribute('href'); e.preventDefault(); currentHash = hash;
     replaceFrameHash(hash); syncUrl({ view: c.id, hash, mode: 'push' }); scrollToFragment(hash);
   });
-  let navigating = false, dirty = false, leaving = false, edits = 0, navGeneration = 0;
-  let paused = false, polling = false, timer, leaveTimer, readController, readTimer;
-  let navigationUncertain = false, lastSelectionRevision = null, notificationBaseline = false, toastTimer;
+  let navigating = false, dirty = false, edits = 0, navGeneration = 0;
+  let paused = false, polling = false, timer, readController, readTimer;
+  let lastSelectionRevision = null, notificationBaseline = false, toastTimer;
   const seenDocs = new Map();
   let warmed = false, catchup = false, acknowledged = false, ackPending = false;
   let pendingUpdate = null, flashedVersion = '', flashTimer, lavishRetryTimer, lastLavishInputAt = 0;
@@ -71,7 +71,7 @@ function siblingSidebarClient(c) {
       seenDocs.set(doc.id, { version: doc.version });
     }
     const selectionTarget = state.selectionTarget ?? state.selected;
-    if (notificationBaseline && !notice && !leaving && state.selectionRevision > lastSelectionRevision && selectionTarget && selectionTarget !== c.id) {
+    if (notificationBaseline && !notice && !leaveGuard.isLeaving() && state.selectionRevision > lastSelectionRevision && selectionTarget && selectionTarget !== c.id) {
       const title = ({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' })[selectionTarget] || list.find(doc => doc.id === selectionTarget)?.title || selectionTarget;
       notice = { id: selectionTarget, label: 'Selected: ' + title };
     }
@@ -81,34 +81,21 @@ function siblingSidebarClient(c) {
   }
   function pause() { paused = true; clearTimeout(timer); readController?.abort(); }
   function resume() {
-    clearTimeout(leaveTimer); leaving = false;
     if (!paused) return;
     paused = false; nav.removeAttribute('aria-busy');
-    if (!feedback.hasAttribute('data-error')) feedback.textContent = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : '';
+    if (!feedback.hasAttribute('data-error')) feedback.textContent = leaveGuard.isUncertain() ? 'Navigation may still be in progress; select a destination to continue' : '';
     if (!polling) timer = setTimeout(refresh, 0);
   }
-  function leave(url) {
-    pause(); leaving = true;
-    const useNavigateFrame = Boolean(globalThis.lavish?.navigateFrame && window.self !== window.top);
-    if (!window.navigation || useNavigateFrame) leaveTimer = setTimeout(() => {
-      leaving = false; navigationUncertain = true; resume();
-      if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
-    }, 1000);
-    if (useNavigateFrame) globalThis.lavish.navigateFrame(url);
-    else location.replace(url);
-  }
+  const leaveGuard = createLeaveGuard({
+    isDirty: () => { syncDirty(); return dirty; }, onPause: pause,
+    onResume: () => { resume(); if (!navigating && queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); } },
+    onStatus: () => { if (leaveGuard.isCancelled()) { feedback.dataset.error = ''; feedback.textContent = 'Navigation cancelled. Select a destination to try again.'; } },
+  });
   function applyUpdate(update) {
-    if (update.samePage) {
-      pause(); leaving = true;
-      if (!window.navigation) leaveTimer = setTimeout(() => {
-        navigationUncertain = true; resume();
-        if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; handleUrlChange(next); }
-      }, 1000);
-      location.reload();
-    } else leave(update.dest);
+    if (update.samePage) leaveGuard.reload(); else leaveGuard.leave(update.dest);
   }
   const docUrl = (doc, id = doc?.id) => new URL(doc?.source?.toLowerCase().endsWith('.html') ? doc.sibling : 'hub.html?__lavish_hub_view=' + encodeURIComponent(id), location.href);
-  const canAutoReload = generation => (generation === undefined || generation === navGeneration) && !navigating && !leaving && !navigationUncertain && !feedback.hasAttribute('data-error');
+  const canAutoReload = generation => (generation === undefined || generation === navGeneration) && !navigating && !leaveGuard.isLeaving() && !leaveGuard.isUncertain() && !feedback.hasAttribute('data-error');
   function maybeApplyPendingUpdate(generation) {
     if (!pendingUpdate || dirty || !canAutoReload(generation)) return false;
     if (Date.now() - lastLavishInputAt < 250) {
@@ -117,13 +104,6 @@ function siblingSidebarClient(c) {
     }
     applyUpdate(pendingUpdate); return true;
   }
-  window.navigation?.addEventListener('navigate', e => {
-    if (leaving) e.signal.addEventListener('abort', () => {
-      navigationUncertain = false; feedback.dataset.error = '';
-      feedback.textContent = 'Navigation cancelled. Select a destination to try again.'; resume();
-    }, { once: true });
-  });
-  window.addEventListener('pageshow', e => { if (e.persisted) { navigationUncertain = false; resume(); } });
   const isAuthoredTarget = target => target instanceof Element && !target.closest('[data-lavish-action],[data-lavish-ui]');
   document.addEventListener('beforeinput', e => {
     if (!e.isTrusted || !isAuthoredTarget(e.target)) return;
@@ -171,11 +151,10 @@ function siblingSidebarClient(c) {
     if (isAuthoredTarget(e.target)) { trackControl(e.target); recomputeDirty(); if (dirty) edits++; }
   }, true);
   document.addEventListener('reset', e => { if (isAuthoredTarget(e.target)) setTimeout(recomputeDirty, 0); }, true);
-  window.addEventListener('beforeunload', e => { syncDirty(); if (dirty && !leaving) { e.preventDefault(); e.returnValue = ''; } });
   const action = async (operation, body = {}, signal) => {
     const response = await fetch(c.url + '/action', { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': c.capability }, body: JSON.stringify({ ...body, operation }), ...(signal ? { signal } : {}) });
     const data = await response.json().catch(() => ({}));
-    if (response.status === 403 && data.error === 'Unauthorized' && !dirty && !leaving && performance.now() > 1e4) { leaving = true; pause(); location.reload(); }
+    leaveGuard.handleUnauthorized(response, data);
     if (!response.ok) throw Error(data.error || 'Hub action failed');
     return data.result;
   };
@@ -188,24 +167,21 @@ function siblingSidebarClient(c) {
   };
   if (readyToAck()) acknowledgeCurrent(); else document.addEventListener('DOMContentLoaded', acknowledgeCurrent, { once: true });
   async function navigateTo(id, targetUrl, labelText, fromPopstate = false) {
-    if (navigating || leaving) return;
-    syncDirty(); navigating = true; pause(); navGeneration++;
+    if (navigating || leaveGuard.isLeaving()) return;
+    leaveGuard.clearCancelled(); syncDirty(); navigating = true; pause(); navGeneration++;
     feedback.removeAttribute('data-error'); feedback.textContent = 'Opening ' + labelText + '…'; nav.setAttribute('aria-busy', 'true');
     try {
-      let approved = false, approvedEdits = edits;
-      if (dirty) { approved = await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'); if (!approved) return; }
-      await action('navigate', { id }, AbortSignal.timeout(10000));
-      syncDirty();
-      if ((!approved || approvedEdits !== edits) && dirty && !(await globalThis.confirmDraftNavigation('Leaving discards unsaved document edits.'))) return;
+      const approved = await leaveGuard.confirmTwice('Leaving discards unsaved document edits.', () => edits, () => action('navigate', { id }, AbortSignal.timeout(10000)));
+      if (!approved) return;
       if (queuedUrlChange) return;
-      navigationUncertain = false;
+      leaveGuard.clearUncertain();
       if (!fromPopstate) syncUrl({ view: id, hash: '', mode: 'push' });
-      leave(targetUrl);
+      leaveGuard.leave(targetUrl);
     } catch { feedback.dataset.error = ''; feedback.textContent = 'Could not open ' + labelText + '. Select it again to retry.'; }
     finally {
       navigating = false;
-      if (!leaving) {
-        resume(); nav.removeAttribute('aria-busy'); if (!feedback.hasAttribute('data-error')) feedback.textContent = navigationUncertain ? 'Navigation may still be in progress; select a destination to continue' : '';
+      if (!leaveGuard.isLeaving()) {
+        resume(); nav.removeAttribute('aria-busy'); if (!feedback.hasAttribute('data-error')) feedback.textContent = leaveGuard.isUncertain() ? 'Navigation may still be in progress; select a destination to continue' : '';
         if (queuedUrlChange) { const next = queuedUrlChange; queuedUrlChange = null; if (!next.view || next.view === c.id) action('navigate', { id: c.id }, AbortSignal.timeout(10000)).catch(() => {}); handleUrlChange(next); }
         else if (fromPopstate) syncUrl({ view: c.id, hash: currentHash, mode: 'push' });
       }
@@ -243,14 +219,14 @@ function siblingSidebarClient(c) {
   });
   nav.addEventListener('click', e => {
     const reload = e.target.closest('button.nav-reload');
-    if (reload && nav.contains(reload)) { e.preventDefault(); if (!navigating && !leaving && pendingUpdate) applyUpdate(pendingUpdate); return; }
+    if (reload && nav.contains(reload)) { e.preventDefault(); if (!navigating && !leaveGuard.isLeaving() && pendingUpdate) applyUpdate(pendingUpdate); return; }
     const a = e.target.closest('a[data-hub-id]');
     if (!a || !nav.contains(a)) return;
     e.preventDefault();
     navigateTo(a.dataset.hubId, a.href, a.querySelector('.nav-label')?.textContent || a.textContent);
   });
   function handleUrlChange({ view, hash = '' }) {
-    if (leaving) { queuedUrlChange = { view, hash }; return; }
+    if (leaveGuard.isLeaving()) { queuedUrlChange = { view, hash }; return; }
     if (navigating) { queuedUrlChange = { view, hash }; return; }
     if (!view || view === c.id) { syncUrl({ view: c.id, hash, mode: 'replace' }); currentHash = hash; replaceFrameHash(hash); scrollToFragment(hash); return; }
     const a = [...nav.querySelectorAll('a[data-hub-id]')].find(link => link.dataset.hubId === view);
@@ -303,13 +279,7 @@ function siblingSidebarClient(c) {
         if (!label) { label = document.createElement('span'); label.className = 'nav-label'; a.replaceChildren(label); }
         if (label.textContent !== item.title) label.textContent = item.title;
         const unseen = item.unseen && !(item.id === c.id && pendingUpdate);
-        let badge = a.querySelector('.nav-badge');
-        if (unseen) {
-          if (!badge) { badge = document.createElement('span'); badge.setAttribute('aria-hidden', 'true'); a.append(badge); }
-          badge.className = 'nav-badge nav-badge-new'; badge.textContent = 'New';
-          a.title = 'New publication'; a.setAttribute('aria-describedby', 'lavish-hub-desc-new');
-          a.dataset.unseen = 'true';
-        } else { badge?.remove(); a.removeAttribute('title'); a.removeAttribute('aria-describedby'); delete a.dataset.unseen; }
+        applyNavBadge(a, unseen ? 'new' : '', 'lavish-hub-desc');
         const href = docUrl(item).href;
         if (a.href !== href) a.href = href;
         if (item.id === c.id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -348,7 +318,8 @@ export function siblingSidebarScript(navConfigJson) {
   return `(${siblingSidebarClient.toString()})(${navConfigJson});`;
 }
 
-export function renderSiblingNavigation({ destinations, doc, sessionTitle = '', identity, repoName, workspaceName, reviewedScope, confirmNavigation, navConfig }) {
+export function renderSiblingNavigation({ destinations, doc, sessionTitle = '', identity, repoName, workspaceName, reviewedScope, confirmNavigation, hubLifecycle, navConfig }) {
+  if (!hubLifecycle) throw new Error('hubLifecycle is required');
   const items = destinations.map(item => {
     return `<div class="nav-row"${item.id === doc.id ? ' data-current' : ''}><a href="${escapeHtml(item.href)}" data-hub-id="${escapeHtml(item.id)}"${item.id === doc.id ? ' aria-current="page"' : ''}${item.unseen ? ' title="New publication" aria-describedby="lavish-hub-desc-new" data-unseen="true"' : ''}><span class="nav-label">${escapeHtml(item.title)}</span>${item.unseen ? '<span class="nav-badge nav-badge-new" aria-hidden="true">New</span>' : ''}</a></div>`;
   }).join('');
@@ -380,7 +351,7 @@ html { padding-left: 200px; box-sizing: border-box; }
 #lavish-hub-toast[hidden] { display: none; }
 #lavish-hub-toast span { min-width: 0; overflow-wrap: anywhere; }
 #lavish-hub-toast button { flex: none; border: 1px solid var(--ob-border); border-radius: 4px; padding: 4px 8px; background: var(--ob-accent, var(--ob-orange)); color: var(--ob-on-accent); font: inherit; cursor: pointer; }
-</style><div id="lavish-hub-toast" data-lavish-action role="status" aria-live="polite" hidden></div><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${siblingSidebarScript(navConfig)}</script>`;
+</style><div id="lavish-hub-toast" data-lavish-action role="status" aria-live="polite" hidden></div><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${hubLifecycle}</script><script>${siblingSidebarScript(navConfig)}</script>`;
 }
 
 // Edit only parser-located tags, leaving authored scripts, doctype and formatting intact.

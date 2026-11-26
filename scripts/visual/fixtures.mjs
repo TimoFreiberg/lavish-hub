@@ -31,10 +31,11 @@ export async function scratchDiff(dir) {
 export async function makePage(variant, dir, dist, diff, { portable = false } = {}) {
   const file = path.join(dir, 'page', 'index.html'); await mkdir(path.dirname(file), { recursive: true });
   if (variant.kind === 'hub') {
-    const [script, style, diffScript, diffStyle, markdown, documentStyle] = await Promise.all([
+    const [script, style, diffScript, diffStyle, markdown, documentStyle, confirmNavigation, hubLifecycle] = await Promise.all([
       readFile(path.join(root, 'web/hub-app.mjs'), 'utf8'), readFile(path.join(root, 'web/hub.css'), 'utf8'),
       readFile(path.join(dist, 'diff-app.js'), 'utf8'), readFile(path.join(dist, 'diff.css'), 'utf8'),
       readFile(path.join(dist, 'hub-markdown.js'), 'utf8'), readFile(path.join(dist, 'document.css'), 'utf8'),
+      readFile(path.join(root, 'web/confirm-navigation.js'), 'utf8'), readFile(path.join(root, 'web/hub-lifecycle.js'), 'utf8'),
     ]);
     const name = variant.name;
     const selected = ['changes', 'tasks', 'markdown', 'html'].includes(name) ? name : 'commits';
@@ -51,9 +52,10 @@ export async function makePage(variant, dir, dist, diff, { portable = false } = 
       writeFile(path.join(path.dirname(file), 'hub.css'), `${themeCss}\n${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }`),
       writeFile(path.join(path.dirname(file), 'diff.js'), diffScript), writeFile(path.join(path.dirname(file), 'markdown.js'), markdown),
       writeFile(path.join(path.dirname(file), 'hub.js'), script),
+      writeFile(path.join(path.dirname(file), 'confirm-navigation.js'), confirmNavigation), writeFile(path.join(path.dirname(file), 'hub-lifecycle.js'), hubLifecycle),
     ]);
     const styles = portable ? '<link rel="stylesheet" href="hub.css">' : `<style>${themeCss}\n${style}\n@scope (.hub-diff) { ${diffStyle} } @scope (.hub-markdown) { ${documentStyle} }</style>`;
-    const scripts = portable ? '<script src="../../assets/preview.js"></script><script src="diff.js"></script><script src="markdown.js"></script><script type="module" src="hub.js"></script>' : `<script>${safe(diffScript)}</script><script>${safe(markdown)}</script><script type="module">${safe(script)}</script>`;
+    const scripts = portable ? '<script src="../../assets/preview.js"></script><script src="diff.js"></script><script src="markdown.js"></script><script src="confirm-navigation.js"></script><script src="hub-lifecycle.js"></script><script type="module" src="hub.js"></script>' : `<script>${safe(diffScript)}</script><script>${safe(markdown)}</script><script>${safe(confirmNavigation)}</script><script>${safe(hubLifecycle)}</script><script type="module">${safe(script)}</script>`;
     await writeFile(file, `<!doctype html><html lang="en" data-theme="orangebox"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace hub fixture</title>${styles}</head><body><div id="app"></div><script>${safe(bootstrap)}</script>${scripts}</body></html>`);
   } else throw new Error(`Unknown visual fixture: ${variant.kind}`);
   return { file };

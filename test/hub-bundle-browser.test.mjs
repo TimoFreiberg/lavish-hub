@@ -9,7 +9,7 @@ import { buildSelfContainedHtml } from '../vendor/lavish/src/export-bundle.js';
 // Renderer bundles load over the network, so their cancellation has to be tested
 // against a real socket: a removed element leaves its request running, and only a
 // server that keeps the response open can tell an abort from a late answer.
-const app = await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8');
+const app = (await readFile(new URL('../web/hub-lifecycle.js', import.meta.url), 'utf8')) + '\n' + (await readFile(new URL('../web/hub-app.mjs', import.meta.url), 'utf8'));
 const markdownBundle = 'globalThis.hubMarkdownRenderer = () => () => {};';
 const diffBundle = 'globalThis.mountLavishDiff = () => ({ hide() {}, update() {} });';
 
