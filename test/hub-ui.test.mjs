@@ -111,7 +111,7 @@ test('sidebar uses workspace name until a session title is set', { timeout: 3000
   let title = '';
   const transport = await createHubTransport({
     status: () => ({ available: true, selected: 'diff', title }), documents: () => ({ documents: [] }),
-    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '', patch: '', commits: [] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), patch: '', commits: [] }),
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
@@ -171,7 +171,7 @@ test('hub bounds a hung diff file read, keeps the patch, and retries the expansi
   const files = { oldFile: { name: 'hung.txt', contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name: 'hung.txt', contents: 'one\ntwo\nthree\nfour\nnew\n' } };
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
-    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff --git a/hung.txt b/hung.txt\n--- a/hung.txt\n+++ b/hung.txt\n@@ -5 +5 @@\n-old\n+new\n', commits: [] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), patch: 'diff --git a/hung.txt b/hung.txt\n--- a/hung.txt\n+++ b/hung.txt\n@@ -5 +5 @@\n-old\n+new\n', commits: [] }),
     // The owner never answers the first read, so only the client-side bound can
     // end it. The second attempt answers, so a retry can still succeed.
     diffFiles: () => { reads += 1; return reads === 1 ? new Promise(() => {}) : files; },
@@ -202,7 +202,7 @@ test('hub gives up on a navigation the owner never answers and lets the next one
   const navigations = [];
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }),
-    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '', patch: '', commits: [] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), patch: '', commits: [] }),
     // A request lost in transit looks like this to the page: it is never answered.
     navigate: ({ id }) => { navigations.push(id); return navigations.length === 1 ? new Promise(() => {}) : { selected: id }; },
   });
@@ -222,7 +222,7 @@ test('hub gives up on a navigation the owner never answers and lets the next one
 });
 
 test('hub reloads itself when a restarted owner rejects its access token', { timeout: 40000 }, async t => {
-  const transport = await createHubTransport({ status: () => ({ available: true }), documents: () => ({ documents: [] }), snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '', patch: '', commits: [] }) });
+  const transport = await createHubTransport({ status: () => ({ available: true }), documents: () => ({ documents: [] }), snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), patch: '', commits: [] }) });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_HUB_LANGUAGES: '[]' } })).outputFiles[0].text;
@@ -242,7 +242,7 @@ test('hub keeps an unavailable file expansion notice until that file expands', {
   const patch = ['a.txt', 'b.txt'].map(name => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -5 +5 @@\n-old\n+new\n`).join('');
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
-    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '2 files changed', patch, commits: [] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), patch, commits: [] }),
     diffFiles: ({ fileIndex }) => { reads.push(fileIndex); if (fileIndex === 1 && bUnavailable) throw new Error('unavailable'); return fileFor(fileIndex === 0 ? 'a.txt' : 'b.txt'); },
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
@@ -282,7 +282,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   const patch = 'diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -5 +5 @@\n-old\n+new\ndiff --git a/unavailable.txt b/unavailable.txt\n--- a/unavailable.txt\n+++ b/unavailable.txt\n@@ -5 +5 @@\n-old\n+new\n';
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
-    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch, commits: [commit] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), patch, commits: [commit] }),
     diffRange: () => ({ patch, version: 'range', rangeKey: 'range' }),
     diffFiles: body => { assert.equal(body.operationId, 'd'.repeat(128)); if (body.fileIndex === 1) throw new Error('unavailable'); assert.equal(body.fileIndex, 0); return { oldFile: { name: 'example.txt', contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name: 'example.txt', contents: 'one\ntwo\nthree\nfour\nnew\n' } }; },
     describe: () => ({ status: 'conflict', reason: 'stale', current: [{ description: 'External\n' }] }),
@@ -302,7 +302,6 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await description.waitFor();
   assert.equal(await description.evaluate(node => document.activeElement === node), true);
   await description.fill('My draft');
-  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   await page.getByRole('button', { name: 'Expand example.txt' }).click();
   const zed = page.locator('.file-header a').first();
   assert.equal(await zed.textContent(), 'Open in Zed');
@@ -337,7 +336,6 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   assert.match(expanded[0], /4: four/);
   assert.equal(expanded[1].target.start, 4);
   assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).count(), 0);
-  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   assert.equal(await description.inputValue(), 'My draft');
   await page.getByRole('button', { name: 'Save description' }).click();
   await page.getByRole('alert').filter({ hasText: 'Conflict: stale' }).waitFor();

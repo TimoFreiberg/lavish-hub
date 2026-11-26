@@ -178,7 +178,7 @@ function editButton(label, action) {
 }
 async function action(operation, body = {}) {
   let response;
-  try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument', 'diffFiles', 'navigate', 'acknowledge', 'setDocumentCollapsed'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
+  try { response = await fetch(`${config.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': config.capability }, body: JSON.stringify({ ...body, operation }), ...(['status', 'documents', 'snapshot', 'readDocument', 'diffFiles', 'diffRange', 'navigate', 'acknowledge', 'setDocumentCollapsed'].includes(operation) ? { signal: AbortSignal.timeout(10000) } : {}) }); }
   catch { throw new Error('Hub actions are unreachable. Your edits remain on this page. Local actions require the running hub owner.'); }
   const data = await response.json();
   leaveGuard.handleUnauthorized(response, data);
@@ -431,7 +431,7 @@ async function renderViewKeepingFocus() {
 async function refresh(force = false) {
   // A forced snapshot outlives the call that asked for it: the button and a save both
   // mean "the next snapshot must be uncached", and only the request below spends it.
-  if (force) snapshotForce = true;
+  if (force) { snapshotForce = true; invalidateRange(); }
   // The first refresh runs even in a hidden tab so a page opened in the background has
   // content when it is shown, and only that one: it is spent whether or not it succeeds,
   // because a page that never rendered has no rendered state to tell the warm attempt
@@ -574,7 +574,7 @@ async function refresh(force = false) {
     // that settles back onto unchanged content must drop the refreshing notice. A
     // snapshot kept across a pause compares equal to its own content, so the flag it
     // left behind is what tells the resumed view to render it.
-    if ((initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldSelectedDoc !== currentSelectedDoc || documentChanged || (snapshotUnrendered && needsSnapshot(selected)) || (needsSnapshot(selected) && ((oldSnapshot !== snapshot && snapshotContent(oldSnapshot) !== snapshotContent(snapshot)) || snapshotWasLoading !== snapshotLoading()))) {
+    if ((forced && request && selected === 'diff') || (initialRender && needsSnapshot(selected)) || !rendered || oldSelected !== selected || oldSelectedDoc !== currentSelectedDoc || documentChanged || (snapshotUnrendered && needsSnapshot(selected)) || (needsSnapshot(selected) && ((oldSnapshot !== snapshot && snapshotContent(oldSnapshot) !== snapshotContent(snapshot)) || snapshotWasLoading !== snapshotLoading()))) {
       const generation = await renderViewKeepingFocus();
       snapshotUnrendered = false;
       if (generation === null || documentNavigation !== navigationRevision) return;
@@ -617,7 +617,7 @@ async function navigateDeepLink(target) {
   pendingDeepLinkNotice = '';
   renderDeepLinkNotice();
   pendingDeepLink = target.file || target.change ? target : null;
-  if (target.view === 'diff') { range = null; rangeAnchor = null; invalidateRange(); }
+  if (target.view === 'diff') { manualRange(); range = null; rangeAnchor = null; }
   if (selected === target.view && !snapshotLoading()) await renderViewKeepingFocus();
   else await select(target.view, { deepLink: true });
 }
@@ -671,29 +671,33 @@ function selectedIndices() {
   return [Math.min(start, end), Math.max(start, end)];
 }
 function commitDraft(commit) {
-  const state = draft(`commit:${commit.changeId}`, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '', editing: false });
+  const state = draft(`commit:${commit.changeId}`, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '' });
   if (state.awaitingSnapshot && (commit.commitId === state.awaitingSnapshot.commitId || snapshotApplied > state.awaitingSnapshot.after)) state.awaitingSnapshot = null;
   if (state.text === state.original && !state.saving && !state.message && !state.awaitingSnapshot) Object.assign(state, { text: commit.description, original: commit.description, commitId: commit.commitId });
   return state;
 }
 function closeCommitEditor() {
-  if (editingChange) { const state = drafts.get(`commit:${editingChange}`); if (state) state.editing = false; }
+  const closedChange = editingChange;
   editingChange = null; drawer.hidden = true; drawer.replaceChildren();
   if (savedRangeBeforeEdit) { range = savedRangeBeforeEdit.range; rangeAnchor = savedRangeBeforeEdit.anchor; }
   savedRangeBeforeEdit = null; invalidateRange(); updateReview();
+  const row = rows.get(closedChange), edit = row?.querySelector('.commit-edit');
+  (edit && !edit.hidden && !edit.disabled ? edit : row?.querySelector('.rail-pick'))?.focus({ preventScroll: true });
 }
 function openCommitEditor(changeId) {
   const commit = snapshot.commits.find(item => item.changeId === changeId);
   if (!commit || commit.immutable || commit.divergent) return;
   if (editingChange && drafts.get(`commit:${editingChange}`)?.saving) return;
   if (!editingChange) savedRangeBeforeEdit = { range: range && { ...range }, anchor: rangeAnchor };
-  else { const previous = drafts.get(`commit:${editingChange}`); if (previous) previous.editing = false; }
   editingChange = changeId; range = { start: changeId, end: changeId }; rangeAnchor = changeId;
-  commitDraft(commit).editing = true; invalidateRange(); renderDrawer(true); updateReview();
+  commitDraft(commit); invalidateRange(); renderDrawer(true); updateReview();
 }
 function renderDrawer(focus = false) {
   const commit = snapshot.commits.find(item => item.changeId === editingChange);
-  if (!commit) { drawer.hidden = true; return; }
+  if (!commit) {
+    if (!drafts.get(`commit:${editingChange}`)?.saving) { editingChange = null; savedRangeBeforeEdit = null; drawer.hidden = true; drawer.replaceChildren(); }
+    return;
+  }
   const existing = drafts.get(`commit:${commit.changeId}`), oldText = existing?.text;
   const state = commitDraft(commit);
   let area = drawer.querySelector('textarea');
@@ -786,7 +790,9 @@ function updateReview() {
     request = { from: previous?.commitId || snapshot.base, to: top.commitId };
   }
   rangeText.textContent = label;
-  const data = { root: config.workspace, range: label, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, snapshotVersion: snapshot.version, kind: 'jj', to: snapshot.head };
+  const revision = request?.rev || request?.to || snapshot.head;
+  const pinnedRange = request?.rev || (request ? `${request.from} → ${request.to}` : `${snapshot.base} → ${snapshot.head}`);
+  const data = { root: config.workspace, range: pinnedRange, rangeSource: 'workspace snapshot', revision, operationId: snapshot.operationId, snapshotVersion: snapshot.version, kind: 'jj', to: revision };
   if (!request) {
     if (requestedRange) invalidateRange();
     rangeStatus.textContent = snapshotLoading() ? 'Refreshing repository snapshot…' : '';
@@ -798,7 +804,7 @@ function updateReview() {
       rangeStatus.textContent = 'Loading diff…';
       action('diffRange', { operationId: snapshot.operationId, ...request }).then(result => {
         if (requestId !== rangeRequestId || selected !== 'diff') return;
-        rangeStatus.textContent = ''; diffView.update({ ...data, patch: result.patch, snapshotVersion: result.version, rangeKey: result.rangeKey, rangeLabel: label });
+        rangeStatus.textContent = ''; diffView.update({ ...data, patch: result.patch, snapshotVersion: result.version, rangeKey: result.rangeKey });
       }).catch(error => { if (requestId === rangeRequestId && selected === 'diff') { rangeError = error.message; rangeStatus.textContent = rangeError; } });
     } else if (rangeError) rangeStatus.textContent = rangeError;
   }
@@ -810,24 +816,24 @@ function updateReview() {
       const matches = exact.length ? exact : commits.filter(commit => commit.changeId.toLowerCase().startsWith(key));
       if (matches.length === 1) {
         railPane.setCollapsed(false); const row = rows.get(matches[0].changeId);
-        if (row) { railScroll.scrollTop = Math.max(0, row.offsetTop - railScroll.offsetTop - (railScroll.clientHeight - row.offsetHeight) / 2); row.classList.add('deep-link-highlight'); setTimeout(() => row.classList.remove('deep-link-highlight'), 2500); }
+        if (row) { if (railScroll.scrollHeight <= railScroll.clientHeight) row.scrollIntoView({ block: 'nearest' }); else railScroll.scrollTop = Math.max(0, row.offsetTop - railScroll.offsetTop - (railScroll.clientHeight - row.offsetHeight) / 2); row.classList.add('deep-link-highlight'); setTimeout(() => row.classList.remove('deep-link-highlight'), 2500); }
       } else { pendingDeepLinkNotice = matches.length ? `Change prefix "${target.change}" is ambiguous (matches ${matches.map(commit => commit.changeId.slice(0, 12)).join(', ')}).` : `Commit "${target.change}" is not in the current snapshot.`; renderDeepLinkNotice(); }
     }
   }
 }
 let renderGeneration = 0;
-async function renderView(focusChangeId) {
-  const rendering = renderViewContent(focusChangeId); const generation = renderGeneration;
+async function renderView() {
+  const rendering = renderViewContent(); const generation = renderGeneration;
   await rendering;
   if (generation === renderGeneration && pendingHash !== null) scrollToFragment(pendingHash);
 }
-async function renderViewContent(focusChangeId) {
+async function renderViewContent() {
   const generation = ++renderGeneration;
   displayedDoc = null;
   const view = document.querySelector('#view');
   const id = selected;
   if (id === 'diff' && snapshot && reviewWorkspace.isConnected && diffView) {
-    rendered = true; updateReview(); return;
+    rendered = true; renderDeepLinkNotice(); updateReview(); return;
   }
   if (id !== 'diff' || !snapshot) { diffView?.hide(); invalidateRange(); }
   view.replaceChildren(); rendered = true;

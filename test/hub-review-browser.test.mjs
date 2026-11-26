@@ -13,16 +13,16 @@ const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, w
 const patch = name => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -5 +5 @@\n-old\n+new\n`;
 const fullRange = '--from fork_point(trunk() | @) --to @';
 
-async function fixture(t, { opaque = false } = {}) {
+async function fixture(t, { opaque = false, rangeHandler } = {}) {
   const commits = Array.from({ length: 24 }, (_, i) => ({ changeId: String.fromCharCode(97 + i).repeat(32), commitId: i.toString(16).padStart(40, '0'), description: i === 1 ? 'Subject without body' : `Subject ${i}\n\nBody ${i}`, isWorkingCopy: i === 0 }));
   const snapshot = { operationId: 'f'.repeat(128), version: 'v1', base: 'a'.repeat(40), head: 'b'.repeat(40), baseDisplay: 'fork_point(trunk() | @)', headDisplay: '@', commits, patch: patch('a.txt') + patch('b.txt') };
-  const calls = [], saves = [];
+  const calls = [], saves = [], expansions = [];
   let conflict = false;
   const transport = await createHubTransport({
-    status: () => ({ available: true, selected: 'diff' }), documents: () => ({ documents: [] }), snapshot: () => snapshot, navigate: () => ({}),
-    diffRange: request => { calls.push(request); return { patch: patch('a.txt') + patch('c.txt'), version: 'range-version', rangeKey: JSON.stringify(request) }; },
+    status: () => ({ available: true, selected: 'diff' }), documents: () => ({ documents: [] }), snapshot: () => structuredClone(snapshot), navigate: () => ({}),
+    diffRange: request => { calls.push(request); return rangeHandler ? rangeHandler(request) : { patch: patch('a.txt') + patch('c.txt'), version: 'range-version', rangeKey: JSON.stringify(request) }; },
     describe: request => { saves.push(request); return conflict ? { status: 'conflict', reason: 'stale', current: [{ description: 'External' }] } : { status: 'saved', current: { commitId: request.commitId, description: request.description } }; },
-    diffFiles: () => ({ oldFile: { name: 'a.txt', contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name: 'a.txt', contents: 'one\ntwo\nthree\nfour\nnew\n' } }),
+    diffFiles: request => { expansions.push(request); return { oldFile: { name: 'a.txt', contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name: 'a.txt', contents: 'one\ntwo\nthree\nfour\nnew\n' } }; },
   });
   t.after(() => transport.close());
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
@@ -31,14 +31,14 @@ async function fixture(t, { opaque = false } = {}) {
   page.setDefaultTimeout(5000);
   const config = JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' });
   const mockFetch = opaque ? `globalThis.fetch=async (_,init) => { const operation=JSON.parse(init.body).operation; const result=operation==='status' ? {available:true,selected:'diff'} : operation==='documents' ? {documents:[]} : operation==='snapshot' ? ${JSON.stringify(snapshot)} : {}; return {ok:true,json:async()=>({result})}; };` : '';
-  const html = `<style>${css} @scope (.hub-diff) { ${diffCss} }</style><div id="app"></div><script>globalThis.hubConfig=${config}; globalThis.lavishPreview=true; ${mockFetch}</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${lifecycle}</script><script type="module">${app}</script>`;
+  const html = `<style>${css} @scope (.hub-diff) { ${diffCss} }</style><div id="app"></div><script>globalThis.hubConfig=${config}; globalThis.lavishPreview=true; globalThis.queued=[]; globalThis.lavish={queuePromptAcknowledged:async (...args)=>{queued.push(args);return {status:'accepted'}},releaseQueueRequest:()=>{}}; ${mockFetch}</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${lifecycle}</script><script type="module">${app}</script>`;
   if (opaque) {
     await page.route('http://hub.test/**', route => route.fulfill({ contentType: 'text/html', body: html }));
     await page.setContent('<iframe sandbox="allow-scripts" src="http://hub.test/hub.html" style="width:1200px;height:800px"></iframe>');
   } else await page.setContent(html);
   const view = opaque ? page.frameLocator('iframe') : page;
   await view.locator('.rail-row').first().waitFor();
-  return { page, view, commits, snapshot, calls, saves, setConflict: value => { conflict = value; } };
+  return { page, view, commits, snapshot, calls, saves, expansions, setConflict: value => { conflict = value; } };
 }
 
 test('full_viewport_diff_layout', { timeout: 30000 }, async t => {
@@ -160,7 +160,14 @@ test('commit_editor_drawer_auto_narrow_restore_manual_override_and_conflict', { 
   await rows.nth(2).locator('.commit-edit').click();
   assert.equal(await page.locator('.review-range-text').textContent(), `-r ${commits[2].changeId.slice(0, 12)}`);
   const editor = page.getByRole('textbox', { name: `Description ${commits[2].changeId.slice(0, 12)}` });
+  const drawer = page.locator('.commit-editor-drawer');
+  assert.equal(await drawer.getByRole('button').count(), 2);
+  assert.equal(await drawer.getByRole('button', { name: /close/i }).count(), 0);
+  assert.equal(await drawer.locator('p:not(.save-error)').count(), 0);
+  const scrollBefore = await page.locator('.commit-rail-scroll').evaluate(node => node.scrollTop);
   await editor.fill('draft'); await editor.press('Escape');
+  assert.equal(await rows.nth(2).locator('.commit-edit').evaluate(node => document.activeElement === node), true);
+  assert.equal(await page.locator('.commit-rail-scroll').evaluate(node => node.scrollTop), scrollBefore);
   assert.equal(await page.locator('.review-range-text').textContent(), prior);
   await rows.nth(2).locator('.commit-edit').click();
   await page.getByRole('button', { name: 'All', exact: true }).click();
@@ -175,6 +182,78 @@ test('commit_editor_drawer_auto_narrow_restore_manual_override_and_conflict', { 
   setConflict(false); await page.getByRole('button', { name: 'Save description' }).click();
   await page.locator('.commit-editor-drawer').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('.review-range-text').textContent(), fullRange);
+});
+
+test('narrowed comment and expansion use the pinned range', { timeout: 30000 }, async t => {
+  const { page, commits, expansions } = await fixture(t);
+  await page.locator('.rail-row').nth(3).locator('.rail-pick').click();
+  await page.getByRole('button', { name: 'Expand c.txt' }).waitFor();
+  await page.getByRole('button', { name: 'Expand a.txt' }).click();
+  await page.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
+  await page.getByRole('button', { name: 'Add comment' }).click();
+  await page.getByPlaceholder('Write a comment').fill('Pinned comment');
+  await page.getByRole('button', { name: 'Queue comment' }).click();
+  const [prompt, options] = await page.evaluate(() => queued[0]);
+  assert.equal(options.target.revision, commits[3].commitId);
+  assert.ok(prompt.includes(`Revision range: ${commits[3].commitId}\n`));
+  await page.locator('.rail-row').nth(6).locator('.rail-pick').click({ modifiers: ['Shift'] });
+  await page.waitForFunction(() => document.querySelector('.review-range-status').textContent === '');
+  await page.locator('[data-expand-button]').first().click();
+  await page.getByText('four', { exact: true }).first().waitFor();
+  assert.deepEqual(JSON.parse(expansions.at(-1).rangeKey), { operation: 'diffRange', operationId: 'f'.repeat(128), from: commits[7].commitId, to: commits[3].commitId });
+  assert.equal(expansions.at(-1).version, 'range-version');
+});
+
+test('refresh retries a failed range at the same operation', { timeout: 30000 }, async t => {
+  let attempts = 0;
+  const { page } = await fixture(t, { rangeHandler: () => { if (++attempts === 1) throw new Error('range failed'); return { patch: patch('retry.txt'), version: 'retry', rangeKey: 'retry' }; } });
+  await page.locator('.rail-row').nth(3).locator('.rail-pick').click();
+  await page.getByText('range failed').waitFor();
+  await page.locator('#refresh').click();
+  await page.getByRole('button', { name: 'Expand retry.txt' }).waitFor();
+  assert.equal(attempts, 2);
+});
+
+test('stale range response cannot replace the newer selection', { timeout: 30000 }, async t => {
+  let release;
+  const { page, calls } = await fixture(t, { rangeHandler: request => request.rev.endsWith('3') ? new Promise(resolve => { release = () => resolve({ patch: patch('stale.txt'), version: 'old', rangeKey: 'old' }); }) : { patch: patch('fresh.txt'), version: 'new', rangeKey: 'new' } });
+  t.after(() => release?.());
+  await page.locator('.rail-row').nth(3).locator('.rail-pick').click();
+  await page.waitForFunction(() => document.querySelector('.review-range-status').textContent === 'Loading diff…');
+  await page.locator('.rail-row').nth(4).locator('.rail-pick').click();
+  await page.getByRole('button', { name: 'Expand fresh.txt' }).waitFor();
+  assert.equal(calls.length, 2);
+  release();
+  await page.waitForTimeout(300);
+  assert.equal(await page.getByRole('button', { name: 'Expand stale.txt' }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: 'Expand fresh.txt' }).count(), 1);
+});
+
+test('polling preserves a range until an endpoint disappears', { timeout: 30000 }, async t => {
+  const { page, snapshot, commits } = await fixture(t);
+  await page.locator('.rail-row').nth(3).locator('.rail-pick').click();
+  await page.locator('.rail-row').nth(6).locator('.rail-pick').click({ modifiers: ['Shift'] });
+  const label = await page.locator('.review-range-text').textContent();
+  snapshot.version = 'v2';
+  await page.waitForFunction(() => document.querySelectorAll('.rail-row').length === 24);
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('.review-range-status').textContent === '');
+  assert.equal(await page.locator('.review-range-text').textContent(), label);
+  snapshot.commits = snapshot.commits.filter(commit => commit.changeId !== commits[6].changeId);
+  snapshot.version = 'v3';
+  await page.waitForFunction(() => document.querySelectorAll('.rail-row').length === 23, null, { timeout: 7000 });
+  assert.equal(await page.locator('.review-range-text').textContent(), fullRange);
+});
+
+test('change links scroll a distant rail row into view', { timeout: 30000 }, async t => {
+  const { page, commits } = await fixture(t);
+  await page.evaluate(changeId => { const link = document.createElement('a'); link.href = `?view=diff&change=${changeId}`; link.textContent = 'Go to distant commit'; document.querySelector('.review-range-bar').append(link); }, commits[22].changeId);
+  const scroll = page.locator('.commit-rail-scroll');
+  assert.equal(await scroll.evaluate(node => node.scrollTop), 0);
+  await page.getByText('Go to distant commit').click();
+  await page.locator('.rail-row.deep-link-highlight').waitFor();
+  assert.ok(await scroll.evaluate(node => node.scrollTop) > 0);
+  assert.equal(await page.locator('.rail-row').nth(22).evaluate(row => { const a = row.getBoundingClientRect(), b = row.parentElement.getBoundingClientRect(); return a.top >= b.top && a.bottom <= b.bottom; }), true);
 });
 
 test('an invalid initial view falls back to diff', { timeout: 30000 }, async t => {

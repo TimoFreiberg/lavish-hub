@@ -159,7 +159,9 @@ test('diff_range_single_and_subrange_and_expansion', async t => {
   t.after(() => { process.env.PATH = search; });
   const jj = createHubJj(cwd), snapshot = await jj.snapshot();
   const { operationId, base, head } = snapshot;
-  const single = await jj.diffRange({ operationId, rev: head });
+  const [single, concurrent] = await Promise.all([jj.diffRange({ operationId, rev: head }), jj.diffRange({ operationId, rev: head })]);
+  assert.deepEqual(concurrent, single);
+  assert.deepEqual(await jj.diffRange({ operationId, rev: head }), single);
   assert.match(single.patch, /\+change 5/);
   assert.match(single.patch, /-change 4/);
   const expanded = await jj.diffFiles({ operationId, rangeKey: single.rangeKey, version: single.version, fileIndex: 0 });

@@ -233,12 +233,21 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
       if (typeof operationId !== 'string' || !/^[0-9a-f]{128}$/.test(operationId) || (!single && !range)) throw new Error('Invalid diff range request');
       await checkWorkspace();
       const activeCwd = resolveCwd(), started = generation;
+      const rangeKey = single ? `rev:${rev}` : `range:${from}:${to}`, key = `${operationId}\0${rangeKey}`;
+      const useCached = () => {
+        const value = rangeSnapshots.get(key);
+        if (!value) return null;
+        rangeSnapshots.delete(key); rangeSnapshots.set(key, value);
+        return { patch: value.patch, version: value.version, rangeKey };
+      };
+      const cachedRange = useCached();
+      if (cachedRange) return cachedRange;
       const patch = await run(activeCwd, ['--at-operation', operationId, '--config', 'diff.git.show-path-prefix=true', 'diff', ...(single ? ['-r', rev] : ['--from', from, '--to', to]), '--git']);
       if (generation !== started) throw new Error('Diff range is unavailable for this target');
-      const version = randomUUID(), rangeKey = single ? `rev:${rev}` : `range:${from}:${to}`;
-      const key = `${operationId}\0${rangeKey}`;
-      rangeSnapshots.delete(key);
-      rangeSnapshots.set(key, { version, base: single ? `${rev}-` : from, head: single ? rev : to, files: modelPatch(patch).map(({ oldPath, newPath, parseError, status, oldMode, newMode }) => ({ oldPath, newPath, parseError, status, oldMode, newMode })) });
+      const concurrentRange = useCached();
+      if (concurrentRange) return concurrentRange;
+      const version = randomUUID();
+      rangeSnapshots.set(key, { patch, version, base: single ? `${rev}-` : from, head: single ? rev : to, files: modelPatch(patch).map(({ oldPath, newPath, parseError, status, oldMode, newMode }) => ({ oldPath, newPath, parseError, status, oldMode, newMode })) });
       while (rangeSnapshots.size > 32) rangeSnapshots.delete(rangeSnapshots.keys().next().value);
       return { patch, version, rangeKey };
     },

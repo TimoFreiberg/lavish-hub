@@ -15,7 +15,7 @@ globalThis.lavishHubLifecycle = {
   attachResizablePane({ storage, widthKey, collapsedKey, defaultWidth, minWidth, maxWidth, onChange }) {
     const savedWidth = storage.getItem(widthKey);
     const clamp = value => Math.max(minWidth, Math.min(maxWidth, value));
-    let width = clamp(savedWidth !== null && Number.isFinite(Number(savedWidth)) ? Number(savedWidth) : defaultWidth);
+    let width = clamp(savedWidth !== null && savedWidth.trim() !== '' && Number.isFinite(Number(savedWidth)) ? Number(savedWidth) : defaultWidth);
     let collapsed = storage.getItem(collapsedKey) === 'true';
     const getState = () => ({ width, collapsed });
     const notify = () => onChange?.(getState());

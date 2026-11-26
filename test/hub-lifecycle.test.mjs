@@ -33,6 +33,8 @@ test('resizable_sidebar_clamping_and_storage_fallback', () => {
   handlers.pointerup({ pointerId: 1 });
   assert.equal(storage.getItem('width'), '420'); assert.equal(classes.has('dragging'), false);
   assert.equal(attachResizablePane(options).getState().width, 420);
+  storage.setItem('width', '');
+  assert.equal(attachResizablePane(options).getState().width, 200);
   Object.defineProperty(context, 'localStorage', { get() { throw new Error('opaque origin'); } });
   const fallback = createSafeStorage();
   fallback.setItem('width', '180'); fallback.setItem('collapsed', 'true');
