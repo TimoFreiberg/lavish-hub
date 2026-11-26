@@ -125,6 +125,20 @@ generated pages when rollback succeeds. A process interruption or filesystem err
 during rollback can leave generated pages out of sync. See `lavish-hub publish --help`
 for examples.
 
+The sidebar groups viewed, outdated documents under **Older** (hidden when empty).
+A viewed document with a `headCommit` in the hub's repository and no `sourceUrl`
+moves under **Older** once that commit is outside the tracked stack. If the stack
+cannot be read (for example, when the workspace or repository is unavailable), those
+documents stay in the main list. Other viewed documents, including unscoped
+publications and external reviews, move under **Older** 72 hours after publication.
+Unread documents stay in the main list unless you hide them.
+
+Use the Hide button beside a published document to move it into **Older**, or
+Restore to return it to the main list. Hiding an unread document keeps its `New`
+badge and its unread link on `/hubs` until you open it. If **Older** is closed,
+navigating to a document inside it or moving the active document there opens it.
+Republishing clears any Hide or Restore choice and marks the new version unread.
+
 Entering Commits or Changes turns Lavish annotations off so you can interact
 with the view. Turn the annotation switch back on whenever you want to comment
 there. Entering another view turns annotations on. Refreshing the current view
