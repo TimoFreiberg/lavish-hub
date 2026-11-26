@@ -5,6 +5,7 @@ import { WorkerPoolManager } from '@pierre/diffs/worker';
 import { modelPatch } from '../src/diff/model.mjs';
 import { commentLocation, quoteSelection, zedCommand, zedUrl } from './locations.mjs';
 import { diffDigest, matchesDiffAnchor } from './diff-anchors.mjs';
+import { parseLineSpec, resolveFileEntry, resolveTargetSide, isRangeInHunks, fileLineCount } from './diff-target.mjs';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 function svgIcon(paths, size = 14, cls = '') {
@@ -87,9 +88,11 @@ const state = {
 };
 if (!embedded) window.addEventListener('beforeunload', event => { if (state.draft?.textarea.value) { event.preventDefault(); event.returnValue = ''; } });
 if (!window.lavishPreview) try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-hub-viewed') || '[]')); } catch { state.storageFailed = true; }
-const header = el('header', null, 'page-header'), toolbar = el('div', null, 'toolbar'), sidebar = el('nav', null, 'sidebar'), viewport = el('div', null, 'viewport'), notice = el('div', null, 'notice'), expansionNotice = el('div', null, 'notice');
+const header = el('header', null, 'page-header'), toolbar = el('div', null, 'toolbar'), sidebar = el('nav', null, 'sidebar'), viewport = el('div', null, 'viewport'), notice = el('div', null, 'notice'), expansionNotice = el('div', null, 'notice'), targetNotice = el('div', null, 'notice');
 sidebar.setAttribute('aria-label', 'Changed files');
 expansionNotice.setAttribute('role', 'status');
+targetNotice.setAttribute('role', 'status');
+let revealGeneration = 0, highlightTimer = 0;
 // Expansion failures belong to the file that produced them: each displayed
 // snapshot indexes its own files, so a new snapshot starts with no failures.
 let expansionFailures = new Set();
@@ -97,7 +100,7 @@ function updateExpansionNotice() { expansionNotice.textContent = expansionFailur
 // Lavish sees the shadow host, not the clicked diff line. Let CodeView handle
 // this surface even when Lavish's annotation mode is active.
 viewport.setAttribute('data-lavish-action', '');
-const layout = el('div', null, 'layout'); layout.append(sidebar, viewport); app.append(header, notice, expansionNotice, layout);
+const layout = el('div', null, 'layout'); layout.append(sidebar, viewport); app.append(header, notice, expansionNotice, targetNotice, layout);
 const gutterObservers = new WeakMap();
 let view, worker, workerUrl, fallingBack = false;
 let diffAnchors = [], slots = [], generation = null, placementFrame = 0, reportedPlacements = false;
@@ -542,6 +545,8 @@ const keys = el('dl');
 for (const [key, text] of [['j / k', 'next / previous file'], ['n / p', 'next / previous hunk'], ['v', 'mark the current file viewed'], ['c', 'collapse or expand current file'], ['s', 'toggle split view'], ['w', 'toggle line wrapping'], ['?', 'show or hide this help'], ['Esc', 'close this help']]) keys.append(el('dt', key), el('dd', text));
 help.append(keys, button('Close', () => { help.hidden = true; }));
 function goFile(index) {
+  targetNotice.textContent = '';
+  revealGeneration++;
   if (!state.files.length) return;
   state.current = Math.max(0, Math.min(index, state.files.length - 1));
   state.hunk = -1;
@@ -653,6 +658,9 @@ function updateNotice() {
   notice.append('Diff changed. '); const refresh = button('Refresh', () => embedded ? applyEmbedded(state.pending) : loadData(state.pending)); refresh.disabled = Boolean(state.draft?.textarea.value); notice.append(refresh); if (refresh.disabled) notice.append(' Finish or cancel your comment first.');
 }
 function render(data) {
+  revealGeneration++;
+  clearTimeout(highlightTimer);
+  targetNotice.textContent = '';
   expansionFailures = new Set();
   updateExpansionNotice();
   closeDraft();
@@ -692,7 +700,78 @@ if (!embedded) {
   globalThis.lavishViewLatest = hash => { state.latest = hash; if (!state.hash && !loadingHash) loadData(hash); else if (state.hash) { state.pending = hash !== state.hash ? hash : null; updateNotice(); } };
   function poll() { script(`./latest.js?t=${Date.now()}`); } poll(); if (!window.lavishPreview) setInterval(poll, 2000);
 }
-return { hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, hide() { reportPlacements([]); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range && state.data.root === data.root && state.data.revision === data.revision) { state.data.operationId = data.operationId; state.data.snapshotVersion = data.snapshotVersion; state.pending = null; updateNotice(); schedulePlacements(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
+async function revealTarget(target) {
+  const gen = ++revealGeneration, data = state.data;
+  const isCurrent = () => gen === revealGeneration && state.data === data;
+  const nextFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+  const cancelled = () => ({ ok: false, reason: 'cancelled' });
+  clearTimeout(highlightTimer);
+  targetNotice.textContent = '';
+  viewport.querySelectorAll('.file-header.deep-link-highlight').forEach(node => node.classList.remove('deep-link-highlight'));
+  const entry = resolveFileEntry(state.files, target.file);
+  if (!entry) { targetNotice.textContent = `File "${target.file}" is not in the current diff.`; return { ok: false, reason: 'missing-file' }; }
+  const { file, index } = entry, id = String(index);
+  if (state.collapsed.delete(file.newPath)) { state.version++; view.updateItem(itemFor(file, index)); renderToolbar(); }
+  state.current = index; state.hunk = -1; markCurrent();
+  const scrollFile = () => view.scrollTo({ type: 'item', id, align: 'start', behavior: 'instant' });
+  const fail = (reason, message) => { scrollFile(); targetNotice.textContent = message; return { ok: false, reason }; };
+  if (!target.line) {
+    scrollFile(); await nextFrame(); if (!isCurrent()) return cancelled();
+    const header = viewport.querySelector(`.file-header[data-file="${CSS.escape(file.newPath)}"]`);
+    header?.classList.add('deep-link-highlight');
+    highlightTimer = setTimeout(() => header?.classList.remove('deep-link-highlight'), 2500);
+    return { ok: true };
+  }
+  const range = parseLineSpec(target.line);
+  if (!range) return fail('invalid-line', `Invalid line target "${target.line}" for ${file.newPath}.`);
+  if (!file.parsed || file.parseError || !file.parsed.hunks?.length) return fail('no-hunks', `Line ${target.line} cannot be shown for ${file.newPath} (no diff hunks).`);
+  const side = resolveTargetSide(file, target.side), start = range.start;
+  let end = range.end;
+  if (!isRangeInHunks(file.parsed, start, end, side)) {
+    if (file.status === 'added' || file.status === 'deleted') {
+      const prefix = side === 'deletions' ? 'deletion' : 'addition';
+      const maxLines = Math.max(0, ...file.parsed.hunks.map(h => h[`${prefix}Count`] > 0 ? h[`${prefix}Start`] + h[`${prefix}Count`] - 1 : 0));
+      if (start > maxLines) return fail('line-out-of-bounds', `Line ${start} is outside ${file.newPath} (${maxLines} lines).`);
+      end = Math.min(end, maxLines);
+    } else {
+      scrollFile(); await nextFrame(); if (!isCurrent()) return cancelled();
+      const instance = view.idToItem.get(id)?.instance;
+      try {
+        if (!instance) throw new Error('unavailable');
+        if (file.parsed.isPartial) {
+          try { await instance.prepareForEditing(); }
+          catch (error) {
+            // Advanced virtualization installs the hydrated clone on the next layout pass.
+            if (!instance.pendingHydratedDiff) throw error;
+          }
+          for (let frame = 0; frame < 5 && instance.pendingHydratedDiff; frame++) {
+            await nextFrame();
+            if (!isCurrent()) return cancelled();
+          }
+        }
+        if (!isCurrent()) return cancelled();
+        const contents = (side === 'deletions' ? file.fullFiles?.oldFile : file.fullFiles?.newFile)?.contents;
+        const maxLines = fileLineCount(file.fullFiles, side);
+        if (typeof contents === 'string' && start > maxLines) return fail('line-out-of-bounds', `Line ${start} is outside ${file.newPath} (${maxLines} lines).`);
+        if (typeof contents === 'string') end = Math.min(end, maxLines);
+        instance.revealLine(start, side); if (end !== start) instance.revealLine(end, side);
+        await nextFrame(); if (!isCurrent()) return cancelled();
+        if (file.parsed.isPartial || instance.isLineInCollapsedContext(start, side) || instance.isLineInCollapsedContext(end, side)) throw new Error('unavailable');
+      } catch {
+        if (!isCurrent()) return cancelled();
+        return fail('expansion-unavailable', `Line ${target.line} is outside the diff hunks in ${file.newPath}, and unchanged lines could not be loaded.`);
+      }
+    }
+  }
+  view.scrollTo({ type: 'line', id, lineNumber: start, side, align: 'center', behavior: 'instant' });
+  view.setSelectedLines({ id, range: { start, end, side } }, { notify: false });
+  highlightTimer = setTimeout(() => {
+    const selected = view.getSelectedLines();
+    if (!state.draft && selected?.id === id && selected.range.start === start && selected.range.end === end && selected.range.side === side) view.clearSelectedLines({ notify: false });
+  }, 2500);
+  return { ok: true };
+}
+return { revealTarget, hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, hide() { reportPlacements([]); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range && state.data.root === data.root && state.data.revision === data.revision) { state.data.operationId = data.operationId; state.data.snapshotVersion = data.snapshotVersion; state.pending = null; updateNotice(); schedulePlacements(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
 }
 if (document.querySelector('#app') && !globalThis.hubConfig) mountDiff(document.querySelector('#app'));
 globalThis.mountLavishDiff = mountDiff;

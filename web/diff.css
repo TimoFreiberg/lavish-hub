@@ -88,6 +88,14 @@ h1 { font-size: 15px; margin: 0; flex: none; }
 /* Height is set inline from HEADER_HEIGHT (44px); keep everything on one crisp row. */
 .file-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px; background: var(--ob-surface); color: var(--ob-fg); border-bottom: 1px solid var(--ob-border); border-radius: 7px 7px 0 0; overflow: hidden; }
 .file-header.is-collapsed { border-bottom-color: transparent; border-radius: 7px; }
+.file-header.deep-link-highlight { animation: diff-target-highlight 2.5s ease-out; }
+@keyframes diff-target-highlight {
+  0%, 35% { background: color-mix(in srgb, var(--ob-orange) 25%, var(--ob-surface)); border-color: var(--ob-orange); }
+  100% { background: var(--ob-surface); border-color: var(--ob-border); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .file-header.deep-link-highlight { animation: none; background: color-mix(in srgb, var(--ob-orange) 25%, var(--ob-bg)); border-color: var(--ob-orange); }
+}
 .file-main { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1 1 auto; }
 .status-icon { flex: none; }
 .status-icon.status-added { color: var(--ob-diff-add); }
