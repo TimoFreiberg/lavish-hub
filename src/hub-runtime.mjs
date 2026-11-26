@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs
 import path from 'node:path';
 import { createHubTransport } from './hub-transport.mjs';
 import { createHubJj, isWorkingCopyRev, resolveTargetRev } from './hub-jj.mjs';
-import { createHubDocuments } from './hub-documents.mjs';
+import { createHubDocuments, needsLocalStackCheck, isDocumentCollapsed } from './hub-documents.mjs';
 import { createHubCommands } from './hub-commands.mjs';
 import { resolveWorkspace, resolveRecordedWorkspace, resolveHubSession, resolveRecordedSession, resolveSessionId, primaryRootForRepo, repoMatches, checkoutMatchesRepo, recordWorkspace, workspaceMatches } from './hub-workspace.mjs';
 import { computeHubUrl } from './hub-url.mjs';
@@ -131,7 +131,7 @@ async function release(lock, instance) {
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
-export async function runHubOwner(options = {}, { prepare = prepareReview } = {}) {
+export async function runHubOwner(options = {}, { prepare = prepareReview, createJj = createHubJj } = {}) {
   const startedAt = Date.now();
   const identity = await resolveHubIdentity(options);
   if (identity.session && options.rev === undefined) throw new Error('listen with --session requires --rev');
@@ -200,7 +200,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     });
     const sessionKey = createHash('sha256').update(canonicalPage).digest('hex').slice(0, 16);
     const browserUrl = `/hub-proxy/${sessionKey}`;
-    const jj = createHubJj(() => isDetached() ? primaryRoot : identity.root, { target: currentTarget, validate: isAvailable });
+    const jj = createJj(() => isDetached() ? primaryRoot : identity.root, { target: currentTarget, validate: isAvailable });
     const guardSource = async file => {
       const withinWorkspace = candidate => {
         const relative = path.relative(identity.root, candidate);
@@ -221,7 +221,17 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
     const siblingName = doc => `document-${createHash('sha256').update(JSON.stringify([doc.id, doc.source])).digest('hex')}.html`;
     const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
     const [confirmNavigation, hubLifecycle] = await Promise.all(['confirm-navigation.js', 'hub-lifecycle.js'].map(name => readFile(new URL(`../web/${name}`, import.meta.url), 'utf8')));
+    async function annotateDocuments(docs) {
+      const needsStack = docs.some(doc => needsLocalStackCheck(doc, repoName));
+      const stackCommitIds = needsStack ? await jj.stackCommits().catch(() => null) : null;
+      return docs.map(doc => {
+        const collapsed = isDocumentCollapsed(doc, { repoName, stackCommitIds });
+        const { sidebarOverride, ...visibleDoc } = doc;
+        return { ...visibleDoc, collapsed };
+      });
+    }
     async function writeSiblings(docs = documents.list().documents, commit = async () => {}, requiredId = null) {
+      docs = await annotateDocuments(docs);
       const htmlDocs = docs.filter(doc => doc.source.toLowerCase().endsWith('.html'));
       const staged = [];
       const previousHashes = new Map(hashes);
@@ -236,7 +246,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
           continue;
         }
         const base = `${browserUrl}/resources/${transport.resourceKey}/${encodeURIComponent(doc.id)}/${encodeURIComponent(path.basename(doc.source))}`;
-        const destinations = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, href: `hub.html?__lavish_hub_view=${encodeURIComponent(id)}`, unseen: false })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : `hub.html?__lavish_hub_view=${encodeURIComponent(item.id)}`, unseen: item.id !== doc.id && item.viewedVersion !== item.version }))];
+        const destinations = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, href: `hub.html?__lavish_hub_view=${encodeURIComponent(id)}`, unseen: false })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : `hub.html?__lavish_hub_view=${encodeURIComponent(item.id)}`, unseen: item.id !== doc.id && item.viewedVersion !== item.version, collapsed: item.collapsed, version: item.version }))];
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope">${scope}</aside>` : '';
         const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id, version: doc.version, workspaceName, repoName, session: Boolean(identity.session), sessionTitle: effectiveTitle() || '' }).replaceAll('<', '\\u003c');
@@ -311,7 +321,8 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
       executeCommand: body => commands.execute(body),
       commandStatus: body => commands.status(body),
       cancelCommand: body => commands.cancel(body),
-      documents: () => { const list = documents.list(); return { ...list, documents: list.documents.map(doc => ({ ...doc, sibling: siblingName(doc) })) }; },
+      documents: async () => { const list = documents.list(); return { ...list, documents: (await annotateDocuments(list.documents)).map(doc => ({ ...doc, sibling: siblingName(doc) })) }; },
+      setDocumentCollapsed: body => documents.setCollapsed(body),
       publish: async body => {
         if (body.autoScope === true) {
           try { body = { ...body, metadata: { reviewedRepository: repoName, ...await jj.scope() } }; }

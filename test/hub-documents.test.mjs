@@ -3,9 +3,56 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createHubDocuments, deriveDocumentId, readMetadata } from '../src/hub-documents.mjs';
+import { createHubDocuments, deriveDocumentId, readMetadata, isDocumentCollapsed, OLD_ARTIFACT_MS } from '../src/hub-documents.mjs';
 import { createHash } from 'node:crypto';
 import { parseArgs } from '../src/cli.mjs';
+
+test('collapse classification respects unread state, stack, age and overrides', () => {
+  const now = Date.now(), old = new Date(now - OLD_ARTIFACT_MS).toISOString();
+  const doc = { version: 'v', viewedVersion: 'v', publishedAt: old, metadata: { headCommit: 'head' } };
+  const options = { repoName: 'repo', now, stackCommitIds: new Set(['head']) };
+  assert.equal(isDocumentCollapsed(doc, options), false);
+  assert.equal(isDocumentCollapsed(doc, { ...options, stackCommitIds: new Set() }), true);
+  assert.equal(isDocumentCollapsed(doc, { ...options, stackCommitIds: null }), false);
+  assert.equal(isDocumentCollapsed({ ...doc, viewedVersion: null }, { ...options, stackCommitIds: new Set() }), false);
+  for (const metadata of [{}, { headCommit: 'head', sourceUrl: 'https://example.invalid/' }, { headCommit: 'head', reviewedRepository: 'other' }]) {
+    assert.equal(isDocumentCollapsed({ ...doc, metadata }, options), true);
+    assert.equal(isDocumentCollapsed({ ...doc, metadata, publishedAt: new Date(now - OLD_ARTIFACT_MS + 1).toISOString() }, options), false);
+    assert.equal(isDocumentCollapsed({ ...doc, metadata, viewedVersion: null }, options), false);
+  }
+  assert.equal(isDocumentCollapsed({ ...doc, sidebarOverride: { version: 'v', collapsed: true }, viewedVersion: null }, options), true);
+  assert.equal(isDocumentCollapsed({ ...doc, sidebarOverride: { version: 'v', collapsed: false } }, { ...options, stackCommitIds: new Set() }), false);
+});
+
+test('collapse override persists without acknowledging and resets on republish', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-collapse-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'review.md');
+  await writeFile(file, 'review');
+  let store = await createHubDocuments(path.join(dir, 'state'));
+  const doc = await store.publish({ id: 'review', file });
+  assert.equal(await store.setCollapsed({ id: doc.id, version: doc.version, collapsed: true }), true);
+  assert.equal(await store.setCollapsed({ id: doc.id, version: doc.version, collapsed: true }), false);
+  await assert.rejects(store.setCollapsed({ id: doc.id, version: 'stale', collapsed: false }), /changed/);
+  store = await createHubDocuments(path.join(dir, 'state'));
+  assert.deepEqual(store.list().documents[0].sidebarOverride, { version: doc.version, collapsed: true });
+  assert.equal(store.list().documents[0].viewedVersion, null);
+  await store.publish({ id: doc.id, file });
+  assert.equal(store.list().documents[0].sidebarOverride, undefined);
+  assert.equal(store.list().documents[0].viewedVersion, null);
+});
+
+test('malformed legacy sidebar overrides are discarded on load', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hub-legacy-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const values = [null, [], 'hidden', {}, { version: 1, collapsed: true }, { version: 'v', collapsed: 'true' }];
+  const documents = Object.fromEntries(values.map((value, i) => [String(i), { id: String(i), version: 'v', sidebarOverride: value }]));
+  documents.valid = { id: 'valid', version: 'v', sidebarOverride: { version: 'v', collapsed: true } };
+  await writeFile(path.join(dir, 'documents.json'), JSON.stringify({ documents, attachments: {} }));
+  const loaded = (await createHubDocuments(dir)).list().documents;
+  for (const doc of loaded.filter(doc => doc.id !== 'valid')) assert.equal(Object.hasOwn(doc, 'sidebarOverride'), false);
+  assert.deepEqual(loaded.find(doc => doc.id === 'valid').sidebarOverride, { version: 'v', collapsed: true });
+});
 
 test('derived document IDs avoid collisions and fit document ID rules', async t => {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-ids-')));

@@ -128,6 +128,7 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
   const resolveCwd = () => typeof cwd === 'function' ? cwd() : cwd;
   let currentTarget = target;
   let pending = Promise.resolve(), cached, expires = 0, flight, generation = 0;
+  let stackCached, stackExpires = 0, stackFlight;
   const snapshots = new Map();
   async function checkWorkspace() {
     if (!await validate()) throw new Error('Workspace no longer matches its recorded repository');
@@ -157,7 +158,7 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
   return {
     setTarget(nextTarget) {
       currentTarget = nextTarget;
-      generation++; cached = undefined; snapshots.clear();
+      generation++; cached = undefined; stackCached = undefined; snapshots.clear();
     },
     async scope() {
       await checkWorkspace();
@@ -178,6 +179,28 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
         if (result.length === 1) description = result[0].description.split('\n')[0].slice(0, 240);
       }
       return description || '(no description)';
+    },
+    async stackCommits() {
+      await checkWorkspace();
+      while (true) {
+        if (stackFlight) { await stackFlight; continue; }
+        if (cached && Date.now() < expires) return new Set([cached.head, ...cached.commits.map(commit => commit.commitId)]);
+        if (stackCached && Date.now() < stackExpires) return stackCached.commits;
+        const started = generation, snapshotTarget = currentTarget, activeCwd = resolveCwd();
+        const refresh = (async () => {
+          const op = await operation(activeCwd, { ignoreWorkingCopy: true });
+          if (generation !== started) return;
+          if (stackCached?.operationId === op) { stackExpires = Date.now() + 2000; return; }
+          const { base, head } = await readScopeAt(activeCwd, op, snapshotTarget);
+          const output = await run(activeCwd, ['--at-operation', op, 'log', '-r', `${base}..${head}`, '--no-graph', '-T', 'json(commit_id) ++ "\\n"']);
+          if (generation === started) {
+            stackCached = { operationId: op, commits: new Set([head, ...output.split('\n').filter(Boolean).map(line => JSON.parse(line))]) };
+            stackExpires = Date.now() + 2000;
+          }
+        })();
+        stackFlight = refresh;
+        try { await refresh; } finally { if (stackFlight === refresh) stackFlight = undefined; }
+      }
     },
     async snapshot({ force = false, knownVersion } = {}) {
       await checkWorkspace();
@@ -222,9 +245,9 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
     },
     describe(request) {
       const result = pending.then(async () => {
-        generation++; cached = undefined;
+        generation++; cached = undefined; stackCached = undefined;
         try { return await describe(request); }
-        finally { generation++; cached = undefined; }
+        finally { generation++; cached = undefined; stackCached = undefined; }
       });
       pending = result.catch(() => {});
       return result;

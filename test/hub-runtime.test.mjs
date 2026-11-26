@@ -59,10 +59,10 @@ async function sessionFixture(t, repoName = 'repo') {
   delete env.LAVISH_HUB_SESSION;
   const execute = promisify(execFile);
   const run = (args, cwd = repo) => execute(process.execPath, [cli, ...args], { env, cwd, timeout: 10000 });
-  const start = async (workspace, session, title, extra = {}) => {
+  const start = async (workspace, session, title, extra = {}, stackCallsFile = null) => {
     const options = { workspace, ...(session ? { session, title } : {}), ...extra };
     const identity = session ? await resolveHubSession(workspace, session, env) : await resolveWorkspace(workspace, env);
-    const script = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; process.exitCode = await runHubOwner(JSON.parse(process.argv[1]), { prepare: async () => ({ url: 'http://localhost:123/review' }) });`;
+    const script = `import { runHubOwner } from ${JSON.stringify(new URL('../src/hub-runtime.mjs', import.meta.url).href)}; import { createHubJj } from ${JSON.stringify(new URL('../src/hub-jj.mjs', import.meta.url).href)}; import { appendFileSync } from 'node:fs'; const calls = ${JSON.stringify(stackCallsFile)}; process.exitCode = await runHubOwner(JSON.parse(process.argv[1]), { prepare: async () => ({ url: 'http://localhost:123/review' }), createJj: (...args) => { const jj = createHubJj(...args); if (calls) { const original = jj.stackCommits; jj.stackCommits = (...args) => { appendFileSync(calls, 'call\\n'); return original(...args); }; } return jj; } });`;
     const owner = spawn(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(options)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = ''; owner.stderr.on('data', chunk => { stderr += chunk; });
     t.after(() => { if (owner.exitCode === null) owner.kill('SIGKILL'); });
@@ -119,8 +119,32 @@ test('publish and acknowledge update dashboard unread immediately', async t => {
   await writeFile(source, '# Unread');
   const doc = await hub.request('publish', { id: 'unread', title: ' \tUnread\ntitle\u007f ', file: source });
   assert.deepEqual((await f.listHubs())[0].unread, [{ id: 'unread', title: 'Unread title' }]);
+  assert.equal(await hub.request('setDocumentCollapsed', { id: doc.id, version: doc.version, collapsed: true }), true);
+  const hidden = (await hub.request('documents')).documents.find(item => item.id === doc.id);
+  assert.equal(hidden.collapsed, true);
+  assert.equal(hidden.viewedVersion, null);
+  assert.equal('sidebarOverride' in hidden, false);
+  assert.deepEqual((await f.listHubs())[0].unread, [{ id: 'unread', title: 'Unread title' }]);
   assert.equal(await hub.request('acknowledge', { id: doc.id, version: doc.version }), true);
   assert.deepEqual((await f.listHubs())[0].unread, []);
+  await hub.stop();
+});
+
+test('documents skips stack lookup when no local viewed document needs it', async t => {
+  const f = await sessionFixture(t), calls = path.join(f.dir, 'stack-calls');
+  await writeFile(calls, '');
+  const hub = await f.start(f.repo, 'stack-check', 'Stack check', { rev: '@' }, calls);
+  const source = path.join(f.dir, 'review.md'); await writeFile(source, '# Review');
+  const doc = await hub.request('publish', { id: 'review', file: source, metadata: { headCommit: 'a'.repeat(40) } });
+  await hub.request('documents');
+  assert.equal(await readFile(calls, 'utf8'), '');
+  await hub.request('acknowledge', { id: doc.id, version: doc.version });
+  await hub.request('documents');
+  assert.match(await readFile(calls, 'utf8'), /call/);
+  await hub.request('setDocumentCollapsed', { id: doc.id, version: doc.version, collapsed: false });
+  await writeFile(calls, '');
+  await hub.request('documents');
+  assert.equal(await readFile(calls, 'utf8'), '');
   await hub.stop();
 });
 

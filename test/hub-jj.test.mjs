@@ -20,6 +20,36 @@ async function repo(t) {
 }
 const request = (row, description) => ({ changeId: row.changeId, commitId: row.commitId, expectedDescription: row.description, description });
 
+test('stackCommits includes head without snapshotting the working copy', async t => {
+  const cwd = await repo(t);
+  run(cwd, 'jj', 'config', 'set', '--repo', 'revset-aliases."trunk()"', 'main');
+  const target = { rev: await resolveTargetRev(cwd, 'main') };
+  const jj = createHubJj(cwd, { target });
+  const head = run(cwd, 'jj', '--ignore-working-copy', 'log', '-r', 'main', '--no-graph', '-T', 'commit_id');
+  const before = run(cwd, 'jj', '--ignore-working-copy', 'op', 'log', '-n', '1', '--no-graph', '-T', 'id');
+  const [first, second] = await Promise.all([jj.stackCommits(), jj.stackCommits()]);
+  assert.deepEqual(first, new Set([head]));
+  assert.strictEqual(first, second);
+  assert.equal(run(cwd, 'jj', '--ignore-working-copy', 'op', 'log', '-n', '1', '--no-graph', '-T', 'id'), before);
+});
+
+test('stackCommits refreshes after a rewrite without snapshotting pending changes', async t => {
+  const cwd = await repo(t);
+  run(cwd, 'jj', 'config', 'set', '--repo', 'revset-aliases."trunk()"', 'main');
+  run(cwd, 'jj', 'describe', '-m', 'before');
+  const jj = createHubJj(cwd);
+  const first = await jj.stackCommits();
+  run(cwd, 'jj', 'describe', '-m', 'after');
+  const head = run(cwd, 'jj', '--ignore-working-copy', 'log', '-r', '@', '--no-graph', '-T', 'commit_id');
+  await writeFile(path.join(cwd, 'file'), 'unsnapshotted change\n');
+  const before = run(cwd, 'jj', '--ignore-working-copy', 'op', 'log', '-n', '1', '--no-graph', '-T', 'id');
+  await new Promise(resolve => setTimeout(resolve, 2100));
+  const second = await jj.stackCommits();
+  assert.ok(second.has(head));
+  assert.notDeepEqual(second, first);
+  assert.equal(run(cwd, 'jj', '--ignore-working-copy', 'op', 'log', '-n', '1', '--no-graph', '-T', 'id'), before);
+});
+
 test('hub_jj_snapshot pins metadata, endpoints and patch through an external rewrite', async t => {
   const cwd = await repo(t);
   const snapshot = await readHubSnapshot(cwd, { afterMetadata: async () => {

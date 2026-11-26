@@ -9,6 +9,25 @@ const invalid = (message, cause) => new HubError('VALIDATION_ERROR', 'fix_args',
 const maxMetadata = 16 * 1024;
 const builtins = new Set(['commits', 'changes', 'tasks']);
 
+export const OLD_ARTIFACT_MS = 3 * 24 * 60 * 60 * 1000;
+
+function hasLocalDocumentHead(doc, repoName) {
+  const metadata = doc.metadata || {};
+  return Boolean(metadata.headCommit && !metadata.sourceUrl && (!metadata.reviewedRepository || metadata.reviewedRepository === repoName));
+}
+
+export function needsLocalStackCheck(doc, repoName) {
+  return doc.sidebarOverride?.version !== doc.version && doc.viewedVersion === doc.version && hasLocalDocumentHead(doc, repoName);
+}
+
+export function isDocumentCollapsed(doc, { repoName, stackCommitIds = null, now = Date.now() } = {}) {
+  if (doc.sidebarOverride?.version === doc.version) return doc.sidebarOverride.collapsed;
+  if (doc.viewedVersion !== doc.version) return false;
+  if (hasLocalDocumentHead(doc, repoName)) return stackCommitIds instanceof Set && !stackCommitIds.has(doc.metadata.headCommit);
+  const published = Date.parse(doc.publishedAt);
+  return Number.isFinite(published) && now - published >= OLD_ARTIFACT_MS;
+}
+
 export function deriveDocumentId(resolvedFile, existingDocuments) {
   let slug = path.basename(resolvedFile, path.extname(resolvedFile)).toLowerCase().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '');
   if (!/^[a-zA-Z0-9]/.test(slug)) slug = `doc-${slug}`;
@@ -65,6 +84,7 @@ export async function createHubDocuments(directory, { guardSource = async () => 
   for (const doc of Object.values(state.documents || {})) {
     if (doc && typeof doc === 'object') {
       delete doc.attention;
+      if (!doc.sidebarOverride || typeof doc.sidebarOverride !== 'object' || Array.isArray(doc.sidebarOverride) || typeof doc.sidebarOverride.version !== 'string' || typeof doc.sidebarOverride.collapsed !== 'boolean') delete doc.sidebarOverride;
       if (!Object.hasOwn(doc, 'viewedVersion')) doc.viewedVersion = doc.version ?? null;
     }
   }
@@ -108,6 +128,15 @@ export async function createHubDocuments(directory, { guardSource = async () => 
       const next = { ...state, documents: { ...state.documents, [id]: document } };
       await generate(Object.values(next.documents), () => persist(next), id);
       return document;
+    }),
+    setCollapsed: body => locked(async () => {
+      const { id, version, collapsed } = body || {};
+      if (typeof id !== 'string' || !Object.hasOwn(state.documents, id) || typeof version !== 'string' || !version || typeof collapsed !== 'boolean') throw new Error('Invalid collapse request');
+      const current = state.documents[id];
+      if (current.version !== version) throw new Error('Document target changed; reload before changing visibility');
+      if (current.sidebarOverride?.version === version && current.sidebarOverride.collapsed === collapsed) return false;
+      await persist({ ...state, documents: { ...state.documents, [id]: { ...current, sidebarOverride: { version, collapsed } } } });
+      return true;
     }),
     acknowledge: body => locked(async () => {
       const id = body?.id, version = body?.version;
