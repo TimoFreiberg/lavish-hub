@@ -28,7 +28,7 @@
             version = pkgJson.version;
             src = ./.;
 
-            npmDepsHash = "sha256-ycc4yPglDA8LQe0Po8kfM+VUk27Z5UFIpDQ3b1OJj2I=";
+            npmDepsHash = "sha256-r3KrvLTD+EQhEsU7ugy7ywKZOZMproS196oz5PedJJw=";
             npmFlags = [
               "--ignore-scripts"
               "--legacy-peer-deps"
