@@ -519,7 +519,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await run(process.execPath, [cli, '--workspace', repo, '--view', 'diff'], { env });
   const diffPage = await browser.newPage();
   await diffPage.goto(`${browserBase}/hub.html`);
-  await diffPage.locator('.file-link[data-path="change.txt"]').waitFor();
+  await diffPage.getByRole('button', { name: 'Expand change.txt' }).click();
   await diffPage.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
   await diffPage.getByRole('button', { name: 'Add comment' }).click();
   const comment = diffPage.getByPlaceholder('Write a comment');

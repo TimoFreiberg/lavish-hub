@@ -77,7 +77,7 @@ async function requireBundle(name, globalName, view, generation) {
   }
   return generation === renderGeneration;
 }
-let selected = 'commits', snapshot, documents = [], busy = false;
+let selected = 'diff', snapshot, documents = [], busy = false;
 const initialParams = new URLSearchParams(location.search);
 let initialView = initialParams.get('__lavish_hub_view') || initialParams.get('view') || '';
 const initialTarget = name => initialParams.get(`__lavish_hub_${name}`) || initialParams.get(name) || '';
@@ -108,13 +108,13 @@ let refreshTimer, rendered = false, warmed = false, refreshRequested = false, sn
 // say the snapshot is unavailable instead of claiming to load it.
 const snapshotLoading = () => (snapshotQueued && !snapshotPreflightFailed) || snapshotApplied < snapshotRequest;
 let modeView;
-const startsInExplore = id => id === 'commits' || id === 'changes';
+const startsInExplore = id => id === 'diff';
 // Only the repository views render a snapshot, and a snapshot costs several jj
 // runs per request, so only those views ask for one. Status and documents keep
 // polling on every view.
 const needsSnapshot = startsInExplore;
 window.addEventListener('lavish:ready', () => { if (startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(false); updateTabTitle(); if (lastReplaceUrl) syncUrl(lastReplaceUrl); });
-const labels = { commits: 'Commits', changes: 'Changes', tasks: 'Tasks' };
+const labels = { diff: 'Diff', tasks: 'Tasks' };
 const labelFor = id => Object.hasOwn(labels, id) ? labels[id] : undefined;
 let pendingHash = location.hash || null, currentViewHash = location.hash, lastReplaceUrl = null, queuedUrlChange = null;
 function syncUrl(update) {
@@ -147,7 +147,7 @@ document.addEventListener('click', event => {
   const hash = link.getAttribute('href'); event.preventDefault(); pendingHash = hash; currentViewHash = hash;
   replaceFrameHash(hash); syncUrl({ view: selected, hash, mode: 'push' }); scrollToFragment(hash);
 });
-const { formatTabTitle, applyNavBadge, applyCollapseToggle, createLeaveGuard, createOlderDisclosureController } = globalThis.lavishHubLifecycle;
+const { formatTabTitle, applyNavBadge, applyCollapseToggle, createLeaveGuard, createOlderDisclosureController, createSafeStorage, attachResizablePane } = globalThis.lavishHubLifecycle;
 function updateTabTitle() {
   const title = formatTabTitle('', sessionTitle || repoName);
   document.title = title;
@@ -411,7 +411,7 @@ function handleUrlChange({ view, hash = '' }) {
 }
 window.addEventListener('lavish:urlChange', event => handleUrlChange(event.detail));
 window.addEventListener('popstate', () => { if (window.self === window.top && !globalThis.lavish?.syncUrl) handleUrlChange({ view: new URLSearchParams(location.search).get('view') || '', hash: location.hash }); });
-const snapshotContent = value => value && JSON.stringify({ base: value.base, head: value.head, commits: value.commits, patch: value.patch });
+const snapshotContent = value => value && JSON.stringify({ operationId: value.operationId, version: value.version, base: value.base, head: value.head, baseDisplay: value.baseDisplay, headDisplay: value.headDisplay, commits: value.commits, patch: value.patch });
 // A rerender replaces the focused editor, so one made only to update a notice carries the
 // caret into the replacement field. Returns the generation it rendered, or null when a
 // newer render took its place.
@@ -422,7 +422,7 @@ async function renderViewKeepingFocus() {
   const rendering = renderView(); const generation = renderGeneration;
   await rendering;
   if (generation !== renderGeneration) return null;
-  if (label) {
+  if (active && !active.isConnected && label) {
     const replacement = [...document.querySelectorAll('#view [aria-label]')].find(node => node.getAttribute('aria-label') === label);
     if (replacement) { replacement.focus(); if (selection) replacement.setSelectionRange(...selection); }
   }
@@ -479,12 +479,12 @@ async function refresh(force = false) {
       if (Object.hasOwn(labels, candidate) || documents.some(doc => doc.id === candidate)) requestedInitialView = candidate;
       else { pendingDeepLinkNotice = `Unknown view "${candidate}".`; pendingDeepLink = null; }
     }
-    const targetSelection = requestedInitialView || state.selected;
+    const targetSelection = requestedInitialView || (pendingDeepLinkNotice ? 'diff' : state.selected);
     if (!rendered && targetSelection) selected = targetSelection;
     noteUpdates(state, documents);
     let selectedDoc = documents.find(item => item.id === selected);
     if (!rendered && pendingDeepLinkNotice && selectedDoc?.sibling) {
-      selected = 'commits';
+      selected = 'diff';
       selectedDoc = null;
     }
     if (!rendered && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
@@ -615,9 +615,203 @@ async function navigateDeepLink(target) {
     pendingDeepLinkNotice = `Unknown view "${target.view}".`; renderDeepLinkNotice(); return;
   }
   pendingDeepLinkNotice = '';
+  renderDeepLinkNotice();
   pendingDeepLink = target.file || target.change ? target : null;
+  if (target.view === 'diff') { range = null; rangeAnchor = null; invalidateRange(); }
   if (selected === target.view && !snapshotLoading()) await renderViewKeepingFocus();
   else await select(target.view, { deepLink: true });
+}
+const storage = createSafeStorage();
+const reviewWorkspace = el('div', null, { class: 'review-workspace' });
+const rail = el('aside', null, { class: 'commit-rail', 'aria-label': 'Commit selection' });
+const railHead = el('div', null, { class: 'commit-rail-head' });
+const railTitle = el('strong');
+const railAll = button('All', () => { manualRange(); range = null; rangeAnchor = null; updateReview(); });
+const railToggle = button('', () => railPane.setCollapsed(!railPane.getState().collapsed));
+railToggle.className = 'rail-toggle';
+const railScroll = el('div', null, { class: 'commit-rail-scroll', role: 'region', 'aria-label': 'Commits', tabindex: '0' });
+const railResizer = el('div', null, { class: 'rail-resizer', 'aria-hidden': 'true' });
+const reviewRight = el('div', null, { class: 'review-right' });
+const drawer = el('div', null, { class: 'commit-editor-drawer', hidden: '' });
+const rangeBar = el('div', null, { class: 'review-range-bar' });
+const rangeText = el('span', '', { class: 'review-range-text' });
+const rangeStatus = el('span', '', { class: 'review-range-status', role: 'status' });
+railHead.append(railTitle, railAll); rail.append(railToggle, railHead, railScroll);
+rangeBar.append(rangeText, rangeStatus); reviewRight.append(drawer, rangeBar, diffContainer);
+reviewWorkspace.append(rail, railResizer, reviewRight);
+let range = null, rangeAnchor = null, editingChange = null, savedRangeBeforeEdit = null;
+let rangeRequestId = 0, requestedRange = '', rangeError = '';
+const rows = new Map(), openBodies = new Set();
+const railPane = attachResizablePane({ storage, widthKey: 'lavish-hub-rail-width', collapsedKey: 'lavish-hub-rail-collapsed', defaultWidth: 280, minWidth: 190, maxWidth: 460, onChange: updateRailPane });
+function updateRailPane({ width, collapsed }) {
+  reviewWorkspace.style.setProperty('--rail-width', `${collapsed ? 38 : width}px`);
+  rail.classList.toggle('is-collapsed', collapsed);
+  railHead.hidden = railScroll.hidden = collapsed;
+  railToggle.textContent = collapsed ? '»' : '«';
+  railToggle.setAttribute('aria-expanded', String(!collapsed));
+  railToggle.setAttribute('aria-label', collapsed ? 'Expand commits' : 'Collapse commits');
+  railToggle.title = railToggle.getAttribute('aria-label');
+}
+updateRailPane(railPane.getState());
+railPane.attachResizer(railResizer, event => event.clientX - rail.getBoundingClientRect().left);
+function invalidateRange() { rangeRequestId++; requestedRange = ''; rangeError = ''; }
+function manualRange() { if (editingChange) savedRangeBeforeEdit = null; invalidateRange(); }
+function selectCommit(changeId, shift) {
+  manualRange();
+  if (shift && rangeAnchor && snapshot.commits.some(commit => commit.changeId === rangeAnchor)) range = { start: rangeAnchor, end: changeId };
+  else if (range?.start === changeId && range.end === changeId) { range = null; rangeAnchor = null; }
+  else { rangeAnchor = changeId; range = { start: changeId, end: changeId }; }
+  updateReview();
+}
+function selectedIndices() {
+  if (!range) return null;
+  const start = snapshot.commits.findIndex(commit => commit.changeId === range.start);
+  const end = snapshot.commits.findIndex(commit => commit.changeId === range.end);
+  if (start < 0 || end < 0) { range = null; rangeAnchor = null; invalidateRange(); return null; }
+  return [Math.min(start, end), Math.max(start, end)];
+}
+function commitDraft(commit) {
+  const state = draft(`commit:${commit.changeId}`, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '', editing: false });
+  if (state.awaitingSnapshot && (commit.commitId === state.awaitingSnapshot.commitId || snapshotApplied > state.awaitingSnapshot.after)) state.awaitingSnapshot = null;
+  if (state.text === state.original && !state.saving && !state.message && !state.awaitingSnapshot) Object.assign(state, { text: commit.description, original: commit.description, commitId: commit.commitId });
+  return state;
+}
+function closeCommitEditor() {
+  if (editingChange) { const state = drafts.get(`commit:${editingChange}`); if (state) state.editing = false; }
+  editingChange = null; drawer.hidden = true; drawer.replaceChildren();
+  if (savedRangeBeforeEdit) { range = savedRangeBeforeEdit.range; rangeAnchor = savedRangeBeforeEdit.anchor; }
+  savedRangeBeforeEdit = null; invalidateRange(); updateReview();
+}
+function openCommitEditor(changeId) {
+  const commit = snapshot.commits.find(item => item.changeId === changeId);
+  if (!commit || commit.immutable || commit.divergent) return;
+  if (editingChange && drafts.get(`commit:${editingChange}`)?.saving) return;
+  if (!editingChange) savedRangeBeforeEdit = { range: range && { ...range }, anchor: rangeAnchor };
+  else { const previous = drafts.get(`commit:${editingChange}`); if (previous) previous.editing = false; }
+  editingChange = changeId; range = { start: changeId, end: changeId }; rangeAnchor = changeId;
+  commitDraft(commit).editing = true; invalidateRange(); renderDrawer(true); updateReview();
+}
+function renderDrawer(focus = false) {
+  const commit = snapshot.commits.find(item => item.changeId === editingChange);
+  if (!commit) { drawer.hidden = true; return; }
+  const existing = drafts.get(`commit:${commit.changeId}`), oldText = existing?.text;
+  const state = commitDraft(commit);
+  let area = drawer.querySelector('textarea');
+  if (area && drawer.dataset.changeId === editingChange && area.value === oldText && oldText !== state.text) area.value = state.text;
+  if (!area || drawer.dataset.changeId !== editingChange) {
+    drawer.replaceChildren(); drawer.dataset.changeId = editingChange;
+    const heading = el('div', null, { class: 'commit-editor-heading' });
+    heading.append(el('span', '', { class: 'commit-editor-ids' }), el('strong', 'Edit commit description'));
+    area = editor(`Description ${commit.changeId.slice(0, 12)}`, state.text, value => { state.text = value; });
+    area.className = 'commit-editor'; area.rows = 1; area.wrap = 'off';
+    const save = button('Save description', async () => {
+      if (state.saving) return;
+      const submitted = state.text; state.saving = true; renderDrawer(); updateRows();
+      try {
+        const result = await action('describe', { changeId: commit.changeId, commitId: state.commitId, expectedDescription: state.original, description: submitted });
+        if (result.status !== 'saved') state.message = `Conflict: ${result.reason}. Current description: ${result.current?.map(row => row.description).join(' / ') || '(unavailable)'}`;
+        else {
+          state.awaitingSnapshot = { after: snapshotRequest, commitId: result.current.commitId };
+          state.original = result.current.description; state.commitId = result.current.commitId; state.message = '';
+          if (state.text === submitted) { state.text = state.original; state.saving = false; closeCommitEditor(); refresh(true); return; }
+          refresh(true);
+        }
+      } catch (error) { state.message = error.message; }
+      state.saving = false; if (selected === 'diff') { renderDrawer(); updateRows(); }
+    });
+    save.className = 'commit-save';
+    const cancel = button('Cancel', () => { if (state.saving) return; state.text = state.original; state.message = ''; closeCommitEditor(); });
+    cancel.className = 'commit-cancel';
+    area.addEventListener('keydown', event => { if (event.key === 'Escape' && !state.saving) { event.preventDefault(); cancel.click(); } });
+    const controls = el('div', null, { class: 'commit-controls' }); controls.append(save, cancel);
+    drawer.append(heading, area, controls, el('p', '', { class: 'save-error', role: 'alert' }));
+  }
+  drawer.hidden = false;
+  drawer.querySelector('.commit-editor-ids').textContent = `${commit.changeId.slice(0, 12)} · ${commit.commitId.slice(0, 12)}`;
+  drawer.querySelector('.commit-save').disabled = !!state.saving || commit.immutable || commit.divergent;
+  drawer.querySelector('.commit-cancel').disabled = !!state.saving;
+  drawer.querySelector('.save-error').textContent = state.message || '';
+  if (focus) area.focus({ preventScroll: true });
+}
+function createRailRow(changeId) {
+  const row = el('div', null, { class: 'rail-row', 'data-change-id': changeId });
+  const graph = el('div', null, { class: 'rail-graph', 'aria-hidden': 'true' });
+  graph.append(el('span', null, { class: 'rail-node' }), el('span', null, { class: 'rail-line' }));
+  const pick = button('', event => selectCommit(changeId, event.shiftKey)); pick.className = 'rail-pick';
+  pick.append(el('span', '', { class: 'rail-subj' }), el('span', '', { class: 'rail-sub' }));
+  const peek = button('⌄', () => { if (openBodies.has(changeId)) openBodies.delete(changeId); else openBodies.add(changeId); updateRows(); });
+  peek.className = 'body-peek-btn'; peek.setAttribute('aria-label', `Toggle description ${changeId.slice(0, 12)}`);
+  const edit = editButton(`Description ${changeId.slice(0, 12)}`, () => openCommitEditor(changeId));
+  const preview = el('div', '', { class: 'rail-body-preview' });
+  row.append(graph, pick, peek, edit, preview);
+  row.addEventListener('click', event => { if (!event.target.closest('button, .rail-body-preview')) selectCommit(changeId, event.shiftKey); });
+  return row;
+}
+function updateRows() {
+  const commits = snapshot.commits, indices = selectedIndices();
+  railTitle.textContent = `Commits (${indices ? indices[1] - indices[0] + 1 : commits.length}/${commits.length})`;
+  const present = new Set(commits.map(commit => commit.changeId));
+  for (const [id, row] of rows) if (!present.has(id)) { row.remove(); rows.delete(id); openBodies.delete(id); }
+  let empty = railScroll.querySelector('.rail-empty');
+  if (!commits.length) { if (!empty) { empty = el('p', 'No commits in this range.', { class: 'rail-empty' }); railScroll.append(empty); } }
+  else empty?.remove();
+  commits.forEach((commit, index) => {
+    let row = rows.get(commit.changeId);
+    if (!row) { row = createRailRow(commit.changeId); rows.set(commit.changeId, row); }
+    const at = railScroll.children[index]; if (at !== row) railScroll.insertBefore(row, at || null);
+    const description = commit.description || '', [subject, ...bodyLines] = description.split('\n'), body = bodyLines.join('\n').trim();
+    const subjectNode = row.querySelector('.rail-subj'); subjectNode.textContent = subject || '(no description set)';
+    if (body || subject.length > 50) subjectNode.title = description; else subjectNode.removeAttribute('title');
+    row.querySelector('.rail-sub').textContent = `${commit.changeId.slice(0, 12)}${commit.isWorkingCopy ? ' · @' : ''}`;
+    row.classList.toggle('is-selected', !indices || (index >= indices[0] && index <= indices[1]));
+    row.querySelector('.rail-line').hidden = index === commits.length - 1;
+    const peek = row.querySelector('.body-peek-btn'); peek.hidden = !body; peek.setAttribute('aria-expanded', String(openBodies.has(commit.changeId)));
+    const preview = row.querySelector('.rail-body-preview'); preview.hidden = !body || !openBodies.has(commit.changeId); preview.textContent = body;
+    const edit = row.querySelector('.commit-edit'); edit.hidden = commit.immutable || commit.divergent; edit.disabled = !!drafts.get(`commit:${editingChange}`)?.saving || !!drafts.get(`commit:${commit.changeId}`)?.saving; edit.classList.toggle('is-editing', editingChange === commit.changeId);
+  });
+}
+function updateReview() {
+  if (!snapshot || selected !== 'diff' || !diffView) return;
+  updateRows(); if (editingChange) renderDrawer();
+  const indices = selectedIndices(), commits = snapshot.commits;
+  const baseDisplay = snapshot.baseDisplay || snapshot.base.slice(0, 12), headDisplay = snapshot.headDisplay || snapshot.head.slice(0, 12);
+  let label, request;
+  if (!indices) label = `--from ${baseDisplay} --to ${headDisplay}`;
+  else if (indices[0] === indices[1]) { const commit = commits[indices[0]]; label = `-r ${commit.changeId.slice(0, 12)}`; request = { rev: commit.commitId }; }
+  else {
+    const top = commits[indices[0]], previous = commits[indices[1] + 1];
+    label = `--from ${previous ? previous.changeId.slice(0, 12) : baseDisplay} --to ${top.changeId.slice(0, 12)}`;
+    request = { from: previous?.commitId || snapshot.base, to: top.commitId };
+  }
+  rangeText.textContent = label;
+  const data = { root: config.workspace, range: label, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, snapshotVersion: snapshot.version, kind: 'jj', to: snapshot.head };
+  if (!request) {
+    if (requestedRange) invalidateRange();
+    rangeStatus.textContent = snapshotLoading() ? 'Refreshing repository snapshot…' : '';
+    diffView.update({ ...data, patch: snapshot.patch, rangeKey: null });
+  } else {
+    const key = JSON.stringify([snapshot.operationId, request]);
+    if (requestedRange !== key) {
+      requestedRange = key; rangeError = ''; const requestId = ++rangeRequestId;
+      rangeStatus.textContent = 'Loading diff…';
+      action('diffRange', { operationId: snapshot.operationId, ...request }).then(result => {
+        if (requestId !== rangeRequestId || selected !== 'diff') return;
+        rangeStatus.textContent = ''; diffView.update({ ...data, patch: result.patch, snapshotVersion: result.version, rangeKey: result.rangeKey, rangeLabel: label });
+      }).catch(error => { if (requestId === rangeRequestId && selected === 'diff') { rangeError = error.message; rangeStatus.textContent = rangeError; } });
+    } else if (rangeError) rangeStatus.textContent = rangeError;
+  }
+  if (!snapshotLoading() && pendingDeepLink?.view === 'diff') {
+    const target = pendingDeepLink; pendingDeepLink = null;
+    if (target.file) diffView.revealTarget(target);
+    if (target.change) {
+      const key = target.change.toLowerCase(), exact = commits.filter(commit => commit.changeId.toLowerCase() === key);
+      const matches = exact.length ? exact : commits.filter(commit => commit.changeId.toLowerCase().startsWith(key));
+      if (matches.length === 1) {
+        railPane.setCollapsed(false); const row = rows.get(matches[0].changeId);
+        if (row) { railScroll.scrollTop = Math.max(0, row.offsetTop - railScroll.offsetTop - (railScroll.clientHeight - row.offsetHeight) / 2); row.classList.add('deep-link-highlight'); setTimeout(() => row.classList.remove('deep-link-highlight'), 2500); }
+      } else { pendingDeepLinkNotice = matches.length ? `Change prefix "${target.change}" is ambiguous (matches ${matches.map(commit => commit.changeId.slice(0, 12)).join(', ')}).` : `Commit "${target.change}" is not in the current snapshot.`; renderDeepLinkNotice(); }
+    }
+  }
 }
 let renderGeneration = 0;
 async function renderView(focusChangeId) {
@@ -628,104 +822,31 @@ async function renderView(focusChangeId) {
 async function renderViewContent(focusChangeId) {
   const generation = ++renderGeneration;
   displayedDoc = null;
-  const view = document.querySelector('#view'); diffView?.hide(); view.replaceChildren(); rendered = true;
-  renderDeepLinkNotice();
+  const view = document.querySelector('#view');
   const id = selected;
+  if (id === 'diff' && snapshot && reviewWorkspace.isConnected && diffView) {
+    rendered = true; updateReview(); return;
+  }
+  if (id !== 'diff' || !snapshot) { diffView?.hide(); invalidateRange(); }
+  view.replaceChildren(); rendered = true;
+  renderDeepLinkNotice();
   updateTabTitle();
   if (modeView !== id) {
     if (startsInExplore(id) || startsInExplore(modeView)) globalThis.lavish?.setAnnotationMode?.(!startsInExplore(id));
     modeView = id;
   }
-  view.classList.toggle('changes-view', id === 'changes');
-  app.classList.toggle('is-changes-view', id === 'changes');
+  view.classList.toggle('diff-view', id === 'diff');
+  app.classList.toggle('is-diff-view', id === 'diff');
   for (const [key, frame] of frames) frame.node.hidden = key !== id || !documents.find(doc => doc.id === key)?.source?.toLowerCase().endsWith('.html');
-  if (id === 'changes') {
-    const bar = el('div', null, { class: 'changes-bar' });
-    bar.append(el('h1', labels[id]));
-    if (!snapshot) { view.append(bar, notice(snapshotLoading() ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
-    bar.append(el('span', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted changes-range' }));
-    if (snapshotLoading()) bar.append(el('span', 'Refreshing repository snapshot…', { class: 'muted' }));
-    view.append(bar);
+  if (id === 'diff') {
+    if (!snapshot) { view.append(notice(snapshotLoading() ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
     if (!(await requireBundle('diff', 'mountLavishDiff', view, generation))) return;
-    view.append(diffContainer);
-    if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, loadDiffFiles: (operationId, fileIndex, version) => action('diffFiles', { operationId, fileIndex, version }) });
-    diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, snapshotVersion: snapshot.version, kind: 'jj', to: snapshot.head });
-    if (!snapshotLoading() && pendingDeepLink?.view === 'changes' && pendingDeepLink.file) {
-      const target = pendingDeepLink; pendingDeepLink = null; diffView.revealTarget(target);
-    }
+    view.append(reviewWorkspace);
+    if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, hideSidebar: true, collapsedByDefault: true, loadDiffFiles: (operationId, fileIndex, version, rangeKey) => action('diffFiles', { operationId, fileIndex, version, rangeKey }) });
+    updateReview();
     return;
   }
   view.append(el('h1', labelFor(id) || documents.find(doc => doc.id === id)?.title || id));
-  if (id === 'commits') {
-    if (!snapshot) { view.append(notice(snapshotLoading() ? 'Loading repository snapshot…' : 'Repository snapshot unavailable. Refresh after checking the workspace and jj configuration.')); return; }
-    view.append(el('p', `--from ${snapshot.base.slice(0, 12)} --to ${snapshot.head.slice(0, 12)}`, { class: 'muted' }));
-    // Re-entering a repository view keeps the previous snapshot on screen while the
-    // fresh one arrives, so say which of the two the owner is looking at.
-    if (snapshotLoading()) view.append(el('p', 'Refreshing repository snapshot…', { class: 'muted' }));
-    if (!snapshot.commits.length) view.append(el('p', 'No commits in this range.'));
-    for (const commit of snapshot.commits) {
-      const key = `commit:${commit.changeId}`, state = draft(key, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '', editing: false });
-      if (state.awaitingSnapshot && (commit.commitId === state.awaitingSnapshot.commitId || snapshotApplied > state.awaitingSnapshot.after)) state.awaitingSnapshot = null;
-      if (state.text === state.original && !state.saving && !state.message && !state.awaitingSnapshot) { state.text = commit.description; state.original = commit.description; state.commitId = commit.commitId; }
-      const card = el('section', null, { class: 'card', 'data-change-id': commit.changeId }); card.append(el('h2', `${commit.changeId.slice(0, 12)} · ${commit.commitId.slice(0, 12)}`));
-      const label = `Description ${commit.changeId.slice(0, 12)}`;
-      const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}`, tabindex: '0', role: 'region', 'aria-label': `Read ${label}` });
-      const area = editor(label, state.text, value => { state.text = value; });
-      area.className = 'commit-editor'; area.rows = 1; area.wrap = 'off';
-      display.hidden = state.editing; area.hidden = !state.editing;
-      const edit = editButton(label, () => { state.editing = true; renderView(commit.changeId); });
-      edit.hidden = state.editing || commit.immutable || commit.divergent;
-      const info = el('p', state.message, { role: 'alert', class: 'save-error' });
-      const save = button('Save description', async () => {
-        const submitted = state.text; state.saving = true; save.disabled = true; cancel.disabled = true;
-        try {
-          const result = await action('describe', { changeId: commit.changeId, commitId: state.commitId, expectedDescription: state.original, description: submitted });
-          if (result.status !== 'saved') { state.message = `Conflict: ${result.reason}. Current description: ${result.current?.map(row => row.description).join(' / ') || '(unavailable)'}`; }
-          else { state.awaitingSnapshot = { after: snapshotRequest, commitId: result.current.commitId }; state.original = result.current.description; state.commitId = result.current.commitId; if (state.text === submitted) { state.text = state.original; state.editing = false; } state.message = ''; refresh(true); }
-        } catch (error) { state.message = error.message; }
-        state.saving = false;
-        if (selected === 'commits') renderView();
-      });
-      save.disabled = state.saving || commit.immutable || commit.divergent;
-      save.className = 'commit-save';
-      if (state.message) { save.classList.add('save-failed'); save.title = state.message; save.prepend(el('span', '⚠ ', { 'aria-hidden': 'true' })); }
-      if (commit.immutable || commit.divergent) save.title = commit.immutable ? 'Immutable commit' : 'Divergent change';
-      const stats = el('pre', null, { class: 'commit-stat', 'aria-label': `Changes ${commit.changeId.slice(0, 12)}` });
-      for (const part of (commit.stat || 'No changed files').split(/(\++|-+)/)) stats.append(el('span', part, { class: /^\++$/.test(part) ? 'stat-add' : /^-+$/.test(part) ? 'stat-remove' : '' }));
-      const cancel = button('Cancel', () => { if (state.saving) return; state.text = state.original; state.message = ''; state.editing = false; renderView(); });
-      cancel.disabled = !!state.saving; cancel.className = 'commit-cancel';
-      area.addEventListener('keydown', event => { if (event.key === 'Escape' && !state.saving) { event.preventDefault(); cancel.click(); } });
-      save.hidden = cancel.hidden = !state.editing;
-      const description = el('div', null, { class: 'commit-description-wrap' }); description.append(display, edit);
-      const controls = el('div', null, { class: 'commit-controls' }); controls.append(save, cancel);
-      card.append(description, area, controls, info, stats); view.append(card);
-      if (state.editing && commit.changeId === focusChangeId) area.focus();
-      for (const [node, lines] of [[display, 8], [area, 8], [stats, 6]]) {
-        if (!node.hidden) {
-          const style = getComputedStyle(node), cap = parseFloat(style.lineHeight) * lines + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-          const height = node.scrollHeight;
-          node.style.height = `${Math.min(height, cap)}px`;
-          if (node !== area) node.style.resize = height > cap + 1 ? 'vertical' : 'none';
-        }
-      }
-    }
-    if (!snapshotLoading() && pendingDeepLink?.view === 'commits' && pendingDeepLink.change) {
-      const query = pendingDeepLink.change, key = query.toLowerCase(); pendingDeepLink = null;
-      const exact = snapshot.commits.filter(commit => commit.changeId.toLowerCase() === key);
-      const matches = exact.length ? exact : snapshot.commits.filter(commit => commit.changeId.toLowerCase().startsWith(key));
-      if (matches.length === 1) {
-        const card = [...view.querySelectorAll('.card[data-change-id]')].find(node => node.dataset.changeId === matches[0].changeId);
-        if (card) {
-          card.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
-          card.classList.add('deep-link-highlight'); setTimeout(() => card.classList.remove('deep-link-highlight'), 2500);
-        }
-      } else {
-        pendingDeepLinkNotice = matches.length ? `Change prefix "${query}" is ambiguous (matches ${matches.map(commit => commit.changeId.slice(0, 12)).join(', ')}).` : `Commit "${query}" is not in the current snapshot.`;
-        renderDeepLinkNotice();
-      }
-    }
-    return;
-  }
   const doc = documents.find(item => item.id === id);
   if (doc?.metadata && Object.keys(doc.metadata).length) { const scope = el('p', Object.entries(doc.metadata).map(([key, value]) => `${key}: ${value}`).join(' · '), { class: 'muted' }); view.append(scope); }
   if (doc?.source?.toLowerCase().endsWith('.html')) {
@@ -824,7 +945,21 @@ async function renderViewContent(focusChangeId) {
   } else view.append(area, save);
   view.append(info);
 }
-app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><span id="hub-nav-desc-new" hidden>New publication</span><div class="hub-sidebar"><div class="hub-identity"><div class="hub-session-title"></div><div class="hub-repo-name"></div></div><nav id="navigation" aria-label="Workspace views"></nav></div><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
+app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><span id="hub-nav-desc-new" hidden>New publication</span><div class="hub-sidebar"><button type="button" class="hub-sidebar-toggle"></button><div class="hub-identity"><div class="hub-session-title"></div><div class="hub-repo-name"></div></div><nav id="navigation" aria-label="Workspace views"></nav></div><div class="pane-resizer" aria-hidden="true"></div><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
+const sidebar = document.querySelector('.hub-sidebar'), sidebarToggle = document.querySelector('.hub-sidebar-toggle');
+function updateSidebar({ width, collapsed }) {
+  document.querySelector('#app > .layout').style.setProperty('--hub-sidebar-width', `${collapsed ? 38 : width}px`);
+  sidebar.classList.toggle('is-collapsed', collapsed);
+  sidebar.querySelector('.hub-identity').hidden = sidebar.querySelector('#navigation').hidden = collapsed;
+  sidebarToggle.textContent = collapsed ? '»' : '«';
+  sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  sidebarToggle.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  sidebarToggle.title = sidebarToggle.getAttribute('aria-label');
+}
+const sidebarPane = attachResizablePane({ storage, widthKey: 'lavish-hub-sidebar-width', collapsedKey: 'lavish-hub-sidebar-collapsed', defaultWidth: 208, minWidth: 160, maxWidth: 420, onChange: updateSidebar });
+updateSidebar(sidebarPane.getState());
+sidebarToggle.addEventListener('click', () => sidebarPane.setCollapsed(!sidebarPane.getState().collapsed));
+sidebarPane.attachResizer(document.querySelector('.pane-resizer'), event => event.clientX - sidebar.getBoundingClientRect().left);
 document.querySelector('#view').addEventListener('click', event => {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const link = event.target.closest?.('a[href]');
