@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { build } from 'esbuild';
+import { chromium } from 'playwright-core';
+
+const patch = name => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -5 +5 @@\n-old\n+new\n`;
+
+test('embedded diff preserves explicit expansion across ranges and updates its summary', { timeout: 30000 }, async t => {
+  const bundle = (await build({ entryPoints: ['web/diff-app.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', define: { LAVISH_HUB_LANGUAGES: '[]' } })).outputFiles[0].text;
+  const css = await readFile('web/diff.css', 'utf8');
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.setContent(`<style>${css}</style><div id="app" style="height:600px"></div><script>globalThis.hubConfig = {}; globalThis.lavishPreview = true;</script><script>${bundle.replaceAll('</script', '<\\/script')}</script>`);
+  await page.evaluate(() => {
+    globalThis.calls = [];
+    globalThis.diff = mountLavishDiff(document.querySelector('#app'), { embedded: true, hideSidebar: true, collapsedByDefault: true, loadDiffFiles: async (...args) => {
+      calls.push(args);
+      return { oldFile: { name: 'a.txt', contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name: 'a.txt', contents: 'one\ntwo\nthree\nfour\nnew\n' } };
+    } });
+    globalThis.show = (patch, rangeKey) => diff.update({ root: '/workspace', operationId: 'op', snapshotVersion: 'v', revision: 'rev', range: 'base..head', rangeKey, patch });
+  });
+  await page.evaluate(({ a, b }) => show(a + b, 'first'), { a: patch('a.txt'), b: patch('b.txt') });
+  assert.equal(await page.locator('.layout .sidebar').count(), 0);
+  await page.getByText('0/2 viewed').waitFor();
+  await page.getByRole('button', { name: 'Expand a.txt' }).waitFor();
+  await page.locator('.file-header[data-file="a.txt"] .path').click();
+  await page.getByRole('button', { name: 'Collapse a.txt' }).waitFor();
+  await page.locator('.file-header[data-file="a.txt"] input').check();
+  await page.getByText('1/2 viewed').waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Collapse a.txt' }).count(), 1);
+  assert.equal((await page.locator('.file-header[data-file="a.txt"]').boundingBox()).height, 44);
+  await page.evaluate(({ a, c }) => show(a + c, 'second'), { a: patch('a.txt'), c: patch('c.txt') });
+  await page.getByRole('button', { name: 'Collapse a.txt' }).waitFor();
+  await page.getByRole('button', { name: 'Expand c.txt' }).waitFor();
+  assert.deepEqual(await page.evaluate(() => diff.revealTarget({ file: 'c.txt' })), { ok: true });
+  await page.getByRole('button', { name: 'Collapse c.txt' }).waitFor();
+  await page.getByRole('button', { name: 'Collapse all' }).click();
+  await page.getByRole('button', { name: 'Expand all' }).click();
+  await page.getByRole('button', { name: 'Collapse a.txt' }).waitFor();
+  await page.evaluate(a => show(a, 'third'), patch('a.txt'));
+  await page.getByRole('button', { name: 'Collapse a.txt' }).waitFor();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const reveal = await page.evaluate(() => diff.revealTarget({ file: 'a.txt', line: '2' }));
+  assert.deepEqual(await page.evaluate(() => calls), [['op', 0, 'v', 'third']]);
+  assert.deepEqual(reveal, { ok: true });
+  await page.evaluate(a => show(a, 'fourth'), patch('a.txt'));
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.deepEqual(await page.evaluate(() => diff.revealTarget({ file: 'a.txt', line: '2' })), { ok: true });
+  assert.deepEqual(await page.evaluate(() => calls.at(-1)), ['op', 0, 'v', 'fourth']);
+  await page.locator('[data-gutter] [data-line-type="change-addition"]').first().hover();
+  await page.getByRole('button', { name: 'Add comment' }).click();
+  await page.getByPlaceholder('Write a comment').fill('Keep this draft');
+  await page.evaluate(a => show(a, 'fifth'), patch('a.txt'));
+  await page.getByText('Finish or cancel your comment first.').waitFor();
+  assert.equal(await page.getByPlaceholder('Write a comment').inputValue(), 'Keep this draft');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.deepEqual(await page.evaluate(() => diff.revealTarget({ file: 'a.txt', line: '2' })), { ok: true });
+  assert.deepEqual(await page.evaluate(() => calls.at(-1)), ['op', 0, 'v', 'fifth']);
+});

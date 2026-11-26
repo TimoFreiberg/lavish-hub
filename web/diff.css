@@ -86,7 +86,7 @@ h1 { font-size: 15px; margin: 0; flex: none; }
 .counts .del { color: var(--ob-diff-del); }
 
 /* Height is set inline from HEADER_HEIGHT (44px); keep everything on one crisp row. */
-.file-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px; background: var(--ob-surface); color: var(--ob-fg); border-bottom: 1px solid var(--ob-border); border-radius: 7px 7px 0 0; overflow: hidden; }
+.file-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px; background: var(--ob-surface); color: var(--ob-fg); border-bottom: 1px solid var(--ob-border); border-radius: 7px 7px 0 0; overflow: hidden; cursor: pointer; }
 .file-header.is-collapsed { border-bottom-color: transparent; border-radius: 7px; }
 .file-header.deep-link-highlight { animation: diff-target-highlight 2.5s ease-out; }
 @keyframes diff-target-highlight {

@@ -77,14 +77,14 @@ function buildFileTree(files, filterText) {
   return compact(root);
 }
 
-export function mountDiff(app, { embedded = false, loadDiffFiles } = {}) {
+export function mountDiff(app, { embedded = false, hideSidebar = false, collapsedByDefault = false, loadDiffFiles } = {}) {
 const el = (tag, text, cls) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; };
 const button = (text, action, cls) => { const node = el('button', text, cls); node.type = 'button'; node.addEventListener('click', action); return node; };
 const state = {
   data: null, files: [], counts: [], totals: { add: 0, del: 0 },
   hash: null, latest: null, pending: null,
   split: false, wrap: false, filter: '', collapsedDirs: new Set(),
-  viewed: new Set(), collapsed: new Set(), current: 0, hunk: -1, draft: null, storageFailed: false,
+  viewed: new Set(), collapsed: new Set(), expanded: new Set(), current: 0, hunk: -1, draft: null, storageFailed: false,
 };
 if (!embedded) window.addEventListener('beforeunload', event => { if (state.draft?.textarea.value) { event.preventDefault(); event.returnValue = ''; } });
 if (!window.lavishPreview) try { state.viewed = new Set(JSON.parse(localStorage.getItem('lavish-hub-viewed') || '[]')); } catch { state.storageFailed = true; }
@@ -100,7 +100,7 @@ function updateExpansionNotice() { expansionNotice.textContent = expansionFailur
 // Lavish sees the shadow host, not the clicked diff line. Let CodeView handle
 // this surface even when Lavish's annotation mode is active.
 viewport.setAttribute('data-lavish-action', '');
-const layout = el('div', null, 'layout'); layout.append(sidebar, viewport); app.append(header, notice, expansionNotice, targetNotice, layout);
+const layout = el('div', null, 'layout'); if (!hideSidebar) layout.append(sidebar); layout.append(viewport); app.append(header, notice, expansionNotice, targetNotice, layout);
 const gutterObservers = new WeakMap();
 let view, worker, workerUrl, fallingBack = false;
 let diffAnchors = [], slots = [], generation = null, placementFrame = 0, reportedPlacements = false;
@@ -180,6 +180,7 @@ window.addEventListener('lavish:ready', requestDiffAnchors);
 requestDiffAnchors();
 window.addEventListener('resize', schedulePlacements);
 window.addEventListener('scroll', schedulePlacements, true);
+new ResizeObserver(schedulePlacements).observe(viewport);
 // CodeView lays items out from itemMetrics without measuring headers, so the
 // header must render at exactly this height or every later file drifts.
 const HEADER_HEIGHT = 44;
@@ -212,7 +213,7 @@ function options() { return {
     const current = () => state.data === data && index >= 0 && state.files[index] === file;
     try {
       if (!loadDiffFiles || !data?.operationId || !file) throw new Error('unavailable');
-      const files = await loadDiffFiles(data.operationId, index, data.snapshotVersion);
+      const files = await loadDiffFiles(data.operationId, index, data.snapshotVersion, data.rangeKey);
       // Clear only this file's failure: another file expanding successfully says
       // nothing about a file whose read is still unavailable.
       if (current()) { file.fullFiles = files; expansionFailures.delete(index); updateExpansionNotice(); }
@@ -275,6 +276,7 @@ function createView() { view = new CodeView(options(), worker); view.setup(viewp
 createView();
 // Scroll only the sidebar tree; scrollIntoView would also scroll Lavish's parent page.
 function markCurrent() {
+  if (hideSidebar) return;
   const tree = sidebar.querySelector('.file-tree');
   sidebar.querySelectorAll('.file-link').forEach(link => {
     const idx = Number(link.dataset.index);
@@ -302,19 +304,24 @@ function summary(file) {
 function toggleViewed(index) {
   const file = state.files[index]; if (!file?.viewedKey) return;
   state.viewed.has(file.viewedKey) ? state.viewed.delete(file.viewedKey) : state.viewed.add(file.viewedKey);
-  persist(); renderSidebar();
+  persist(); renderSidebar(); updateEmbeddedSummary();
   state.version++;
   if (view) view.updateItem(itemFor(file, index));
 }
+function isCollapsed(path) { return collapsedByDefault ? !state.expanded.has(path) : state.collapsed.has(path); }
 function toggleCollapsed(file, index) {
-  state.collapsed.has(file.newPath) ? state.collapsed.delete(file.newPath) : state.collapsed.add(file.newPath);
+  const paths = collapsedByDefault ? state.expanded : state.collapsed;
+  paths.has(file.newPath) ? paths.delete(file.newPath) : paths.add(file.newPath);
   state.version++;
   if (view) view.updateItem(itemFor(file, index));
   renderToolbar();
 }
 function toggleCollapseAll() {
-  const allCollapsed = state.files.length > 0 && state.files.every(file => state.collapsed.has(file.newPath));
-  if (allCollapsed) state.collapsed.clear();
+  const allCollapsed = state.files.length > 0 && state.files.every(file => isCollapsed(file.newPath));
+  if (collapsedByDefault) {
+    if (allCollapsed) for (const file of state.files) state.expanded.add(file.newPath);
+    else state.expanded.clear();
+  } else if (allCollapsed) state.collapsed.clear();
   else for (const file of state.files) state.collapsed.add(file.newPath);
   setItems();
   renderToolbar();
@@ -323,8 +330,9 @@ async function copyText(text) { try { await navigator.clipboard.writeText(text);
 function showRaw(file) { const dialog = el('dialog', null, 'raw-dialog'); dialog.append(el('strong', file.newPath), el('pre', file.raw, 'raw'), button('Close', () => dialog.close())); dialog.addEventListener('close', () => dialog.remove()); app.append(dialog); dialog.showModal(); }
 function fileHeader(index) {
   const file = state.files[index]; if (!file) return el('div');
-  const collapsed = state.collapsed.has(file.newPath);
+  const collapsed = isCollapsed(file.newPath);
   const box = el('div', null, `file-header${collapsed ? ' is-collapsed' : ''}`);
+  box.addEventListener('click', event => { if (!event.target.closest('button, a, input, label')) toggleCollapsed(file, index); });
   box.dataset.file = file.newPath;
   box.style.height = `${HEADER_HEIGHT}px`;
 
@@ -401,13 +409,13 @@ function itemFor(file, index) {
   if (file.parsed && !file.parseError) {
     const lang = getFiletypeFromFileName(file.parsed.name);
     file.parsed.lang = supportedLanguages.has(lang) ? lang : 'text';
-    if (!file.parsed.cacheKey) file.parsed.cacheKey = file.viewedKey;
-    return { id: String(index), type: 'diff', fileDiff: file.parsed, version: state.version, collapsed: state.collapsed.has(file.newPath), annotations: [...slots.filter(slot => slot.index === index).map(slot => slot.annotation), ...(state.draft?.index === index ? [state.draft.annotation] : [])] };
+    return { id: String(index), type: 'diff', fileDiff: file.parsed, version: state.version, collapsed: isCollapsed(file.newPath), annotations: [...slots.filter(slot => slot.index === index).map(slot => slot.annotation), ...(state.draft?.index === index ? [state.draft.annotation] : [])] };
   }
   return { id: String(index), type: 'file', file: { name: file.newPath, contents: '' }, collapsed: true };
 }
 function setItems() { state.version = (state.version || 0) + 1; if (view) view.setItems(state.files.map(itemFor)); }
 function renderSidebar() {
+  if (hideSidebar) return;
   const focused = sidebar.contains(document.activeElement) && document.activeElement.matches('.file-link, .dir-row')
     ? { selector: document.activeElement.classList.contains('dir-row') ? '.dir-row' : '.file-link', path: document.activeElement.dataset.path } : null;
   const prevTreeScroll = sidebar.querySelector('.file-tree')?.scrollTop || 0;
@@ -519,7 +527,7 @@ function renderToolbar() {
   wrapBtn.setAttribute('aria-pressed', String(state.wrap));
   wrapBtn.title = 'Toggle line wrapping (w)';
 
-  const allCollapsed = state.files.length > 0 && state.files.every(file => state.collapsed.has(file.newPath));
+  const allCollapsed = state.files.length > 0 && state.files.every(file => isCollapsed(file.newPath));
   const foldBtn = button('', toggleCollapseAll, 'tool-btn');
   foldBtn.append(foldIcon(allCollapsed), el('span', allCollapsed ? 'Expand all' : 'Collapse all'));
   foldBtn.title = allCollapsed ? 'Expand all files' : 'Collapse all files';
@@ -613,7 +621,7 @@ function openDraft(index, range) {
         if (!digest) throw new Error('Could not identify the current diff');
         const quote = quoteSelection(file.parsed, range, file.fullFiles);
         const target = { type: 'diff-line', digest, fileIndex: index, oldPath: file.oldPath, newPath: file.newPath, side: range.side || 'additions', start: location.start, end: location.end, revision: String(data.revision || '') };
-        const prefix = `${embedded ? `Hub view: Changes (changes)\nRevision range: ${data.range}\n\n` : ''}${where}\n\n${quote}\n\n`;
+        const prefix = `${embedded ? `Hub view: Diff (diff)\nRevision range: ${data.range}\n\n` : ''}${where}\n\n${quote}\n\n`;
         const random = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
         attempt = { prompt: prefix + textarea.value, options: { tag: 'code-comment', text: where, queueKey: '', target, commentPrefix: prefix, requestId: `q-${random}` } };
       }
@@ -657,6 +665,15 @@ function updateNotice() {
   notice.replaceChildren(); if (!state.pending || state.pending === state.hash) return;
   notice.append('Diff changed. '); const refresh = button('Refresh', () => embedded ? applyEmbedded(state.pending) : loadData(state.pending)); refresh.disabled = Boolean(state.draft?.textarea.value); notice.append(refresh); if (refresh.disabled) notice.append(' Finish or cancel your comment first.');
 }
+function updateEmbeddedSummary() {
+  if (!embedded) return;
+  const titles = header.querySelector('.titles');
+  if (!titles) return;
+  const viewed = state.files.filter(file => state.viewed.has(file.viewedKey)).length;
+  const counts = el('span', null, 'counts');
+  counts.append(el('span', `+${state.totals.add}`, 'add'), ' ', el('span', `−${state.totals.del}`, 'del'));
+  titles.replaceChildren(el('span', `${state.files.length} file${state.files.length === 1 ? '' : 's'}`, 'summary-files'), counts, el('span', `${viewed}/${state.files.length} viewed`, 'hint'));
+}
 function render(data) {
   revealGeneration++;
   clearTimeout(highlightTimer);
@@ -668,24 +685,23 @@ function render(data) {
   const top = view.getScrollTop(), current = currentAt(top), previous = state.files[current]?.newPath, itemTop = view.getTopForItem(String(current)), offset = itemTop == null ? 0 : itemTop - top;
   state.data = data; state.version = (state.version || 0) + 1;
   state.files = modelPatch(data.patch);
+  // CodeView keeps the old parsed object when its cache key matches, but the
+  // file loader must resolve the parsed object from the current snapshot.
+  state.renderVersion = (state.renderVersion || 0) + 1;
+  state.files.forEach((file, index) => { if (file.parsed) file.parsed.cacheKey = `${file.viewedKey}:${state.renderVersion}:${index}`; });
   state.counts = state.files.map(count);
   state.totals = state.counts.reduce((acc, c) => ({ add: acc.add + c.add, del: acc.del + c.del }), { add: 0, del: 0 });
   state.current = Math.max(0, state.files.findIndex(f => f.newPath === previous));
 
   const heading = el('div', null, 'heading'), titles = el('div', null, 'titles');
-  if (embedded) {
-    const summaryText = el('span', `${state.files.length} file${state.files.length === 1 ? '' : 's'}`, 'summary-files');
-    const summaryCounts = el('span', null, 'counts');
-    summaryCounts.append(el('span', `+${state.totals.add}`, 'add'), ' ', el('span', `−${state.totals.del}`, 'del'));
-    titles.append(summaryText, summaryCounts);
-  } else {
+  if (!embedded) {
     const range = el('span', `${data.range} · ${data.rangeSource}`, 'range'); range.title = range.textContent;
     titles.append(el('h1', 'Diff review'), range, el('span', `Generated ${data.generated || 'unknown'}`, 'hint'));
   }
   heading.append(titles, toolbar); header.replaceChildren(heading);
   const commits = Array.isArray(data.commits) ? data.commits : data.commits ? String(data.commits).split('\n') : [];
   if (commits.length && !embedded) { const details = el('details', null, 'commits'); details.open = state.commitsOpen ?? commits.length <= 3; details.addEventListener('toggle', () => { state.commitsOpen = details.open; }); details.append(el('summary', `${commits.length} commit${commits.length === 1 ? '' : 's'}`), el('pre', commits.join('\n'))); header.append(details); }
-  renderToolbar(); renderSidebar(); setItems();
+  renderToolbar(); renderSidebar(); updateEmbeddedSummary(); setItems();
   if (previous && state.files[state.current]?.newPath === previous) view.scrollTo({ type: 'item', id: String(state.current), align: 'start', offset });
   else view.scrollTo({ type: 'position', position: top });
   if (!state.files.length) notice.textContent = `No changes in ${data.range}`; else updateNotice();
@@ -711,7 +727,10 @@ async function revealTarget(target) {
   const entry = resolveFileEntry(state.files, target.file);
   if (!entry) { targetNotice.textContent = `File "${target.file}" is not in the current diff.`; return { ok: false, reason: 'missing-file' }; }
   const { file, index } = entry, id = String(index);
-  if (state.collapsed.delete(file.newPath)) { state.version++; view.updateItem(itemFor(file, index)); renderToolbar(); }
+  if (isCollapsed(file.newPath)) {
+    if (collapsedByDefault) state.expanded.add(file.newPath); else state.collapsed.delete(file.newPath);
+    state.version++; view.updateItem(itemFor(file, index)); renderToolbar();
+  }
   state.current = index; state.hunk = -1; markCurrent();
   const scrollFile = () => view.scrollTo({ type: 'item', id, align: 'start', behavior: 'instant' });
   const fail = (reason, message) => { scrollFile(); targetNotice.textContent = message; return { ok: false, reason }; };
@@ -771,7 +790,7 @@ async function revealTarget(target) {
   }, 2500);
   return { ok: true };
 }
-return { revealTarget, hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, hide() { reportPlacements([]); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range && state.data.root === data.root && state.data.revision === data.revision) { state.data.operationId = data.operationId; state.data.snapshotVersion = data.snapshotVersion; state.pending = null; updateNotice(); schedulePlacements(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
+return { revealTarget, hasUnsavedDraft() { return Boolean(state.draft?.textarea.value); }, hide() { reportPlacements([]); }, update(data) { if (state.data && state.data.patch === data.patch && state.data.range === data.range && state.data.rangeKey === data.rangeKey && state.data.root === data.root && state.data.revision === data.revision) { state.data.operationId = data.operationId; state.data.snapshotVersion = data.snapshotVersion; state.pending = null; updateNotice(); schedulePlacements(); return; } if (state.draft?.textarea.value) { state.pending = data; updateNotice(); } else applyEmbedded(data); } };
 }
 if (document.querySelector('#app') && !globalThis.hubConfig) mountDiff(document.querySelector('#app'));
 globalThis.mountLavishDiff = mountDiff;
