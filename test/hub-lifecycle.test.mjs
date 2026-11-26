@@ -7,6 +7,40 @@ const source = await readFile(new URL('../web/hub-lifecycle.js', import.meta.url
 const sandbox = {}; vm.runInNewContext(source, sandbox);
 const { formatTabTitle, applyNavBadge, createLeaveGuard } = sandbox.lavishHubLifecycle;
 
+test('resizable_sidebar_clamping_and_storage_fallback', () => {
+  const values = new Map();
+  const localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  const context = { localStorage };
+  vm.runInNewContext(source, context);
+  const { createSafeStorage, attachResizablePane } = context.lavishHubLifecycle;
+  const storage = createSafeStorage();
+  storage.setItem('width', '900');
+  const updates = [];
+  const options = { storage, widthKey: 'width', collapsedKey: 'collapsed', defaultWidth: 200, minWidth: 160, maxWidth: 420, onChange: state => updates.push({ ...state }) };
+  const pane = attachResizablePane(options);
+  assert.equal(pane.getState().width, 420);
+  pane.setWidth(20); assert.equal(pane.getState().width, 160);
+  pane.setCollapsed(true); assert.equal(storage.getItem('collapsed'), 'true');
+  pane.setCollapsed(false); assert.equal(storage.getItem('width'), '160');
+  assert.equal(updates.at(-1).collapsed, false);
+  const handlers = {}, classes = new Set();
+  const handle = { addEventListener: (name, fn) => { handlers[name] = fn; }, setPointerCapture: id => { handle.captured = id; }, classList: { add: name => classes.add(name), remove: name => classes.delete(name) } };
+  pane.attachResizer(handle, event => event.clientX);
+  handlers.pointerdown({ pointerId: 1, button: 0, preventDefault() {} });
+  assert.equal(handle.captured, 1); assert.equal(classes.has('dragging'), true);
+  handlers.pointermove({ pointerId: 1, clientX: 999 });
+  assert.equal(pane.getState().width, 420); assert.equal(storage.getItem('width'), '160');
+  handlers.pointerup({ pointerId: 1 });
+  assert.equal(storage.getItem('width'), '420'); assert.equal(classes.has('dragging'), false);
+  assert.equal(attachResizablePane(options).getState().width, 420);
+  Object.defineProperty(context, 'localStorage', { get() { throw new Error('opaque origin'); } });
+  const fallback = createSafeStorage();
+  fallback.setItem('width', '180'); fallback.setItem('collapsed', 'true');
+  const restored = attachResizablePane({ ...options, storage: fallback });
+  assert.equal(restored.getState().width, 180); assert.equal(restored.getState().collapsed, true);
+  restored.setWidth(300); assert.equal(fallback.getItem('width'), '300');
+});
+
 function fixture(withNavigation = false) {
   const listeners = {}, navListeners = {}, timers = new Map();
   let next = 0, dirty = false, now = 0, paused = 0, resumed = 0, statuses = 0, reloads = 0, href = '', confirms = [];

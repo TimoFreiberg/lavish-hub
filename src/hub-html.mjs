@@ -5,7 +5,23 @@ const escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<
 
 function siblingSidebarClient(c) {
   c.url = new URL(c.url, location.href).href;
-  const { formatTabTitle, applyNavBadge, applyCollapseToggle, createLeaveGuard, createOlderDisclosureController } = globalThis.lavishHubLifecycle;
+  const { formatTabTitle, applyNavBadge, applyCollapseToggle, createLeaveGuard, createOlderDisclosureController, createSafeStorage, attachResizablePane } = globalThis.lavishHubLifecycle;
+  const builtinViews = { diff: 'Diff', tasks: 'Tasks' };
+  const sidebar = document.querySelector('#lavish-hub-sidebar');
+  const sidebarToggle = sidebar.querySelector('.sidebar-toggle');
+  const resizer = sidebar.querySelector('.sidebar-resizer');
+  function renderSidebar({ width, collapsed }) {
+    document.documentElement.style.setProperty('--lavish-hub-sidebar-width', collapsed ? '38px' : `${width}px`);
+    sidebar.classList.toggle('is-collapsed', collapsed);
+    sidebarToggle.textContent = collapsed ? '»' : '«';
+    sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+    sidebarToggle.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+    sidebarToggle.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  }
+  const pane = attachResizablePane({ storage: createSafeStorage(), widthKey: 'lavish-hub-sidebar-width', collapsedKey: 'lavish-hub-sidebar-collapsed', defaultWidth: 200, minWidth: 160, maxWidth: 420, onChange: renderSidebar });
+  renderSidebar(pane.getState());
+  sidebarToggle.addEventListener('click', () => pane.setCollapsed(!pane.getState().collapsed));
+  pane.attachResizer(resizer, event => event.clientX);
   const setTabTitle = () => {
     const title = formatTabTitle('', c.sessionTitle || c.repoName || c.workspaceName || '');
     document.title = title;
@@ -82,7 +98,7 @@ function siblingSidebarClient(c) {
     }
     const selectionTarget = state.selectionTarget ?? state.selected;
     if (notificationBaseline && !notice && !leaveGuard.isLeaving() && state.selectionRevision > lastSelectionRevision && selectionTarget && selectionTarget !== c.id) {
-      const title = ({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' })[selectionTarget] || list.find(doc => doc.id === selectionTarget)?.title || selectionTarget;
+      const title = builtinViews[selectionTarget] || list.find(doc => doc.id === selectionTarget)?.title || selectionTarget;
       notice = { id: selectionTarget, label: 'Selected: ' + title };
     }
     if (typeof state.selectionRevision === 'number') lastSelectionRevision = Math.max(lastSelectionRevision ?? state.selectionRevision, state.selectionRevision);
@@ -218,7 +234,7 @@ function siblingSidebarClient(c) {
     if (!target) return;
     e.preventDefault();
     const link = [...nav.querySelectorAll('a[data-hub-id]')].find(item => item.dataset.hubId === target.view);
-    if (!link && !['commits', 'changes', 'tasks'].includes(target.view)) {
+    if (!link && !Object.hasOwn(builtinViews, target.view)) {
       feedback.dataset.error = ''; feedback.textContent = `Unknown view "${target.view}".`; return;
     }
     const sibling = link && new URL(link.href).pathname.endsWith('.html') && !new URL(link.href).pathname.endsWith('/hub.html');
@@ -299,7 +315,7 @@ function siblingSidebarClient(c) {
         }
         catchup = true;
       }
-      const items = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, unseen: false })), ...list.documents.map(d => ({ ...d, unseen: d.id === c.id ? d.version !== c.version : d.viewedVersion !== d.version }))];
+      const items = [...Object.entries(builtinViews).map(([id, title]) => ({ id, title, unseen: false })), ...list.documents.map(d => ({ ...d, unseen: d.id === c.id ? d.version !== c.version : d.viewedVersion !== d.version }))];
       const focused = nav.contains(document.activeElement) ? document.activeElement : null;
       const existing = new Map([...nav.querySelectorAll('a[data-hub-id]')].map(a => [a.dataset.hubId, a]));
       const next = new Map([[primary, primary.firstElementChild], [older, older.firstElementChild]]);
@@ -382,8 +398,20 @@ export function renderSiblingNavigation({ destinations, doc, sessionTitle = '', 
   const older = destinations.filter(item => item.collapsed);
   const items = `<div class="nav-primary">${destinations.filter(item => !item.collapsed).map(renderItem).join('')}</div><details class="nav-older"${older.length ? '' : ' hidden'}${older.some(item => item.id === doc.id) ? ' open' : ''}><summary>Older (<span class="nav-older-count">${older.length}</span>)</summary><div class="nav-older-list">${older.map(renderItem).join('')}</div></details>`;
   return `<style>
-html { padding-left: 200px; box-sizing: border-box; }
-#lavish-hub-sidebar { position: fixed; inset: 0 auto 0 0; width: 200px; box-sizing: border-box; z-index: 2147483647; overflow: auto; padding: 16px 10px; background: var(--ob-surface); color: var(--ob-fg); border-right: 1px solid var(--ob-border); font: 14px system-ui, sans-serif; }
+html { padding-left: var(--lavish-hub-sidebar-width, 200px); box-sizing: border-box; }
+#lavish-hub-sidebar { position: fixed; inset: 0 auto 0 0; width: var(--lavish-hub-sidebar-width, 200px); box-sizing: border-box; z-index: 2147483647; overflow: auto; padding: 16px 10px; background: var(--ob-surface); color: var(--ob-fg); border-right: 1px solid var(--ob-border); font: 14px system-ui, sans-serif; }
+#lavish-hub-sidebar .sidebar-header { display: flex; justify-content: flex-end; }
+#lavish-hub-sidebar .sidebar-toggle { width: 26px; height: 26px; flex: none; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ob-fg); font: inherit; cursor: pointer; }
+#lavish-hub-sidebar .sidebar-toggle:focus-visible { outline: 2px solid var(--ob-cyan); }
+#lavish-hub-sidebar .sidebar-resizer { position: fixed; top: 0; bottom: 0; left: calc(var(--lavish-hub-sidebar-width, 200px) - 5px); width: 5px; cursor: col-resize; touch-action: none; }
+#lavish-hub-sidebar .sidebar-resizer:hover, #lavish-hub-sidebar .sidebar-resizer.dragging { background: var(--ob-cyan); }
+#lavish-hub-sidebar.is-collapsed { padding: 16px 5px; }
+#lavish-hub-sidebar.is-collapsed .hub-identity, #lavish-hub-sidebar.is-collapsed nav, #lavish-hub-sidebar.is-collapsed [role=status], #lavish-hub-sidebar.is-collapsed aside, #lavish-hub-sidebar.is-collapsed .sidebar-resizer { display: none; }
+@media (max-width: 650px) {
+  html { padding-left: min(var(--lavish-hub-sidebar-width, 200px), 45vw); }
+  #lavish-hub-sidebar { width: min(var(--lavish-hub-sidebar-width, 200px), 45vw); }
+  #lavish-hub-sidebar .sidebar-resizer { left: calc(min(var(--lavish-hub-sidebar-width, 200px), 45vw) - 5px); }
+}
 #lavish-hub-sidebar .hub-identity { padding: 0 10px 12px; overflow-wrap: anywhere; }
 #lavish-hub-sidebar .hub-session-title { font-weight: 600; color: var(--ob-fg); }
 #lavish-hub-sidebar .hub-session-title[hidden] { display: none; }
@@ -411,11 +439,12 @@ html { padding-left: 200px; box-sizing: border-box; }
 #lavish-hub-sidebar [role=status] { margin: 12px 10px; color: var(--ob-muted); }
 #lavish-hub-sidebar [role=status][data-error] { color: var(--ob-red); }
 #lavish-hub-sidebar aside { margin: 16px 10px; overflow-wrap: anywhere; color: var(--ob-muted); }
-#lavish-hub-toast { position: fixed; right: 12px; bottom: 12px; z-index: 2147483647; display: flex; align-items: center; gap: 8px; max-width: min(28rem, calc(100vw - 224px)); padding: 10px; border: 1px solid var(--ob-border); border-radius: 6px; background: var(--ob-surface); color: var(--ob-fg); font: 14px system-ui, sans-serif; }
+#lavish-hub-toast { position: fixed; right: 12px; bottom: 12px; z-index: 2147483647; display: flex; align-items: center; gap: 8px; max-width: min(28rem, calc(100vw - var(--lavish-hub-sidebar-width, 200px) - 24px)); padding: 10px; border: 1px solid var(--ob-border); border-radius: 6px; background: var(--ob-surface); color: var(--ob-fg); font: 14px system-ui, sans-serif; }
+@media (max-width: 650px) { #lavish-hub-toast { max-width: min(28rem, calc(100vw - min(var(--lavish-hub-sidebar-width, 200px), 45vw) - 24px)); } }
 #lavish-hub-toast[hidden] { display: none; }
 #lavish-hub-toast span { min-width: 0; overflow-wrap: anywhere; }
 #lavish-hub-toast button { flex: none; border: 1px solid var(--ob-border); border-radius: 4px; padding: 4px 8px; background: var(--ob-accent, var(--ob-orange)); color: var(--ob-on-accent); font: inherit; cursor: pointer; }
-</style><div id="lavish-hub-toast" data-lavish-action role="status" aria-live="polite" hidden></div><div id="lavish-hub-sidebar" data-lavish-action><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${hubLifecycle}</script><script>${siblingSidebarScript(navConfig)}</script>`;
+</style><div id="lavish-hub-toast" data-lavish-action role="status" aria-live="polite" hidden></div><div id="lavish-hub-sidebar" data-lavish-action><div class="sidebar-header"><button type="button" class="sidebar-toggle" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar">«</button></div><div class="sidebar-resizer" aria-hidden="true"></div><span id="lavish-hub-desc-new" hidden>New publication</span><div class="hub-identity"><div class="hub-session-title"${sessionTitle ? '' : ' hidden'}>${escapeHtml(sessionTitle || '')}</div><div class="hub-repo-name">${escapeHtml(identity.session || sessionTitle ? repoName : workspaceName)}</div></div><nav aria-label="Hub navigation">${items}</nav><div role="status" aria-live="polite"></div>${reviewedScope}</div><script>${confirmNavigation}</script><script>${hubLifecycle}</script><script>${siblingSidebarScript(navConfig)}</script>`;
 }
 
 // Edit only parser-located tags, leaving authored scripts, doctype and formatting intact.

@@ -28,7 +28,7 @@ async function sidebarPage(browser, { hidden = false, identity = false } = {}) {
   await page.goto('http://lavish.test/published.html');
   const script = shippedSidebarScript(identity ? { repoName: 'repo', sessionTitle: 'Original' } : {});
   const header = identity ? '<div class="hub-identity"><div class="hub-session-title">Original</div><div class="hub-repo-name">repo</div></div>' : '';
-  const sidebar = `<div id="lavish-hub-sidebar" data-lavish-action>${header}<nav aria-label="Hub navigation"><div class="nav-primary"><a href="hub.html" data-hub-id="doc">Document</a></div><details class="nav-older" hidden><summary>Older (<span class="nav-older-count">0</span>)</summary><div class="nav-older-list"></div></details></nav><div role="status" aria-live="polite"></div></div>`;
+  const sidebar = `<div id="lavish-hub-sidebar" data-lavish-action><button class="sidebar-toggle"></button><div class="sidebar-resizer"></div>${header}<nav aria-label="Hub navigation"><div class="nav-primary"><a href="hub.html" data-hub-id="doc">Document</a></div><details class="nav-older" hidden><summary>Older (<span class="nav-older-count">0</span>)</summary><div class="nav-older-list"></div></details></nav><div role="status" aria-live="polite"></div></div>`;
   // The stub counts status polls, parks one while __hold is set, answers with an
   // error while __fail is set, and never answers while __hang is set. The page
   // itself never leaves the document view. Like a real fetch, a parked or hung
@@ -56,6 +56,46 @@ async function updatePage(browser, controls = '<label>Draft <input id="draft" va
   return page;
 }
 const advance = (page, update = {}) => page.evaluate(update => { Object.assign(globalThis.__doc, { version: 'v2', ...update }); document.dispatchEvent(new Event('visibilitychange')); }, update);
+
+test('sibling_sidebar_collapse_and_resize', { timeout: 30000 }, async () => {
+  const page = await updatePage(browser);
+  const markup = await page.content();
+  await page.route(url => url.pathname === '/published.html', route => route.fulfill({ status: 200, contentType: 'text/html', body: markup }));
+  const sidebar = page.locator('#lavish-hub-sidebar');
+  const toggle = page.locator('.sidebar-toggle');
+  assert.equal(await sidebar.evaluate(el => el.getBoundingClientRect().width), 200);
+  await toggle.click();
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(await sidebar.evaluate(el => el.getBoundingClientRect().width), 38);
+  assert.equal(await sidebar.locator('nav').isVisible(), false);
+  assert.equal((await page.evaluate(inspectGeometry)).controls.length, 0);
+  await page.reload();
+  assert.equal(await page.locator('.sidebar-toggle').getAttribute('aria-expanded'), 'false');
+  await page.locator('.sidebar-toggle').click();
+  const handle = page.locator('.sidebar-resizer');
+  const box = await handle.boundingBox();
+  assert.equal(await page.evaluate(({ x, y }) => document.elementFromPoint(x + 2, y + 100)?.className, box), 'sidebar-resizer');
+  await page.mouse.move(box.x + 2, box.y + 100); await page.mouse.down();
+  assert.equal(await handle.evaluate(el => el.classList.contains('dragging')), true);
+  assert.equal(await handle.evaluate(el => el.hasPointerCapture(1)), true);
+  await page.mouse.move(340, box.y + 100);
+  assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--lavish-hub-sidebar-width')), '340px');
+  await page.mouse.up();
+  assert.equal(await sidebar.evaluate(el => el.getBoundingClientRect().width), 340);
+  assert.equal(await page.evaluate(() => localStorage.getItem('lavish-hub-sidebar-width')), '340');
+  await page.reload();
+  assert.equal(await sidebar.evaluate(el => el.getBoundingClientRect().width), 340);
+  await page.setViewportSize({ width: 480, height: 800 });
+  assert.equal(await sidebar.evaluate(el => el.getBoundingClientRect().width), 216);
+  const geometry = await page.evaluate(inspectGeometry);
+  assert.equal(geometry.horizontalOverflow, false); assert.deepEqual(geometry.controls, []);
+  await page.addInitScript(() => Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('opaque origin'); } }));
+  await page.reload();
+  await page.locator('.sidebar-toggle').click();
+  assert.equal(await page.locator('.sidebar-toggle').getAttribute('aria-expanded'), 'false');
+  await page.locator('.sidebar-toggle').click();
+  assert.equal(await page.locator('.sidebar-toggle').getAttribute('aria-expanded'), 'true');
+});
 
 test('sibling sidebar renders Older and restores without losing authored input', { timeout: 30000 }, async () => {
   const page = await browser.newPage();
@@ -112,7 +152,7 @@ test('sibling polling keeps an active primary document in place until hidden', {
 });
 
 test('published HTML deep links validate views and guard authored edits', { timeout: 30000 }, async () => {
-  const page = await updatePage(browser, '<label>Draft <input id="draft" value="initial"></label><a id="unknown" href="?view=missing">unknown</a><a id="target" href="?view=changes&file=a.txt&line=3">target</a><a id="external" href="https://example.com/">external</a>');
+  const page = await updatePage(browser, '<label>Draft <input id="draft" value="initial"></label><a id="unknown" href="?view=missing">unknown</a><a id="target" href="?view=diff&file=a.txt&line=3">target</a><a id="external" href="https://example.com/">external</a>');
   assert.equal(await page.locator('#target').getAttribute('data-lavish-action'), '');
   assert.equal(await page.locator('#external').getAttribute('data-lavish-action'), null);
   await page.locator('#draft').fill('unsaved');
@@ -128,7 +168,7 @@ test('published HTML deep links validate views and guard authored edits', { time
   await page.locator('#target').click(); await navigation;
   const url = new URL(page.url());
   assert.equal(url.pathname, '/hub.html');
-  assert.equal(url.searchParams.get('__lavish_hub_view'), 'changes');
+  assert.equal(url.searchParams.get('__lavish_hub_view'), 'diff');
   assert.equal(url.searchParams.get('__lavish_hub_file'), 'a.txt');
   assert.equal(url.searchParams.get('__lavish_hub_line'), '3');
 });
@@ -237,12 +277,12 @@ test('published HTML toast auto-dismisses and Open navigates to the selected vie
   await page.evaluate(() => { globalThis.__selected = 'tasks'; globalThis.__revision++; document.dispatchEvent(new Event('visibilitychange')); });
   await toast.getByText('Selected: Tasks').waitFor();
   await toast.waitFor({ state: 'hidden', timeout: 8000 });
-  await page.evaluate(() => { globalThis.__selected = 'changes'; globalThis.__revision++; document.dispatchEvent(new Event('visibilitychange')); });
-  await toast.getByText('Selected: Changes').waitFor();
+  await page.evaluate(() => { globalThis.__selected = 'diff'; globalThis.__revision++; document.dispatchEvent(new Event('visibilitychange')); });
+  await toast.getByText('Selected: Diff').waitFor();
   const navigation = page.waitForEvent('framenavigated');
   await toast.getByRole('button', { name: 'Open' }).click();
   await navigation;
-  assert.match(page.url(), /hub\.html\?__lavish_hub_view=changes/);
+  assert.match(page.url(), /hub\.html\?__lavish_hub_view=diff/);
 });
 
 test('published HTML sidebar defers reload while navigation is in flight or failed', { timeout: 30000 }, async t => {
@@ -269,7 +309,7 @@ test('published HTML sidebar defers reload while navigation is in flight or fail
 test('published HTML queues URL changes during departure and replays them if it stays', { timeout: 30000 }, async () => {
   const page = await browser.newPage();
   const script = shippedSidebarScript();
-  const content = `<base href="http://lavish.test/"><div id="lavish-hub-sidebar"><nav><div class="nav-primary"><a href="hub.html" data-hub-id="tasks">Tasks</a></div><details class="nav-older" hidden><summary>Older (<span class="nav-older-count">0</span>)</summary><div class="nav-older-list"></div></details></nav><div role="status"></div></div><div id="lavish-hub-toast" hidden></div><script>globalThis.updates=[]; globalThis.navigations=[]; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'doc', hash: '#back' } })); globalThis.leavingEventDelivered=true; }}; globalThis.fetch=async (_url, options) => { const {operation,id}=JSON.parse(options.body); if(operation==='navigate') navigations.push(id); return {ok:true,json:async()=>({result:operation==='status'?{selected:'doc'}:operation==='documents'?{documents:[]}: {}})}; };</script><script>${hubLifecycle}</script><script>${script}</script>`;
+  const content = `<base href="http://lavish.test/"><div id="lavish-hub-sidebar"><button class="sidebar-toggle"></button><div class="sidebar-resizer"></div><nav><div class="nav-primary"><a href="hub.html" data-hub-id="tasks">Tasks</a></div><details class="nav-older" hidden><summary>Older (<span class="nav-older-count">0</span>)</summary><div class="nav-older-list"></div></details></nav><div role="status"></div></div><div id="lavish-hub-toast" hidden></div><script>globalThis.updates=[]; globalThis.navigations=[]; globalThis.lavish={syncUrl: update => updates.push(update), navigateFrame: () => { window.dispatchEvent(new CustomEvent('lavish:urlChange', { detail: { view: 'doc', hash: '#back' } })); globalThis.leavingEventDelivered=true; }}; globalThis.fetch=async (_url, options) => { const {operation,id}=JSON.parse(options.body); if(operation==='navigate') navigations.push(id); return {ok:true,json:async()=>({result:operation==='status'?{selected:'doc'}:operation==='documents'?{documents:[]}: {}})}; };</script><script>${hubLifecycle}</script><script>${script}</script>`;
   await page.route('http://lavish.test/**', route => route.fulfill({ contentType: 'text/html', body: route.request().url().endsWith('/published.html') ? content : '<iframe id="published-frame" src="/published.html"></iframe>' }));
   await page.goto('http://lavish.test/');
   const frame = page.frameLocator('#published-frame');
