@@ -37,7 +37,8 @@ const publishHelp = `usage: lavish-hub publish FILE [--id ID] [--title T] [--met
 
 Local jj review: lavish-hub publish review.html
 Remote PR review: lavish-hub publish review.html --repo org/repo --base-commit <hex> --head-commit <hex> --source-url https://github.com/org/repo/pull/123
-Non-review artifact: lavish-hub publish notes.html --no-scope`;
+Non-review artifact: lavish-hub publish notes.html --no-scope
+Path starting with -: lavish-hub publish --no-scope -- -notes.html`;
 const help = `${usage}
 
 Run listen in the foreground to own a workspace hub and receive feedback as
@@ -103,10 +104,7 @@ export function parseArgs(args) {
   if (!['listen', 'stop', 'status', 'url', 'publish', 'tasks', 'target'].includes(target)) throw new UsageError(`unknown command ${target}`);
   const command = target;
   const result = { hub: command };
-  if (command === 'publish') {
-    result.file = args.shift();
-    if (!result.file || result.file.startsWith('-')) throw new UsageError('publish requires a file');
-  }
+  if (command === 'publish' && args[0] && !args[0].startsWith('-')) result.file = args.shift();
   if (command === 'target' && args[0] && !args[0].startsWith('-')) result.rev = args.shift();
   const valueFlags = new Set(['--workspace', '--session']);
   if (command === 'publish') for (const f of ['--id', '--title', '--metadata-file', '--repo', '--base-commit', '--head-commit', '--source-url']) valueFlags.add(f);
@@ -117,7 +115,10 @@ export function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     const { flag, inlineValue } = splitFlag(arg);
-    if (valueFlags.has(flag)) {
+    if (command === 'publish' && arg === '--') {
+      if (result.file !== undefined || !args[i + 1] || i + 2 !== args.length) throw new UsageError('publish requires one file after --');
+      result.file = args[++i];
+    } else if (valueFlags.has(flag)) {
       const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
       if (result[key] !== undefined) throw new UsageError(`${flag} requires one value`);
       const read = readFlagValue(args, i, flag, inlineValue);
@@ -139,6 +140,7 @@ export function parseArgs(args) {
   if (result.base !== undefined && result.noBase) throw new UsageError('--base and --no-base are mutually exclusive');
   if (command === 'listen' && result.session !== undefined) assertSessionListenOptions(result);
   if (command === 'target' && result.rev === undefined && result.base === undefined && !result.noBase && result.title === undefined) throw new UsageError('target requires REV, --base, --no-base, or --title');
+  if (command === 'publish' && !result.file) throw new UsageError('publish requires a file');
   if (command === 'publish' && result.noScope && ['metadataFile', 'repo', 'baseCommit', 'headCommit', 'sourceUrl'].some(key => result[key] !== undefined)) throw new UsageError('--no-scope cannot be combined with metadata or scope flags');
   if (command === 'tasks' && !result.file) throw new UsageError('tasks requires --file');
   return result;

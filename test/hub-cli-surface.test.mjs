@@ -28,6 +28,20 @@ test('publish help and conflicting scope flags', () => {
   assert.match(result.stderr, /lavish-hub: \[USAGE_ERROR\] action=fix_args — --no-scope cannot be combined/);
 });
 
+test('publish accepts a final filename after --', () => {
+  assert.deepEqual(parseArgs(['publish', '--', '-file.html']), { hub: 'publish', file: '-file.html' });
+  assert.deepEqual(parseArgs(['publish', '--title', 'Draft', '--', '-file.html']), { hub: 'publish', title: 'Draft', file: '-file.html' });
+  assert.deepEqual(parseArgs(['publish', '--no-scope', '--', '--weird.md']), { hub: 'publish', noScope: true, file: '--weird.md' });
+  assert.deepEqual(parseArgs(['publish', 'review.html', '--title', 'Draft']), { hub: 'publish', file: 'review.html', title: 'Draft' });
+  assert.deepEqual(parseArgs(['publish', '--help']), { commandHelp: 'publish' });
+  for (const args of [
+    ['publish'], ['publish', '--id', 'foo'], ['publish', '--'],
+    ['publish', 'review.html', '--', '-other.html'],
+    ['publish', '--', '-a', '-b'], ['publish', '--', '-file.html', '--title', 'Draft'],
+  ]) assert.throws(() => parseArgs(args), { name: 'UsageError' });
+  assert.throws(() => parseArgs(['publish', '--=foo']), { name: 'UsageError', message: 'unknown argument --=foo' });
+});
+
 test('session CLI flags, mandatory rev, and LAVISH_HUB_SESSION parsing and URL prediction', async t => {
   assert.throws(() => parseArgs(['listen', '--session', 'x']), /listen with --session requires --rev/);
   assert.throws(() => parseArgs(['listen', '--session', 'x', '--title', 'X']), /listen with --session requires --rev/);
