@@ -1,6 +1,42 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import { markServerDiagnostic } from "./server-diagnostics.js";
+import { hubDashboard } from "./hub-dashboard.js";
+
+export const HUB_HEALTH_FIELDS = {
+  lavish_hub_page_reviews: 1,
+  lavish_hub_batch_replies: 1,
+  lavish_hub_assets: 1,
+};
+
+/** @param {any} app @param {any} hubProxy */
+export function mountHubRoutes(app, hubProxy) {
+  app.get("/hubs", (req, res) =>
+    res
+      .set({
+        "Cache-Control": "no-store",
+        "X-Frame-Options": "DENY",
+        "Content-Security-Policy": "frame-ancestors 'none'",
+      })
+      .type("html")
+      .send(hubDashboard),
+  );
+  app.get("/api/hubs", hubProxy.dashboard);
+  app.post("/api/hub-proxy/register", hubProxy.control, hubProxy.register);
+  app.post("/api/hub-proxy/unregister", hubProxy.control, hubProxy.unregister);
+  app.use("/hub-proxy", hubProxy.handle);
+}
+
+/** @param {string} html @param {{backIcon: string}} options */
+export function withHubChrome(html, { backIcon }) {
+  const brand = '<div class="brand">';
+  const frame = '</iframe></div><div class="panel-scrim"';
+  if (!html.includes(brand)) throw new Error("Hub chrome brand anchor missing");
+  if (!html.includes(frame)) throw new Error("Hub chrome frame anchor missing");
+  return html
+    .replace(brand, `<a class="hubs-link" id="hubsLink" href="/hubs" title="Active hubs">${backIcon}<span>Hubs</span></a>${brand}`)
+    .replace(frame, '</iframe><div id="diffCommentOverlay" class="diff-comment-overlay"></div></div><div class="panel-scrim"');
+}
 
 const secretPattern = /^[a-f0-9]{64}$/;
 const sessionPattern = /^[a-f0-9]{16}$/;

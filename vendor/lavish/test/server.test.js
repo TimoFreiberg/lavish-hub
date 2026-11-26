@@ -2889,20 +2889,22 @@ test("artifact HTML negotiates compression and rejects expired compressed loads"
   const server = await serve({
     port: 0,
     stateFile: path.join(dir, "state.json"),
-    compressArtifact: async (encoding, bytes) => {
-      compressorInput = Buffer.from(bytes);
-      if (pause) {
-        entered();
-        await new Promise((resolve) => {
-          release = resolve;
-        });
-      }
-      if (fail) throw new Error("compression failed");
-      return new Promise((resolve, reject) =>
-        zlib[encoding === "zstd" ? "zstdCompress" : "gzip"](bytes, (error, result) =>
-          error ? reject(error) : resolve(result),
-        ),
-      );
+    hubAssetHooks: {
+      compressArtifact: async (encoding, bytes) => {
+        compressorInput = Buffer.from(bytes);
+        if (pause) {
+          entered();
+          await new Promise((resolve) => {
+            release = resolve;
+          });
+        }
+        if (fail) throw new Error("compression failed");
+        return new Promise((resolve, reject) =>
+          zlib[encoding === "zstd" ? "zstdCompress" : "gzip"](bytes, (error, result) =>
+            error ? reject(error) : resolve(result),
+          ),
+        );
+      },
     },
   });
   const wire = (url, encoding, method = "GET") =>
@@ -3019,9 +3021,11 @@ test("only registered unchanged hub JavaScript is compressed", async () => {
       };
       return handle;
     },
-    compressArtifact: async (_encoding, bytes) => {
-      compressions++;
-      return zlib.gzipSync(bytes);
+    hubAssetHooks: {
+      compressArtifact: async (_encoding, bytes) => {
+        compressions++;
+        return zlib.gzipSync(bytes);
+      },
     },
   });
   const wire = (url, headers = {}, method = "GET") =>
@@ -3208,17 +3212,19 @@ test("concurrent registered asset compression shares failures and retries", asyn
   const server = await serve({
     port: 0,
     stateFile: path.join(dir, "state.json"),
-    onHubCompressionJoin: () => joined(),
-    compressArtifact: async (_encoding, bytes) => {
-      calls++;
-      started();
-      await /** @type {Promise<void>} */ (
-        new Promise((resolve) => {
-          release = resolve;
-        })
-      );
-      if (calls === 1) throw new Error("compression failed");
-      return zlib.gzipSync(bytes);
+    hubAssetHooks: {
+      onHubCompressionJoin: () => joined(),
+      compressArtifact: async (_encoding, bytes) => {
+        calls++;
+        started();
+        await /** @type {Promise<void>} */ (
+          new Promise((resolve) => {
+            release = resolve;
+          })
+        );
+        if (calls === 1) throw new Error("compression failed");
+        return zlib.gzipSync(bytes);
+      },
     },
   });
   try {
@@ -3329,13 +3335,15 @@ for (const shutdown of [false, true])
     const server = await serve({
       port: 0,
       stateFile: path.join(dir, "state.json"),
-      onHubCompressionQueued: () => queueEntered(),
-      onHubCompressionJoin: () => joined(),
-      onHubCompressionCancel: () => cancelled(),
-      compressArtifact: async (_encoding, bytes) => {
-        if (++calls === 6) allStarted();
-        await gate;
-        return zlib.gzipSync(bytes);
+      hubAssetHooks: {
+        onHubCompressionQueued: () => queueEntered(),
+        onHubCompressionJoin: () => joined(),
+        onHubCompressionCancel: () => cancelled(),
+        compressArtifact: async (_encoding, bytes) => {
+          if (++calls === 6) allStarted();
+          await gate;
+          return zlib.gzipSync(bytes);
+        },
       },
     });
     const abort = new AbortController();

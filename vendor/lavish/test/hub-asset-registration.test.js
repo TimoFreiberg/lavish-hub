@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { createHubProxy } from "../src/hub-proxy.js";
+import { createHubProxy, withHubChrome } from "../src/hub-proxy.js";
+
+test("hub chrome requires both anchors and inserts both elements", () => {
+  const brand = '<div class="brand">';
+  const frame = '</iframe></div><div class="panel-scrim"';
+  const html = withHubChrome(`${brand}</div><iframe></iframe></div><div class="panel-scrim"`, { backIcon: "icon" });
+  assert.match(html, /id="hubsLink"[^>]*>icon<span>Hubs<\/span><\/a><div class="brand">/);
+  assert.match(html, /<\/iframe><div id="diffCommentOverlay" class="diff-comment-overlay"><\/div><\/div><div class="panel-scrim"/);
+  assert.throws(() => withHubChrome(frame, { backIcon: "" }), /brand anchor/);
+  assert.throws(() => withHubChrome(brand, { backIcon: "" }), /frame anchor/);
+});
 
 test("generated asset registration expires and cannot survive owner replacement or end", async () => {
   const events = new EventEmitter();

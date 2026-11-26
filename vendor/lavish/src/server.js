@@ -8,12 +8,11 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
-import * as zlib from "node:zlib";
 
 import chokidar from "chokidar";
 import express from "express";
-import { createHubProxy } from "./hub-proxy.js";
-import { hubDashboard } from "./hub-dashboard.js";
+import { createHubProxy, HUB_HEALTH_FIELDS, mountHubRoutes, withHubChrome } from "./hub-proxy.js";
+import { createHubAssets } from "./hub-assets.js";
 
 import {
   classifySevereTextOverflow,
@@ -357,36 +356,6 @@ function artifactEntryUrl(session) {
   return artifactDocumentUrl(session.key, entryRoute);
 }
 
-function artifactEncoding(header) {
-  const qualities = new Map();
-  for (const part of (header || "").split(",")) {
-    const [name, ...params] = part.trim().toLowerCase().split(";");
-    if (!name) continue;
-    let quality = 1;
-    for (const param of params) {
-      const match = /^\s*q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)\s*$/.exec(param);
-      if (!match) {
-        quality = 0;
-        break;
-      }
-      quality = Number(match[1]);
-    }
-    qualities.set(name, quality);
-  }
-  const wildcard = qualities.get("*");
-  const quality = (name) => qualities.get(name) ?? (name === "identity" ? (wildcard === 0 ? 0 : 1) : (wildcard ?? 0));
-  const candidates = [...(typeof zlib.zstdCompress === "function" ? ["zstd"] : []), "gzip", "identity"];
-  candidates.sort((a, b) => quality(b) - quality(a));
-  return { encoding: quality(candidates[0]) > 0 ? candidates[0] : null, identityAllowed: quality("identity") > 0 };
-}
-
-function compressArtifactBytes(encoding, bytes) {
-  return new Promise((resolve, reject) => {
-    const compress = encoding === "zstd" ? zlib.zstdCompress : zlib.gzip;
-    compress(bytes, (error, result) => (error ? reject(error) : resolve(result)));
-  });
-}
-
 /**
  * @param {{ [key: string]: any }} [options]
  */
@@ -413,10 +382,7 @@ export async function serve({
   artifactPageOpen,
   artifactPageStat,
   artifactAssetOpen,
-  compressArtifact = compressArtifactBytes,
-  onHubCompressionJoin,
-  onHubCompressionQueued,
-  onHubCompressionCancel,
+  hubAssetHooks = {},
 } = {}) {
   // Keep the transport dependency off fast metadata paths such as `--version`.
   const { WebSocket, WebSocketServer } = await import("ws");
@@ -858,20 +824,14 @@ export async function serve({
   }
 
   const hubProxy = createHubProxy({ store, events, jsonParser: express.json({ limit: "64kb" }) });
-  app.get("/hubs", (req, res) =>
-    res
-      .set({
-        "Cache-Control": "no-store",
-        "X-Frame-Options": "DENY",
-        "Content-Security-Policy": "frame-ancestors 'none'",
-      })
-      .type("html")
-      .send(hubDashboard),
-  );
-  app.get("/api/hubs", hubProxy.dashboard);
-  app.post("/api/hub-proxy/register", hubProxy.control, hubProxy.register);
-  app.post("/api/hub-proxy/unregister", hubProxy.control, hubProxy.unregister);
-  app.use("/hub-proxy", hubProxy.handle);
+  const hubAssets = createHubAssets({
+    hubProxy,
+    compress: hubAssetHooks.compressArtifact,
+    hooks: hubAssetHooks,
+    isShuttingDown: () => shuttingDown,
+  });
+  // Hub routes must stay after the Host allowlist and before the Origin/Referer CSRF guard.
+  mountHubRoutes(app, hubProxy);
 
   // CSRF defense-in-depth on top of the Host allowlist. A foreign page that
   // can reach 127.0.0.1 passes the Host check, but the browser attaches the
@@ -1376,14 +1336,7 @@ export async function serve({
       ok: true,
       app: "lavish-axi",
       version,
-      lavish_hub_page_reviews: 1,
-      lavish_hub_batch_replies: 1,
-      // The hub page fetches its renderer bundles from the opaque-origin artifact
-      // frame, which needs the origin grant on this route. A server of the same
-      // release started from an earlier build cannot serve them, and its version
-      // alone cannot say so, so the grant is reported here and a lavish-hub process
-      // refuses that server by name instead of failing every render.
-      lavish_hub_assets: 1,
+      ...HUB_HEALTH_FIELDS,
       state_id: serverStateId,
       process_id: serverProcessId,
       state_dir: path.dirname(stateFile),
@@ -2412,33 +2365,6 @@ export async function serve({
         "<!doctype html><title>Artifact load expired</title><p>This artifact load is no longer current. Reload Lavish to continue.</p>",
       );
 
-  async function prepareArtifactHtml(req, res, html) {
-    res.vary("Accept-Encoding");
-    res.setHeader("cache-control", "no-store");
-    const choice = artifactEncoding(req.get("Accept-Encoding"));
-    if (!choice.encoding) return null;
-    let encoding = choice.encoding;
-    let bytes = Buffer.from(html);
-    if (encoding !== "identity") {
-      try {
-        bytes = await compressArtifact(encoding, bytes);
-      } catch (error) {
-        if (!choice.identityAllowed) throw error;
-        encoding = "identity";
-      }
-    }
-    return { encoding, bytes };
-  }
-
-  function sendArtifactHtml(res, representation) {
-    if (!representation) {
-      res.status(406).send("Not acceptable");
-      return;
-    }
-    if (representation.encoding !== "identity") res.setHeader("content-encoding", representation.encoding);
-    res.type("html").send(representation.bytes);
-  }
-
   async function serveLegacyVirtualEntry(req, res) {
     const key = req.params[0];
     const token = String(req.query.artifact_load_token || "");
@@ -2486,7 +2412,7 @@ export async function serve({
       expiredArtifactLoad(res);
       return;
     }
-    const representation = await prepareArtifactHtml(
+    const representation = await hubAssets.prepareHtml(
       req,
       res,
       injectLavishSdk(html, key, verified.artifact_revision, verified.artifact_load_token),
@@ -2496,107 +2422,7 @@ export async function serve({
       expiredArtifactLoad(res);
       return;
     }
-    sendArtifactHtml(res, representation);
-  }
-
-  const verifiedHubAssets = new Map();
-  let verifiedHubAssetBytes = 0;
-  const maxVerifiedHubAssetBytes = 64 * 1024 * 1024;
-
-  function hubAssetIdentity(stats) {
-    if (
-      !stats.isFile() ||
-      ![stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].every((value) => typeof value === "bigint") ||
-      stats.dev === 0n ||
-      stats.ino === 0n ||
-      stats.mtimeNs <= 0n ||
-      stats.ctimeNs <= 0n
-    )
-      return null;
-    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
-  }
-
-  const compressedHubAssets = new Map();
-  const compressingHubAssets = new Map();
-  const hubCompressionQueue = [];
-  let activeHubCompressions = 0;
-  let compressedHubAssetBytes = 0;
-  const maxCompressedHubAssetBytes = 8 * 1024 * 1024;
-
-  async function cachedHubCompression(cacheKey, encoding, bytes, res) {
-    if (shuttingDown || res.destroyed) throw Object.assign(new Error("Compression cancelled"), { status: 503 });
-    if (compressedHubAssets.has(cacheKey)) {
-      const cached = compressedHubAssets.get(cacheKey);
-      compressedHubAssets.delete(cacheKey);
-      compressedHubAssets.set(cacheKey, cached);
-      return cached;
-    }
-    let job = compressingHubAssets.get(cacheKey);
-    if (job) {
-      onHubCompressionJoin?.();
-    } else {
-      if (compressingHubAssets.size >= 12)
-        throw Object.assign(new Error("Hub compression capacity exceeded"), { status: 503 });
-      job = { consumers: 0, queued: false, reject: null, pending: null };
-      const current = job;
-      const pending = (async () => {
-        if (activeHubCompressions >= 6) {
-          await new Promise((resolve, reject) => {
-            current.queued = true;
-            current.reject = reject;
-            hubCompressionQueue.push({ job: current, resolve });
-            onHubCompressionQueued?.();
-          });
-        } else {
-          activeHubCompressions++;
-        }
-        try {
-          const result = await compressArtifact(encoding, bytes);
-          if (result.length <= maxCompressedHubAssetBytes && !shuttingDown) {
-            while (
-              compressedHubAssets.size >= 24 ||
-              compressedHubAssetBytes + result.length > maxCompressedHubAssetBytes
-            ) {
-              const oldest = compressedHubAssets.keys().next().value;
-              compressedHubAssetBytes -= compressedHubAssets.get(oldest).length;
-              compressedHubAssets.delete(oldest);
-            }
-            compressedHubAssets.set(cacheKey, result);
-            compressedHubAssetBytes += result.length;
-          }
-          return result;
-        } finally {
-          const next = hubCompressionQueue.shift();
-          if (next) {
-            next.job.queued = false;
-            next.resolve();
-          } else activeHubCompressions--;
-        }
-      })();
-      current.pending = pending.finally(() => {
-        if (compressingHubAssets.get(cacheKey) === current) compressingHubAssets.delete(cacheKey);
-      });
-      compressingHubAssets.set(cacheKey, current);
-    }
-    job.consumers++;
-    const current = job;
-    const disconnect = () => {
-      current.consumers--;
-      if (current.consumers === 0 && current.queued) {
-        const index = hubCompressionQueue.findIndex((entry) => entry.job === current);
-        if (index !== -1) hubCompressionQueue.splice(index, 1);
-        current.queued = false;
-        if (compressingHubAssets.get(cacheKey) === current) compressingHubAssets.delete(cacheKey);
-        current.reject(Object.assign(new Error("Compression cancelled"), { status: 503 }));
-        onHubCompressionCancel?.();
-      }
-    };
-    res.once("close", disconnect);
-    try {
-      return await current.pending;
-    } finally {
-      res.removeListener("close", disconnect);
-    }
+    hubAssets.sendHtml(res, representation);
   }
 
   async function serveArtifactPath(req, res, requestedPath = undefined) {
@@ -2669,7 +2495,7 @@ export async function serve({
         return;
       }
       const chromeNonce = createChromeAuthNonce();
-      const representation = await prepareArtifactHtml(
+      const representation = await hubAssets.prepareHtml(
         req,
         res,
         injectLavishSdk(
@@ -2698,7 +2524,7 @@ export async function serve({
         return;
       }
       if (representation && pinned && loadDestinations.get(key) === recovered) recovered.documentRead = true;
-      sendArtifactHtml(res, representation);
+      hubAssets.sendHtml(res, representation);
       return;
     }
 
@@ -2738,108 +2564,15 @@ export async function serve({
     try {
       const stats = await opened.handle.stat();
       const size = stats.size;
-      const registration = hubProxy.generatedAssetRegistration(key, assetPath);
-      let registeredEtag;
-      if (registration) {
-        let identity = null;
-        try {
-          identity = hubAssetIdentity(await opened.handle.stat({ bigint: true }));
-        } catch {
-          // Filesystems without usable high-resolution metadata always reverify the bytes.
-        }
-        const cacheKey = `${file}:${assetPath}`;
-        const cached = identity && verifiedHubAssets.get(cacheKey);
-        let bytes;
-        let hash;
-        if (cached && cached.identity === identity) {
-          ({ bytes, hash } = cached);
-          verifiedHubAssets.delete(cacheKey);
-          verifiedHubAssets.set(cacheKey, cached);
-        } else {
-          bytes = await opened.handle.readFile();
-          hash = crypto.createHash("sha256").update(bytes).digest("hex");
-          let after = null;
-          try {
-            after = hubAssetIdentity(await opened.handle.stat({ bigint: true }));
-          } catch {
-            // Do not cache when the post-read metadata is unavailable.
-          }
-          if (
-            identity &&
-            identity === after &&
-            assetPath === `hub-asset-${hash}.js` &&
-            bytes.length <= maxVerifiedHubAssetBytes
-          ) {
-            const previous = verifiedHubAssets.get(cacheKey);
-            if (previous) verifiedHubAssetBytes -= previous.bytes.length;
-            verifiedHubAssets.delete(cacheKey);
-            while (verifiedHubAssets.size >= 24 || verifiedHubAssetBytes + bytes.length > maxVerifiedHubAssetBytes) {
-              const oldest = verifiedHubAssets.keys().next().value;
-              verifiedHubAssetBytes -= verifiedHubAssets.get(oldest).bytes.length;
-              verifiedHubAssets.delete(oldest);
-            }
-            verifiedHubAssets.set(cacheKey, { identity, bytes, hash });
-            verifiedHubAssetBytes += bytes.length;
-          }
-        }
-        if (
-          assetPath === `hub-asset-${hash}.js` &&
-          hubProxy.generatedAssetRegistration(key, assetPath) === registration
-        ) {
-          const choice = artifactEncoding(req.get("Accept-Encoding"));
-          registeredEtag = `W/"${hash}"`;
-          res.vary("Accept-Encoding");
-          // The hub page runs in the opaque-origin artifact frame and fetches its
-          // renderer bundles so it can abort a stalled load. Only a representation
-          // this pass proved registered and hash-matched gets that grant; a page, a
-          // stylesheet, a range, or an error gets none. Every variant of THIS
-          // representation varies on Origin, including the ones that grant nothing:
-          // a cache holding the ungranted copy would otherwise answer the frame
-          // with a body the browser then refuses to hand over.
-          res.vary("Origin");
-          const grantBundleCors = () => {
-            if (req.headers.origin !== "null") return;
-            res.setHeader("access-control-allow-origin", "null");
-          };
-          if (!req.get("range") || !choice.identityAllowed) {
-            res.setHeader("cache-control", "public, max-age=0");
-            if (!choice.encoding) return res.status(406).send("Not acceptable");
-            res.type("js");
-            res.setHeader("last-modified", stats.mtime.toUTCString());
-            if (app.enabled("etag")) res.setHeader("etag", registeredEtag);
-            const match = req.get("if-match");
-            const unmodified = Date.parse(req.get("if-unmodified-since") || "");
-            if (
-              match
-                ? !res.getHeader("etag") || match !== "*"
-                : Number.isFinite(unmodified) && Date.parse(stats.mtime.toUTCString()) > unmodified
-            ) {
-              throw Object.assign(new Error("Precondition Failed"), { status: 412 });
-            }
-            if (req.fresh) {
-              grantBundleCors();
-              return res.status(304).end();
-            }
-            let encoding = choice.encoding;
-            let representation = bytes;
-            if (encoding !== "identity") {
-              const cacheKey = `${hash}:${encoding}`;
-              try {
-                representation = await cachedHubCompression(cacheKey, encoding, bytes, res);
-              } catch (error) {
-                if (!choice.identityAllowed) throw error;
-                encoding = "identity";
-              }
-            }
-            if (hubProxy.generatedAssetRegistration(key, assetPath) !== registration)
-              return res.status(404).send("Not found");
-            grantBundleCors();
-            if (encoding !== "identity") res.setHeader("content-encoding", encoding);
-            res.setHeader("content-length", String(representation.length));
-            return res.send(representation);
-          }
-        }
-      }
+      const { handled, etag: registeredEtag } = await hubAssets.serveRegistered(req, res, {
+        key,
+        assetPath,
+        file,
+        opened,
+        stats,
+        etagEnabled: app.enabled("etag"),
+      });
+      if (handled) return;
       const etag = registeredEtag || `W/"${size.toString(16)}-${stats.mtime.getTime().toString(16)}"`;
       const modified = stats.mtime.toUTCString();
       res.type(path.extname(opened.file) || "application/octet-stream");
@@ -3670,10 +3403,7 @@ export async function serve({
   function shutdown(reloadKey = "", reason = "", cause = "requested") {
     if (shuttingDown) return;
     shuttingDown = true;
-    for (const { job } of hubCompressionQueue.splice(0)) {
-      job.queued = false;
-      job.reject(Object.assign(new Error("Server shutting down"), { status: 503 }));
-    }
+    hubAssets.shutdown();
     hubProxy.clear();
     writeLog(`[lavish] shutting down: ${cause}${reason ? ` (reason=${reason})` : ""}`);
     if (idleTimer) {
@@ -4546,7 +4276,7 @@ export function createChromeHtml(
   const layoutGateHidden = layoutGateEnabled ? "" : " hidden";
   const modeHotkeyUpper = MODE_TOGGLE_HOTKEY_KEY.toUpperCase();
   const modeToggleHint = `Toggle annotate/explore mode (⌘${modeHotkeyUpper} / Ctrl+${modeHotkeyUpper})`;
-  return `<!doctype html>
+  return withHubChrome(`<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -4556,8 +4286,8 @@ ${faviconTag}
 <link rel="stylesheet" href="/chrome.css">
 </head>
 <body class="${bodyClass}">
-<div class="bar"><a class="hubs-link" id="hubsLink" href="/hubs" title="Active hubs">${chromeIcons.back}<span>Hubs</span></a><div class="brand"><span class="brand-mark">Lavish</span><span class="brand-support">Editor</span></div><div class="spacer" aria-hidden="true"></div><div class="warnings-wrap" id="warningsWrap" hidden><button class="warnings-button" id="warningsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="warningsDrawer">${chromeIcons.warning}<span class="warnings-count" id="warningsCount">0</span></button><div class="menu warnings-drawer" id="warningsDrawer" role="dialog" aria-labelledby="warningsTitle" aria-describedby="warningsSummary" hidden><div class="warnings-head"><h2 class="warnings-title" id="warningsTitle">Layout issues</h2><p class="warnings-summary" id="warningsSummary"></p></div><div class="warnings-toolbar"><label class="warnings-selectall"><input type="checkbox" id="warningsSelectAll"><span>Select all</span></label><span class="warnings-selected" id="warningsSelected" role="status" aria-live="polite"></span></div><div class="warnings-list" id="warningsList"></div><div class="warnings-foot"><p class="warnings-note">Queueing sends a repair request with your next feedback. An issue is marked resolved only after a newer artifact load and a complete check at the same viewport no longer finds it.</p><button class="button" id="warningsQueueButton" type="button" disabled>Queue selected fixes</button></div></div></div><div class="revisions-wrap" id="revisionsWrap" hidden><button class="revisions-button" id="revisionsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="revisionsDrawer"><span class="revisions-button-text">Revisions</span><span class="revisions-count" id="revisionsCount">0</span></button><div class="menu revisions-drawer" id="revisionsDrawer" role="dialog" aria-labelledby="revisionsTitle" aria-describedby="revisionsSummary" hidden><div class="revisions-head"><h2 class="revisions-title" id="revisionsTitle">Revisions</h2><p class="revisions-summary" id="revisionsSummary"></p></div><div class="revisions-list" id="revisionsList"></div><div class="revisions-foot"><p class="revisions-note">The agent declares these in the artifact itself. Reveal flashes the next block it marked for that revision; nothing about the page is restyled, so the saved file still looks the way it does here.</p></div></div></div><button class="annotate-switch" id="annotation" type="button" aria-pressed="true" title="${escapeHtml(modeToggleHint)}"><span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><span>Annotate</span></button><button class="sidebar-toggle" id="sidebarToggle" type="button" aria-controls="panel" aria-expanded="true" aria-label="Hide conversation" title="Hide conversation">${chromeIcons.sidebar}<span class="sidebar-toggle-count" id="sidebarToggleCount" aria-hidden="true" hidden></span></button><div class="more-wrap" id="moreWrap"><button class="more-button" id="moreButton" type="button" title="More" aria-haspopup="menu" aria-expanded="false">${chromeIcons.more}</button><div class="menu more-menu" id="moreMenu" hidden><div class="menu-head"><div class="menu-label">Editing</div><button class="menu-file" id="copyPath" type="button" title="Copy path · ${escapeHtml(session.file)}">${chromeIcons.file}<span class="menu-file-text"><span class="path-head">${escapeHtml(pathHead)}</span><span class="path-tail">${escapeHtml(pathTail)}</span></span><span class="copy-hint" id="copyHint"><span class="icon-copy">${chromeIcons.copy}</span><span class="icon-check">${chromeIcons.check}</span><span id="copyHintText">Copy</span></span></button></div><div class="menu-rule"></div><button class="menu-item" id="reloadArtifact" type="button">${chromeIcons.refresh}<span>Reload artifact</span></button><button class="menu-item" id="copySnapshot" type="button">${chromeIcons.camera}<span>Copy DOM snapshot</span></button><button class="menu-item" id="exportArtifact" type="button">${chromeIcons.download}<span>Export standalone HTML</span></button><button class="menu-item" id="shareArtifact" type="button">${chromeIcons.globe}<span>Publish link</span></button><div class="menu-rule"></div><button class="menu-item danger" id="end" type="button">${chromeIcons.exit}<span>End session</span></button></div></div></div>
-<div class="layout"><div class="frame"><iframe id="artifact" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" data-artifact-src="${entryArtifactPath}"></iframe><div id="diffCommentOverlay" class="diff-comment-overlay"></div></div><div class="panel-scrim" id="panelScrim"></div><aside class="panel" id="panel"><div class="panel-head" id="panelHead"><span class="panel-handle" aria-hidden="true"></span><div class="panel-head-row"><h2>Conversation</h2><span class="panel-summary" id="panelSummary" role="status" aria-live="polite"></span><button class="panel-toggle" id="panelToggle" type="button" aria-expanded="false" aria-controls="panel" aria-label="Show conversation">${chromeIcons.chevronUp}</button></div></div><div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"></div><div class="chat chat-queued" id="queuedLog"></div></div><div class="composer" id="chatComposer"><div class="presence-banner handoff-banner" id="handoffBanner" hidden><span>This review is open in another Lavish tab. Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along.</span><button class="handoff-takeover" id="handoffTakeover" type="button">Take over here</button></div><div class="presence-banner handoff-banner" id="outdatedBanner" hidden><span id="outdatedText">The Lavish server this page was connected to is no longer running. Reloading will work once it is running again.</span><span class="outdated-actions"><button class="handoff-takeover" id="outdatedReload" type="button">Check and reload</button><button class="handoff-takeover" id="outdatedDismiss" type="button">Dismiss</button></span></div><div class="presence-banner" id="presenceBanner" hidden>Your agent is not listening. If this persists, ask your agent to poll for updates from Lavish.</div><textarea id="chatInput" placeholder="Write a message for the agent..."></textarea><div class="chat-attachments" id="chatAttachments"></div><div class="chat-attachment-toolbar"><button class="chat-attach" id="chatAttach" type="button">Attach images</button><input id="chatAttachInput" type="file" accept="${escapeHtml(acceptedMime.join(","))}" multiple hidden><span class="chat-attachment-notice" id="chatAttachmentNotice" role="status"></span></div><div class="send-hint" id="sendHint" hidden>Nothing queued in this tab. Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along.</div><div class="actions" id="sendActions"><button class="button button-danger" id="sendAndEnd" type="button">${chromeIcons.exit}<span>Send &amp; End</span></button><button class="button" id="send">Send to Agent</button></div></div></aside></div>
+<div class="bar"><div class="brand"><span class="brand-mark">Lavish</span><span class="brand-support">Editor</span></div><div class="spacer" aria-hidden="true"></div><div class="warnings-wrap" id="warningsWrap" hidden><button class="warnings-button" id="warningsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="warningsDrawer">${chromeIcons.warning}<span class="warnings-count" id="warningsCount">0</span></button><div class="menu warnings-drawer" id="warningsDrawer" role="dialog" aria-labelledby="warningsTitle" aria-describedby="warningsSummary" hidden><div class="warnings-head"><h2 class="warnings-title" id="warningsTitle">Layout issues</h2><p class="warnings-summary" id="warningsSummary"></p></div><div class="warnings-toolbar"><label class="warnings-selectall"><input type="checkbox" id="warningsSelectAll"><span>Select all</span></label><span class="warnings-selected" id="warningsSelected" role="status" aria-live="polite"></span></div><div class="warnings-list" id="warningsList"></div><div class="warnings-foot"><p class="warnings-note">Queueing sends a repair request with your next feedback. An issue is marked resolved only after a newer artifact load and a complete check at the same viewport no longer finds it.</p><button class="button" id="warningsQueueButton" type="button" disabled>Queue selected fixes</button></div></div></div><div class="revisions-wrap" id="revisionsWrap" hidden><button class="revisions-button" id="revisionsButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="revisionsDrawer"><span class="revisions-button-text">Revisions</span><span class="revisions-count" id="revisionsCount">0</span></button><div class="menu revisions-drawer" id="revisionsDrawer" role="dialog" aria-labelledby="revisionsTitle" aria-describedby="revisionsSummary" hidden><div class="revisions-head"><h2 class="revisions-title" id="revisionsTitle">Revisions</h2><p class="revisions-summary" id="revisionsSummary"></p></div><div class="revisions-list" id="revisionsList"></div><div class="revisions-foot"><p class="revisions-note">The agent declares these in the artifact itself. Reveal flashes the next block it marked for that revision; nothing about the page is restyled, so the saved file still looks the way it does here.</p></div></div></div><button class="annotate-switch" id="annotation" type="button" aria-pressed="true" title="${escapeHtml(modeToggleHint)}"><span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><span>Annotate</span></button><button class="sidebar-toggle" id="sidebarToggle" type="button" aria-controls="panel" aria-expanded="true" aria-label="Hide conversation" title="Hide conversation">${chromeIcons.sidebar}<span class="sidebar-toggle-count" id="sidebarToggleCount" aria-hidden="true" hidden></span></button><div class="more-wrap" id="moreWrap"><button class="more-button" id="moreButton" type="button" title="More" aria-haspopup="menu" aria-expanded="false">${chromeIcons.more}</button><div class="menu more-menu" id="moreMenu" hidden><div class="menu-head"><div class="menu-label">Editing</div><button class="menu-file" id="copyPath" type="button" title="Copy path · ${escapeHtml(session.file)}">${chromeIcons.file}<span class="menu-file-text"><span class="path-head">${escapeHtml(pathHead)}</span><span class="path-tail">${escapeHtml(pathTail)}</span></span><span class="copy-hint" id="copyHint"><span class="icon-copy">${chromeIcons.copy}</span><span class="icon-check">${chromeIcons.check}</span><span id="copyHintText">Copy</span></span></button></div><div class="menu-rule"></div><button class="menu-item" id="reloadArtifact" type="button">${chromeIcons.refresh}<span>Reload artifact</span></button><button class="menu-item" id="copySnapshot" type="button">${chromeIcons.camera}<span>Copy DOM snapshot</span></button><button class="menu-item" id="exportArtifact" type="button">${chromeIcons.download}<span>Export standalone HTML</span></button><button class="menu-item" id="shareArtifact" type="button">${chromeIcons.globe}<span>Publish link</span></button><div class="menu-rule"></div><button class="menu-item danger" id="end" type="button">${chromeIcons.exit}<span>End session</span></button></div></div></div>
+<div class="layout"><div class="frame"><iframe id="artifact" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" data-artifact-src="${entryArtifactPath}"></iframe></div><div class="panel-scrim" id="panelScrim"></div><aside class="panel" id="panel"><div class="panel-head" id="panelHead"><span class="panel-handle" aria-hidden="true"></span><div class="panel-head-row"><h2>Conversation</h2><span class="panel-summary" id="panelSummary" role="status" aria-live="polite"></span><button class="panel-toggle" id="panelToggle" type="button" aria-expanded="false" aria-controls="panel" aria-label="Show conversation">${chromeIcons.chevronUp}</button></div></div><div class="panel-scroll" id="panelScroll"><div class="chat" id="chatLog"></div><div class="chat chat-queued" id="queuedLog"></div></div><div class="composer" id="chatComposer"><div class="presence-banner handoff-banner" id="handoffBanner" hidden><span>This review is open in another Lavish tab. Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along.</span><button class="handoff-takeover" id="handoffTakeover" type="button">Take over here</button></div><div class="presence-banner handoff-banner" id="outdatedBanner" hidden><span id="outdatedText">The Lavish server this page was connected to is no longer running. Reloading will work once it is running again.</span><span class="outdated-actions"><button class="handoff-takeover" id="outdatedReload" type="button">Check and reload</button><button class="handoff-takeover" id="outdatedDismiss" type="button">Dismiss</button></span></div><div class="presence-banner" id="presenceBanner" hidden>Your agent is not listening. If this persists, ask your agent to poll for updates from Lavish.</div><textarea id="chatInput" placeholder="Write a message for the agent..."></textarea><div class="chat-attachments" id="chatAttachments"></div><div class="chat-attachment-toolbar"><button class="chat-attach" id="chatAttach" type="button">Attach images</button><input id="chatAttachInput" type="file" accept="${escapeHtml(acceptedMime.join(","))}" multiple hidden><span class="chat-attachment-notice" id="chatAttachmentNotice" role="status"></span></div><div class="send-hint" id="sendHint" hidden>Nothing queued in this tab. Unsent answers stay in the tab or window where you entered them; taking over in another window does not bring them along.</div><div class="actions" id="sendActions"><button class="button button-danger" id="sendAndEnd" type="button">${chromeIcons.exit}<span>Send &amp; End</span></button><button class="button" id="send">Send to Agent</button></div></div></aside></div>
 <div class="share-overlay" id="shareDialog" role="dialog" aria-modal="true" aria-labelledby="shareTitleText" hidden><form class="share-card" id="shareForm"><div class="share-head"><div><div class="share-kicker">Publish to <a class="share-link" href="https://ht-ml.app" target="_blank" rel="noopener noreferrer">ht-ml.app</a></div><h2 id="shareTitleText">Publish artifact</h2></div><button class="share-close" id="shareClose" type="button" aria-label="Close publish dialog"><svg width="14" height="14" viewBox="0 0 10 10" fill="none" aria-hidden="true" focusable="false"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div><p class="share-note">ht-ml.app is a separate, third-party hosting service, not part of Lavish. Publishing sends this artifact to its servers.</p><p class="share-copy">This uploads this artifact to ht-ml.app with local assets inlined. Without a password, the page is PUBLIC and anyone with the link can open it. With a password, the page is PRIVATE and viewers must supply the password to view.</p><p class="share-note">Do not publish secrets. The Lavish annotation SDK is not included.</p><div class="share-grid"><label class="share-check"><input id="shareGenerate" type="checkbox"><span>Generate a password (makes this page private)</span></label><label>Password (optional)<input id="sharePassword" name="password" type="password" autocomplete="new-password" placeholder="Leave blank for a public page"></label></div><div class="share-status" id="shareStatus" role="status"></div><div class="share-result" id="shareResult" hidden><label id="shareUrlResult">Share URL<div class="share-copy-row"><input id="shareUrl" readonly><button class="share-copy-btn" id="copyShareUrl" type="button">Copy URL</button></div></label><label id="sharePasswordResult" hidden>Password (shared secret)<div class="share-copy-row"><input id="sharePasswordOut" readonly><button class="share-copy-btn" id="copySharePassword" type="button">Copy password</button></div></label><label id="shareSiteIdResult" hidden>Site ID<div class="share-copy-row"><input id="shareSiteId" readonly><button class="share-copy-btn" id="copyShareSiteId" type="button">Copy site ID</button></div></label><label id="shareUpdateKeyResult">Update key (secret)<div class="share-copy-row"><input id="shareUpdateKey" readonly><button class="share-copy-btn" id="copyUpdateKey" type="button">Copy key</button></div></label><p class="share-note" id="shareUpdateKeyNote">Keep the update key private. ht-ml.app returns it once and it is the only way to update this page later; the service has no delete. Republish this page&#39;s HTML with <code>lavish-axi share &lt;file&gt; --site &lt;site id&gt; --update-key &lt;key&gt;</code>, and add <code>--private</code> to also lock it behind a new generated password.</p></div><div class="share-actions"><button class="share-cancel" id="shareCancel" type="button">Cancel</button><button class="button" id="sharePublish" type="submit">Publish</button></div></form></div>
 <div class="ended-overlay layout-gate-overlay" id="layoutGateOverlay"${layoutGateHidden}><div class="ended-card"><div class="ended-title" id="layoutGateTitle">Checking layout.<br>One moment.</div><p class="ended-copy" id="layoutGateCopy">Lavish is waiting for fonts and final geometry before revealing this artifact.</p><button class="button ended-action" id="layoutGateAction" type="button">Show anyway</button><button class="button ended-action layout-gate-bypass" id="layoutGateBypass" type="button" hidden>Show anyway</button></div></div>
 <div class="ended-overlay" id="endedOverlay" hidden><div class="ended-card"><div class="ended-title">Session ended.<br>Return to your agent to continue.</div><p class="ended-copy">${escapeHtml(session.file)}</p></div></div>
@@ -4566,7 +4296,7 @@ ${faviconTag}
 <script>${CHROME_BOOT_FAILSAFE_JS}</script>
 <script src="/chrome-client.js" onerror="window.__lavishChromeBootFailed()"></script>
 </body>
-</html>`;
+</html>`, { backIcon: chromeIcons.back });
 }
 
 export function createWhiteboardFrameHtml(channelToken = "") {
