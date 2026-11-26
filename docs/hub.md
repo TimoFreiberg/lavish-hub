@@ -31,13 +31,17 @@ Open `/hubs` on the Lavish UI address to see active workspace hubs (`/` redirect
 there). Use the **Hubs** link in the Lavish header to return from a session. Links
 use the same origin, including a forwarded port.
 
-Each row links to its hub and shows the title (falling back to a non-empty jj
-description, then the repository name) alongside the primary repository name and,
-when it differs from the repository name, the workspace name. If the workspace
-cannot be read, the row shows `Workspace unavailable`. The list refreshes
-automatically, and an owner that stops refreshing disappears after 45 seconds.
-Titles and descriptions are visible to anyone who can access the Lavish server,
-so avoid putting secrets in them.
+Hubs are grouped alphabetically by repository, with older sessions first within
+each group. Each row shows the hub's title (falling back to the workspace name
+for workspace-scoped hubs, or the repository name for session-scoped hubs), the
+first line of its tracked revision or working-copy parent description (or
+`Working-copy parent unavailable` if the workspace cannot be read), and any
+unread publications. Unread publications appear as links that open directly with
+`?view=ID` and clear once opened. When a hub has more than four unread
+publications, the list scrolls within its row. The page refreshes every five
+seconds while visible, catches up when shown again, and drops any owner that
+stops refreshing for 45 seconds. Titles and descriptions are visible to anyone
+who can access the Lavish server, so avoid putting secrets in them.
 
 ## Sessions and targets
 
@@ -57,11 +61,12 @@ also checks for a Polytoken session matching the hub's session ID,
 and on each hub registration refresh. An explicit `--title` (on `listen` or
 `target --title`) takes precedence and is saved in `target.json`, while
 looked-up titles stay in memory so live renames are not frozen across restarts. When
-neither supplies a title, `/hubs` falls back to a non-empty jj description and
-then the repository name. The sidebar shows the title above the repository name
-when available (untitled workspace-scoped hubs show the workspace name), and
-browser tabs show `<title> · Lavish` or `<repo> · Lavish` when untitled. Open
-pages pick up title changes on their next poll.
+neither supplies a title, `/hubs` falls back to the workspace name for
+workspace-scoped hubs (with a `workspace` badge) and the repository name for
+session-scoped hubs. The sidebar shows the title above the repository name when
+available (untitled workspace-scoped hubs show the workspace name), and browser
+tabs show `<title> · Lavish` or `<repo> · Lavish` when untitled. Open pages pick
+up title changes on their next poll.
 
 `--rev REV` on `listen` or `lavish-hub target REV` sets what the hub tracks. Bookmarks follow moves, and change IDs follow rewrites. Working-copy expressions such as `@` are resolved in the invoking workspace and pinned to that change so the hub can read it without snapshotting or contending with working-copy edits in other workspaces. The target, optional base, and explicit title are saved in `target.json`. Restarting reuses saved settings from `target.json` unless overridden, though session-scoped `listen` still requires `--rev`. `--base REV` chooses a base for the fork point with the target, while `--no-base` returns to the default based on `trunk()`. `target` updates only the supplied fields and needs at least one.
 
@@ -90,11 +95,9 @@ The source must already exist and end in `.html`, `.md`, or `.markdown` (a missi
 
 Publishing registers or replaces the document without changing the active browser
 view and prints one JSON line with `id`, `url`, `title`, and `scope`. The URL is the
-direct `?view=ID` link when available. Pass `--attention` to mark the document in
-the sidebar for review without taking over the page (opening it clears the flag).
-New or updated publications show a `New` badge until opened. Open tabs stay on
-their current view. New publications, updates, `--attention` flags, and remote
-`--view` selections on other views show a bottom-right notification with an Open
+direct `?view=ID` link when available. New or updated publications show a cyan
+`New` badge in the sidebar until opened. New publications, updates, and remote
+`--view` selections for other views show a bottom-right notification with an Open
 button that dismisses after six seconds. `--view ID` changes the default selection
 without switching open tabs, and `--open` launches a browser at the selected
 document.

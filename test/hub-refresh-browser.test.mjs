@@ -168,9 +168,7 @@ test('remote selection or publication does not switch views and shows auto-dismi
   documents = [{ ...documents[0], version: 'two' }];
   await page.getByRole('button', { name: 'Refresh' }).click();
   await toast.getByText('Updated: Note').waitFor();
-  documents = [{ ...documents[0], attention: true }];
-  await page.getByRole('button', { name: 'Refresh' }).click();
-  await toast.getByText('Attention: Note').waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Note', exact: true }).getAttribute('data-unseen'), 'true');
   assert.equal(await page.getByRole('button', { name: 'Commits', exact: true }).getAttribute('aria-current'), 'page');
   await toast.getByRole('button', { name: 'Open', exact: true }).click();
   await page.getByRole('button', { name: 'Note', exact: true }).waitFor();

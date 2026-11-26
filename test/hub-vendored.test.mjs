@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveWorkspace } from '../src/hub-workspace.mjs';
 import { chromium } from 'playwright-core';
+import { scanDocument } from '../scripts/visual/checks.mjs';
 
 const run = promisify(execFile);
 async function warmDeps(dir, env) {
@@ -117,6 +118,9 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   assert.equal((await fetch(`${localBase}/api/hubs`, { headers: { 'x-forwarded-host': 'example.invalid' } })).status, 403);
   assert.equal((await fetch(proxyAction, { method: 'POST', headers: { ...actionHeaders, origin: 'http://example.invalid' }, body: '{"operation":"status"}' })).status, 403);
   assert.equal((await fetch(`${localBase}/api/hub-proxy/register`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}' })).status, 403);
+  const largeRegistration = JSON.stringify({ key: 'f'.repeat(16), port: 1234, capability: 'a'.repeat(64), resourceKey: 'b'.repeat(64), identityKey: 'c'.repeat(64), display: { label: 'large', summary: null, unread: Array.from({ length: 50 }, (_, i) => ({ id: `doc-${i}`, title: 'x'.repeat(255) })) } });
+  assert.ok(Buffer.byteLength(largeRegistration) > 4096 && Buffer.byteLength(largeRegistration) < 65536);
+  assert.equal((await fetch(`${localBase}/api/hub-proxy/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: largeRegistration })).status, 404);
   await assert.rejects(stat(env.PATH_TRAP), { code: 'ENOENT' });
   const source = path.join(dir, 'review.html');
   await writeFile(source, '<!doctype html><html><head><link rel="stylesheet" href="review.css?v=1"></head><body><h1 id="authored">Published review</h1><input aria-label="Authored draft"><script src="review.js?v=2"></script></body></html>');
@@ -143,49 +147,115 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   const dashboard = await browser.newPage();
   await dashboard.route(`http://127.0.0.1:${port}/**`, route => route.abort());
   await dashboard.goto(new URL('/hubs', forwardedUrl).href);
-  const hubLink = dashboard.locator('.hub-card');
+  const hubLink = dashboard.locator('.hub-link');
   await hubLink.waitFor();
   assert.equal(await hubLink.getAttribute('href'), `/session/${sessionKey}`);
   assert.equal(new URL(await hubLink.getAttribute('href'), dashboard.url()).port, String(forward.address().port));
   assert.equal(await dashboard.title(), 'Active hubs · Lavish');
+  const directUnread = dashboard.locator('.unread-link');
+  assert.equal(await directUnread.getAttribute('href'), `/session/${sessionKey}?view=review`);
+  await directUnread.click();
+  await dashboard.frameLocator('#artifact').locator('#authored').waitFor({ timeout: 20000 });
+  await dashboard.getByRole('link', { name: 'Hubs', exact: true }).click();
+  await dashboard.getByText('All caught up').waitFor();
+  assert.equal(await dashboard.locator('.unread-link').count(), 0);
+  const artifacts = Array.from({ length: 5 }, (_, i) => ({ id: `doc-${i}`, title: i === 0 ? '<img src=x>' : `Document ${i}` }));
   const fixtures = [
-    { title: '<img src=x onerror=alert(1)>', repo: 'primary', workspace: 'secondary', summary: 'hidden commit', label: 'label' },
-    { title: 'Same workspace', repo: 'primary', workspace: 'primary', summary: 'another hidden commit', label: 'label' },
-    { title: null, repo: 'primary', workspace: 'secondary', summary: 'promoted commit', label: 'label' },
-    { title: null, repo: 'primary', workspace: null, summary: '(no description)', label: 'label' },
-    { title: null, repo: 'primary', workspace: null, summary: null, label: 'label' },
-    { title: 'T'.repeat(200), repo: 'R'.repeat(200), workspace: 'W'.repeat(200), summary: '', label: 'label' },
-    { repo: 'primary', label: 'primary' },
-    { repo: 'primary', label: 'label', summary: '   ' },
-  ].map(hub => ({ ...hub, url: `/session/${sessionKey}` }));
-  await dashboard.route('**/api/hubs', route => route.fulfill({ json: { hubs: fixtures } }));
+    { repo: 'zeta', label: 'Last', startedAt: 1, summary: null, workspace: null, unread: [], url: '/session/last' },
+    { repo: 'alpha', label: 'Newer', startedAt: 20, summary: 'new', workspace: null, unread: [], url: '/session/newer' },
+    { repo: null, label: 'Legacy', startedAt: 1, summary: '', workspace: null, unread: [], url: '/session/legacy' },
+    { repo: 'alpha', label: 'Older', startedAt: 10, summary: 'old', workspace: 'workspace', unread: artifacts.slice(0, 4), url: '/session/older' },
+  ];
+  let requests = 0;
+  await dashboard.route('**/api/hubs', route => { requests++; return route.fulfill({ json: { hubs: fixtures } }); });
   await dashboard.reload();
-  const cards = dashboard.locator('.hub-card');
-  await cards.nth(5).waitFor();
-  assert.equal(await cards.nth(0).locator('.entry-title').textContent(), fixtures[0].title);
-  assert.equal(await cards.nth(0).locator('img').count(), 0);
-  assert.equal(await cards.nth(0).locator('.repo').textContent(), 'primary');
-  assert.equal(await cards.nth(0).locator('.workspace-name').textContent(), 'secondary');
-  assert.equal(await cards.nth(0).locator('.workspace svg').getAttribute('width'), '12');
-  assert.equal(await cards.nth(1).locator('.workspace').count(), 0);
-  assert.equal(await cards.nth(2).locator('.entry-title').textContent(), 'promoted commit');
-  assert.equal((await cards.nth(2).textContent()).match(/promoted commit/g).length, 1);
-  assert.equal(await cards.nth(3).locator('.entry-title').textContent(), 'primary');
-  assert.equal((await cards.nth(3).textContent()).includes('(no description)'), false);
-  assert.equal(await cards.nth(4).locator('.entry-title').textContent(), 'primary');
-  assert.equal(await cards.nth(4).locator('.unavailable').textContent(), 'Workspace unavailable');
-  assert.equal(await cards.nth(6).locator('.entry-title').textContent(), 'primary');
-  assert.equal(await cards.nth(6).locator('.unavailable').count(), 0);
-  assert.equal(await cards.nth(7).locator('.entry-title').textContent(), 'primary');
-  assert.equal(await cards.locator('.unavailable').count(), 1);
-  assert.equal((await cards.nth(0).textContent()).includes('hidden commit'), false);
+  await dashboard.locator('.hub-row').nth(3).waitFor();
+  assert.deepEqual(await dashboard.locator('.repo-name').allTextContents(), ['alpha', 'zeta']);
+  assert.deepEqual(await dashboard.locator('.hub-link').allTextContents(), ['Older', 'Newer', 'Last', 'Legacy']);
+  assert.equal(await dashboard.locator('.repo-group').last().locator('.repo-header').count(), 0);
+  assert.match(await dashboard.locator('#header-meta').textContent(), /4 unread.*4 hubs/);
+  assert.deepEqual(await dashboard.locator('.unread-link').allTextContents(), artifacts.slice(0, 4).map(art => art.title));
+  assert.equal(await dashboard.locator('.unread-link img').count(), 0);
+  assert.equal(await dashboard.locator('.unread-link').first().getAttribute('href'), '/session/older?view=doc-0');
+  assert.equal(await dashboard.locator('.unread-list-box').count(), 0);
+  let scan = await scanDocument(dashboard);
+  assert.deepEqual(scan.accessibility, []);
+  assert.equal(scan.geometry.horizontalOverflow, false);
+  assert.deepEqual(scan.geometry.clippedText, []);
+  const geometry = () => dashboard.evaluate(() => {
+    const link = document.querySelector('.unread-link').getBoundingClientRect();
+    const row = document.querySelector('.hub-row').getBoundingClientRect();
+    return { link: { left: link.left, top: link.top }, row: { left: row.left, width: row.width } };
+  });
+  const beforeGeometry = await geometry();
+  fixtures[3].unread = artifacts;
+  await dashboard.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+  const unreadBox = dashboard.locator('.unread-list-box'); await unreadBox.waitFor();
+  assert.equal(await unreadBox.getAttribute('tabindex'), '0');
+  assert.equal(await unreadBox.getAttribute('role'), 'region');
+  assert.equal(await unreadBox.getAttribute('aria-label'), 'Unread artifacts for Older');
+  assert.equal(await unreadBox.evaluate(node => node.scrollHeight > node.clientHeight && node.scrollWidth <= node.clientWidth), true);
+  const afterGeometry = await geometry();
+  assert.ok(Math.abs(afterGeometry.link.left - beforeGeometry.link.left) < 1);
+  assert.ok(Math.abs(afterGeometry.link.top - beforeGeometry.link.top) < 1);
+  assert.ok(Math.abs(afterGeometry.row.left - beforeGeometry.row.left) < 1);
+  assert.ok(Math.abs(afterGeometry.row.width - beforeGeometry.row.width) < 1);
+  await unreadBox.evaluate(node => { node.scrollTop = 30; node.dataset.oldBox = 'yes'; node.focus(); });
+  const beforeScroll = await unreadBox.evaluate(node => node.scrollTop);
+  const unchangedRequests = requests;
+  await Promise.all([
+    dashboard.waitForResponse(response => response.url().endsWith('/api/hubs')),
+    dashboard.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))),
+  ]);
+  assert.ok(requests > unchangedRequests);
+  assert.equal(await unreadBox.getAttribute('data-old-box'), 'yes');
+  assert.equal(await unreadBox.evaluate(node => document.activeElement === node), true);
+  fixtures[1].summary = 'changed';
+  await dashboard.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await dashboard.waitForFunction(() => document.querySelector('.unread-list-box:not([data-old-box])'));
+  assert.equal(await unreadBox.evaluate(node => node.scrollTop), beforeScroll);
+  assert.equal(await unreadBox.evaluate(node => document.activeElement === node), true);
+  const unreadLink = dashboard.locator('.unread-link').nth(1);
+  await unreadLink.evaluate(node => { node.focus({ preventScroll: true }); node.dataset.oldLink = 'yes'; });
+  fixtures[1].summary = 'changed again';
+  await dashboard.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await dashboard.waitForFunction(() => document.querySelectorAll('.unread-link')[1]?.getAttribute('data-old-link') === null);
+  assert.equal(await unreadLink.evaluate(node => document.activeElement === node), true);
+  assert.equal(await unreadBox.evaluate(node => node.scrollTop), beforeScroll);
+  fixtures[3].unread = artifacts.filter(art => art.id !== 'doc-1');
+  await dashboard.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await dashboard.waitForFunction(() => !document.querySelector('.unread-list-box'));
+  assert.equal(await dashboard.locator('.hub-link').first().evaluate(node => document.activeElement === node), true);
+  const collapsedGeometry = await geometry();
+  assert.ok(Math.abs(collapsedGeometry.link.left - afterGeometry.link.left) < 1);
+  assert.ok(Math.abs(collapsedGeometry.link.top - afterGeometry.link.top) < 1);
+  assert.ok(Math.abs(collapsedGeometry.row.width - afterGeometry.row.width) < 1);
+  fixtures[3].unread = artifacts;
+  await dashboard.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await unreadBox.waitFor();
+  await unreadBox.focus();
+  fixtures[3].unread = artifacts.slice(0, 4);
+  await dashboard.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await dashboard.waitForFunction(() => !document.querySelector('.unread-list-box'));
+  assert.equal(await dashboard.locator('.hub-link').first().evaluate(node => document.activeElement === node), true);
+  fixtures[3].unread = artifacts;
+  await dashboard.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await unreadBox.waitFor();
+  assert.deepEqual(await dashboard.locator('.hub-link').allTextContents(), ['Older', 'Newer', 'Last', 'Legacy']);
+  scan = await scanDocument(dashboard);
+  assert.deepEqual(scan.accessibility, []);
+  assert.equal(scan.geometry.horizontalOverflow, false);
+  assert.deepEqual(scan.geometry.clippedText, []);
+  await dashboard.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  const pausedRequests = requests;
+  await delay(5300);
+  assert.equal(requests, pausedRequests);
+  fixtures[3].unread = [];
+  await dashboard.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await dashboard.getByText('All caught up').waitFor();
+  assert.ok(requests > pausedRequests);
   await dashboard.setViewportSize({ width: 320, height: 800 });
   assert.equal(await dashboard.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
-  const narrowPositions = await cards.nth(0).evaluate(node => ({
-    content: node.querySelector('.entry-content').getBoundingClientRect().left,
-    metadata: node.querySelector('.metadata').getBoundingClientRect().left,
-  }));
-  assert.ok(Math.abs(narrowPositions.content - narrowPositions.metadata) < 1);
   await dashboard.unroute('**/api/hubs');
   let releaseLoading;
   const loading = new Promise(resolve => { releaseLoading = resolve; });
@@ -534,7 +604,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   const destination = await page.evaluate(key => sessionStorage.getItem(`lavish-axi:destination:${key}`), sessionKey);
   assert.doesNotMatch(destination || '', /__lavish_hub_/);
   await page.waitForFunction(() => document.title === 'repo · Lavish');
-  await frame.locator('button[data-hub-id="notes"]:not([data-attention]):not([data-unseen])').waitFor({ timeout: 10000 });
+  await frame.locator('button[data-hub-id="notes"]:not([data-unseen])').waitFor({ timeout: 10000 });
   assert.equal(failedAck, true);
   await page.unroute('**/action', ackRoute);
   // Switching views after a direct link and reloading must stay on the manually chosen view.
@@ -569,7 +639,7 @@ test('hub opens with the vendored server rather than PATH and polls its protocol
   assert.equal(await hubsBackLink.getAttribute('href'), '/hubs');
   await hubsBackLink.click();
   await page.waitForURL(new URL('/hubs', forwardedUrl).href);
-  await page.locator('.hub-card').waitFor();
+  await page.locator('.hub-link').waitFor();
   await run(process.execPath, [path.resolve('bin/lavish-hub'), 'stop', '--workspace', repo], { env });
   const exit = child.exitCode === null ? await new Promise(resolve => child.once('exit', resolve)) : child.exitCode;
   assert.equal(exit, 0, stderr);

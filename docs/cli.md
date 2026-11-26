@@ -6,7 +6,7 @@ lavish-hub target [REV] [--base REV | --no-base] [--title TEXT] [--session ID] [
 lavish-hub stop [--workspace DIR] [--session ID]
 lavish-hub url [--workspace DIR] [--session ID]
 lavish-hub [status] [--workspace DIR] [--session ID] [--open] [--view ID]
-lavish-hub publish FILE [--id ID] [--title T] [--metadata-file JSON] [--repo REPO] [--base-commit HEX] [--head-commit HEX] [--source-url URL] [--no-scope] [--workspace DIR] [--session ID] [--attention] [--open]
+lavish-hub publish FILE [--id ID] [--title T] [--metadata-file JSON] [--repo REPO] [--base-commit HEX] [--head-commit HEX] [--source-url URL] [--no-scope] [--workspace DIR] [--session ID] [--open]
 lavish-hub tasks --file FILE [--workspace DIR] [--session ID]
 lavish-hub reply --batch ID [--text | --agent-reply] TEXT [--workspace DIR] [--session ID]
 lavish-hub reply PAGE --agent-reply TEXT
@@ -26,7 +26,7 @@ To keep a workspace-scoped hub usable after deleting its temporary workspace, ru
 
 `publish FILE` registers an existing HTML or Markdown file without changing the current view. Omit `--id` to reuse an existing registration for the same canonical file, or derive a stable ID from its filename (see [hub](hub.md) for derivation and collision rules). By default, scope records the repository and the tracked jj target's base and head commits. Use `--no-scope` for an unscoped artifact, or supply `--repo`, `--base-commit`, `--head-commit`, and `--source-url` for explicit scope. `--metadata-file JSON` accepts a JSON object with `reviewedRepository`, `baseCommit`, `headCommit`, and `sourceUrl`, and inline flags override the corresponding file fields. Supplying any inline scope flag or a metadata file disables automatic scope, even if only some fields are supplied. `--no-scope` cannot be combined with either.
 
-The command prints one JSON line with `id`, `url`, `title`, and `scope` (`url` or `scope` can be `null`). `--attention` flags the document in the sidebar until opened, and `--open` selects it and opens a browser without switching existing tabs. Run `lavish-hub publish --help` for local jj, remote PR, and unscoped examples.
+The command prints one JSON line with `id`, `url`, `title`, and `scope` (`url` or `scope` can be `null`). New and updated documents remain unread until opened. `--open` selects the document and opens a browser without switching existing tabs. Run `lavish-hub publish --help` for local jj, remote PR, and unscoped examples.
 
 ## Feedback
 
