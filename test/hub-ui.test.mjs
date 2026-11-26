@@ -71,6 +71,42 @@ test('hub sidebar hides and restores artifacts without acknowledging unread', { 
   assert.equal(await details.getAttribute('open'), null);
 });
 
+test('hub sidebar defers auto-collapse while reading and omits toggle without version', { timeout: 30000 }, async t => {
+  const outdated = { id: 'outdated', title: 'Outdated', source: 'outdated.md', version: 'v1', viewedVersion: null, collapsed: false };
+  const versionless = { id: 'fixture', title: 'Fixture', source: 'fixture.md', collapsed: false };
+  let polls = 0;
+  const transport = await createHubTransport({
+    status: () => ({ available: true, selected: 'commits' }),
+    documents: () => { polls++; return { documents: [{ ...outdated }, { ...versionless }] }; },
+    snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
+    navigate: ({ id }) => ({ selected: id }),
+    acknowledge: ({ id, version }) => {
+      if (id === outdated.id && version === outdated.version) { outdated.viewedVersion = version; outdated.collapsed = true; }
+      return true;
+    },
+    readDocument: () => ({ text: '# Outdated', hash: 'h', version: 'v1' }),
+    setDocumentCollapsed: ({ collapsed }) => { outdated.collapsed = collapsed; return true; },
+  });
+  const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
+  t.after(async () => { await browser.close(); await transport.close(); });
+  const page = await browser.newPage();
+  await page.setContent(`<div id="app"></div><script>${await markdownBundle()}</script><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })}</script><script type="module">${script}</script>`);
+  await page.getByRole('button', { name: 'Outdated', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Hide Fixture' }).count(), 0);
+  await page.getByRole('button', { name: 'Outdated', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[data-hub-id="outdated"]')?.getAttribute('aria-current') === 'page');
+  const afterOpen = polls;
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  assert.ok(polls > afterOpen);
+  assert.equal(outdated.collapsed, true);
+  assert.equal(await page.locator('.nav-primary [data-hub-id="outdated"]').count(), 1);
+  assert.equal(await page.locator('.nav-older').isVisible(), false);
+  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.nav-older [data-hub-id="outdated"]'));
+  assert.equal(await page.locator('.nav-older-count').textContent(), '1');
+  assert.equal(await page.locator('.nav-older').getAttribute('open'), null);
+});
+
 test('sidebar uses workspace name until a session title is set', { timeout: 30000 }, async t => {
   let title = '';
   const transport = await createHubTransport({

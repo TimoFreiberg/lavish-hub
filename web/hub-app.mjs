@@ -194,16 +194,19 @@ function status(text) {
   document.querySelector('#connection').textContent = [navigationError, connection, notice].filter(Boolean).join(' · ');
 }
 const olderDisclosure = createOlderDisclosureController();
-let collapseRevision = 0;
+let collapseRevision = 0, pinnedPrimaryId = null, lastRenderedSelected = null;
+const isCollapsedForSidebar = doc => Boolean(doc?.collapsed) && doc.id !== pinnedPrimaryId;
 async function toggleDocumentCollapsed(id, toggle) {
   const doc = documents.find(item => item.id === id);
-  if (!doc) return;
-  const collapsed = !doc.collapsed, version = doc.version;
+  if (!doc?.version) return;
+  const collapsed = !isCollapsedForSidebar(doc), version = doc.version;
   toggle.disabled = true; collapseRevision++;
   try {
     await action('setDocumentCollapsed', { id, version, collapsed });
     const current = documents.find(item => item.id === id && item.version === version);
     if (current) current.collapsed = collapsed;
+    if (collapsed && pinnedPrimaryId === id) pinnedPrimaryId = null;
+    else if (!collapsed && id === selected) pinnedPrimaryId = id;
     collapseRevision++; renderNav(); toggle.disabled = false;
     if (toggle.isConnected && !toggle.closest('details:not([open])')) toggle.focus();
     else document.querySelector('#navigation .nav-older summary')?.focus();
@@ -213,6 +216,9 @@ async function toggleDocumentCollapsed(id, toggle) {
 function renderNav() {
   const nav = document.querySelector('#navigation');
   const focused = nav.contains(document.activeElement) ? document.activeElement : null;
+  if (selected !== lastRenderedSelected) { pinnedPrimaryId = null; lastRenderedSelected = selected; }
+  const activeDoc = documents.find(doc => doc.id === selected);
+  if (activeDoc && !activeDoc.collapsed) pinnedPrimaryId = selected;
   let primary = nav.querySelector('.nav-primary'), details = nav.querySelector('.nav-older');
   if (!primary) { primary = el('div', null, { class: 'nav-primary' }); nav.append(primary); }
   if (!details) {
@@ -223,7 +229,7 @@ function renderNav() {
   }
   const older = details.querySelector('.nav-older-list');
   const existing = new Map([...nav.querySelectorAll('button[data-hub-id]')].map(b => [b.dataset.hubId, b]));
-  const items = [...Object.entries(labels).map(([id, label]) => ({ id, label })), ...documents.map(doc => ({ ...doc, label: doc.title, unseen: doc.viewedVersion !== doc.version }))];
+  const items = [...Object.entries(labels).map(([id, label]) => ({ id, label })), ...documents.map(doc => ({ ...doc, label: doc.title, unseen: doc.viewedVersion !== doc.version, collapsed: isCollapsedForSidebar(doc) }))];
   const next = new Map([[primary, primary.firstElementChild], [older, older.firstElementChild]]);
   for (const item of items) {
     let b = existing.get(item.id);
@@ -235,7 +241,7 @@ function renderNav() {
     applyNavBadge(b, item.unseen ? 'new' : '', 'hub-nav-desc');
     if (item.id === selected) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     let node = b;
-    if (!Object.hasOwn(labels, item.id)) {
+    if (!Object.hasOwn(labels, item.id) && item.version) {
       let row = b.parentElement?.classList.contains('nav-row') ? b.parentElement : null;
       if (!row) { row = el('div', null, { class: 'nav-row' }); row.append(b); const toggle = button('', () => toggleDocumentCollapsed(item.id, toggle)); toggle.className = 'nav-collapse-toggle'; row.append(toggle); }
       const toggle = row.querySelector('.nav-collapse-toggle');
@@ -249,9 +255,9 @@ function renderNav() {
     next.set(target, node.nextElementSibling);
   }
   for (const b of existing.values()) (b.closest('.nav-row') || b).remove();
-  const count = documents.filter(doc => doc.collapsed).length;
+  const count = documents.filter(isCollapsedForSidebar).length;
   details.querySelector('.nav-older-count').textContent = String(count);
-  olderDisclosure.sync(details, { count, activeOlderId: documents.find(doc => doc.id === selected && doc.collapsed)?.id || null });
+  olderDisclosure.sync(details, { count, activeOlderId: documents.find(doc => doc.id === selected && isCollapsedForSidebar(doc))?.id || null });
   if (focused?.isConnected) {
     const closed = focused.closest('details:not([open])');
     if (closed) closed.querySelector('summary')?.focus();

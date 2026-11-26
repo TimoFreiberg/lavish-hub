@@ -131,7 +131,9 @@ moves under **Older** once that commit is outside the tracked stack. If the stac
 cannot be read (for example, when the workspace or repository is unavailable), those
 documents stay in the main list. Other viewed documents, including unscoped
 publications and external reviews, move under **Older** 72 hours after publication.
-Unread documents stay in the main list unless you hide them.
+Unread documents stay in the main list unless you hide them. When you open an
+unread document that is already outdated, it stays in the main list while you
+read it and moves under **Older** once you navigate away or hide it.
 
 Use the Hide button beside a published document to move it into **Older**, or
 Restore to return it to the main list. Hiding an unread document keeps its `New`

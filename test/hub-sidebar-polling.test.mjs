@@ -88,14 +88,18 @@ test('sibling sidebar renders Older and restores without losing authored input',
   assert.equal(await page.locator('#draft').inputValue(), 'unsaved');
 });
 
-test('sibling polling opens Older when the active document moves there', { timeout: 30000 }, async () => {
+test('sibling polling keeps an active primary document in place until hidden', { timeout: 30000 }, async () => {
   const page = await updatePage(browser);
   await page.waitForFunction(() => globalThis.__polls > 0 && document.querySelector('[data-hub-id="doc"]')?.closest('.nav-primary'));
   assert.equal(await page.locator('.nav-older').getAttribute('open'), null);
   const polls = await page.evaluate(() => globalThis.__polls);
   await page.evaluate(() => { globalThis.__doc.collapsed = true; document.dispatchEvent(new Event('visibilitychange')); });
-  await page.waitForFunction(previous => globalThis.__polls > previous && document.querySelector('.nav-older[open] [data-hub-id="doc"]'), polls);
+  await page.waitForFunction(previous => globalThis.__polls > previous, polls);
+  assert.equal(await page.locator('.nav-primary a[data-hub-id="doc"]').count(), 1);
+  assert.equal(await page.locator('.nav-older').getAttribute('open'), null);
+  await page.getByRole('button', { name: 'Hide Document' }).click();
   const details = page.locator('.nav-older');
+  await page.waitForFunction(() => document.querySelector('.nav-older[open] [data-hub-id="doc"]'));
   assert.equal(await details.getAttribute('open'), '');
   await details.locator('summary').click();
   await page.evaluate(() => { globalThis.__extra = [{ id: 'other', title: 'Other', source: 'other.md', version: 'v1', viewedVersion: 'v1', collapsed: false }]; document.dispatchEvent(new Event('visibilitychange')); });

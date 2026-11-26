@@ -51,7 +51,7 @@ function siblingSidebarClient(c) {
   const nav = document.querySelector('#lavish-hub-sidebar nav');
   const primary = nav.querySelector('.nav-primary'), details = nav.querySelector('.nav-older'), older = details.querySelector('.nav-older-list');
   const disclosure = createOlderDisclosureController({ initialOpen: details.open });
-  let collapseRevision = 0;
+  let collapseRevision = 0, pinnedActive = Boolean(primary.querySelector('[data-current]'));
   function syncOlder() {
     const count = older.children.length;
     details.querySelector('.nav-older-count').textContent = String(count);
@@ -235,6 +235,7 @@ function siblingSidebarClient(c) {
       toggle.disabled = true; collapseRevision++;
       try {
         await action('setDocumentCollapsed', { id, version, collapsed }, AbortSignal.timeout(10000));
+        if (id === c.id) pinnedActive = !collapsed;
         toggle.dataset.hubCollapsed = String(collapsed);
         const row = toggle.closest('.nav-row'), title = row.querySelector('.nav-label').textContent;
         applyCollapseToggle(toggle, title, collapsed);
@@ -333,13 +334,15 @@ function siblingSidebarClient(c) {
             clearTimeout(flashTimer); flashTimer = setTimeout(() => row.classList.remove('nav-updated-flash'), 1200);
           }
         } else button?.remove();
+        if (item.id === c.id && !item.collapsed) pinnedActive = true;
+        const collapsed = Boolean(item.collapsed) && !(item.id === c.id && pinnedActive);
         if (item.version) {
           let toggle = row.querySelector('.nav-collapse-toggle');
           if (!toggle) { toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'nav-collapse-toggle'; row.append(toggle); }
-          toggle.dataset.hubId = item.id; toggle.dataset.hubVersion = item.version; toggle.dataset.hubCollapsed = String(Boolean(item.collapsed));
-          applyCollapseToggle(toggle, item.title, Boolean(item.collapsed));
+          toggle.dataset.hubId = item.id; toggle.dataset.hubVersion = item.version; toggle.dataset.hubCollapsed = String(collapsed);
+          applyCollapseToggle(toggle, item.title, collapsed);
         }
-        const target = item.collapsed ? older : primary, previous = row.parentElement;
+        const target = collapsed ? older : primary, previous = row.parentElement;
         if (previous !== target && next.get(previous) === row) next.set(previous, row.nextElementSibling);
         const before = next.get(target);
         if (row !== before) target.insertBefore(row, before);
