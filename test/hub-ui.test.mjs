@@ -27,7 +27,7 @@ test('hub sidebar hides and restores artifacts without acknowledging unread', { 
   let polls = 0;
   const other = { id: 'other', title: 'Other', source: 'other.md', version: 'v1', viewedVersion: 'v1', collapsed: false };
   const transport = await createHubTransport({
-    status: () => ({ available: true, selected: 'commits' }), documents: () => { polls++; return { documents: [{ ...doc }, { ...other }] }; },
+    status: () => ({ available: true, selected: 'diff' }), documents: () => { polls++; return { documents: [{ ...doc }, { ...other }] }; },
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
     navigate: ({ id }) => ({ selected: id }), readDocument: () => ({ text: '# Review', hash: 'h', version: 'v1' }),
     setDocumentCollapsed: ({ collapsed }) => { doc.collapsed = collapsed; return true; },
@@ -76,7 +76,7 @@ test('hub sidebar defers auto-collapse while reading and omits toggle without ve
   const versionless = { id: 'fixture', title: 'Fixture', source: 'fixture.md', collapsed: false };
   let polls = 0;
   const transport = await createHubTransport({
-    status: () => ({ available: true, selected: 'commits' }),
+    status: () => ({ available: true, selected: 'diff' }),
     documents: () => { polls++; return { documents: [{ ...outdated }, { ...versionless }] }; },
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] }),
     navigate: ({ id }) => ({ selected: id }),
@@ -101,7 +101,7 @@ test('hub sidebar defers auto-collapse while reading and omits toggle without ve
   assert.equal(outdated.collapsed, true);
   assert.equal(await page.locator('.nav-primary [data-hub-id="outdated"]').count(), 1);
   assert.equal(await page.locator('.nav-older').isVisible(), false);
-  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.nav-older [data-hub-id="outdated"]'));
   assert.equal(await page.locator('.nav-older-count').textContent(), '1');
   assert.equal(await page.locator('.nav-older').getAttribute('open'), null);
@@ -110,14 +110,14 @@ test('hub sidebar defers auto-collapse while reading and omits toggle without ve
 test('sidebar uses workspace name until a session title is set', { timeout: 30000 }, async t => {
   let title = '';
   const transport = await createHubTransport({
-    status: () => ({ available: true, selected: 'commits', title }), documents: () => ({ documents: [] }),
+    status: () => ({ available: true, selected: 'diff', title }), documents: () => ({ documents: [] }),
     snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '', patch: '', commits: [] }),
   });
   const browser = await chromium.launch({ executablePath: process.env.LAVISH_HUB_CHROMIUM || chromium.executablePath(), headless: true });
   t.after(async () => { await browser.close(); await transport.close(); });
   const page = await browser.newPage();
-  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace/child', workspaceName: 'child', repoName: 'repo' })}; globalThis.lavish={setDocumentMeta: value => { globalThis.metaTitle=value.title; }};</script><script type="module">${script}</script>`);
-  await page.getByRole('heading', { name: 'Commits' }).waitFor();
+  await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace/child', workspaceName: 'child', repoName: 'repo' })}; globalThis.mountLavishDiff=()=>({ hide() {}, update() {} }); globalThis.lavish={setDocumentMeta: value => { globalThis.metaTitle=value.title; }};</script><script type="module">${script}</script>`);
+  await page.getByText('No commits in this range.').waitFor();
   assert.equal(await page.locator('.hub-repo-name').textContent(), 'child');
   assert.equal(await page.locator('.hub-session-title').isVisible(), false);
   await page.waitForFunction(() => document.title === 'repo');
@@ -184,8 +184,8 @@ test('hub bounds a hung diff file read, keeps the patch, and retries the expansi
   const css = await readFile(path.join(dist, 'diff.css'), 'utf8');
   const page = await browser.newPage(); page.setDefaultTimeout(5000);
   await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  await page.locator('.file-link[data-path="hung.txt"]').waitFor();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
+  await page.getByRole('button', { name: 'Expand hung.txt' }).click();
   await page.locator('[data-expand-button]').first().click();
   await page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.').waitFor({ timeout: 20000 });
   assert.equal(reads, 1);
@@ -212,12 +212,12 @@ test('hub gives up on a navigation the owner never answers and lets the next one
   const markdown = await markdownBundle();
   const page = await browser.newPage(); page.setDefaultTimeout(5000);
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   await page.getByText('Hub actions are unreachable.', { exact: false }).waitFor({ timeout: 20000 });
-  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   for (const deadline = Date.now() + 5000; navigations.length < 2 && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 25));
-  assert.deepEqual(navigations, ['changes', 'commits']);
-  await page.locator('#navigation [aria-current="page"]', { hasText: 'Commits' }).waitFor();
+  assert.deepEqual(navigations, ['tasks', 'diff']);
+  await page.locator('#navigation [aria-current="page"]', { hasText: 'Diff' }).waitFor();
   await page.getByText('Hub actions are unreachable.', { exact: false }).waitFor({ state: 'detached' });
 });
 
@@ -254,22 +254,23 @@ test('hub keeps an unavailable file expansion notice until that file expands', {
   const page = await browser.newPage(); page.setDefaultTimeout(5000);
   await page.setContent(`<html data-theme="light"><style>@scope (.hub-diff) { ${css} } .hub-diff { height: 600px; display: flex; flex-direction: column }</style><div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: '/workspace' })};</script><script>${bundle.replaceAll('</script', '<\\/script')}</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
   const unavailable = page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.');
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  await page.locator('.file-link[data-path="a.txt"]').waitFor();
-  await page.locator('.file-link[data-path="b.txt"]').click();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
+  await page.getByRole('button', { name: 'Expand a.txt' }).waitFor();
+  await page.getByRole('button', { name: 'Expand b.txt' }).click();
   await page.locator('[data-expand-button]:visible').last().click();
   await unavailable.waitFor();
   assert.deepEqual(reads, [1]);
   assert.equal(await page.getByText('four', { exact: true }).count(), 0);
   // a.txt expands, and that success says nothing about b.txt's unavailable read.
-  await page.locator('.file-link[data-path="a.txt"]').click();
-  await page.locator('[data-expand-button]').first().click();
-  await page.getByText('four', { exact: true }).first().waitFor();
+  await page.getByRole('button', { name: 'Expand a.txt' }).click();
+  const aFile = page.locator('diffs-container').filter({ has: page.locator('.file-header[data-file="a.txt"]') });
+  await aFile.locator('[data-expand-button]:visible').first().click();
   assert.deepEqual(reads, [1, 0]);
+  await page.getByText('four', { exact: true }).first().waitFor();
   assert.equal(await unavailable.count(), 1);
   // Only b.txt's own retry clears the notice it raised.
   bUnavailable = false;
-  await page.locator('.file-link[data-path="b.txt"]').click();
+  await page.locator('.file-header[data-file="b.txt"]').scrollIntoViewIfNeeded();
   await page.locator('[data-expand-button]:visible').last().click();
   await unavailable.waitFor({ state: 'detached' });
   assert.deepEqual(reads, [1, 0, 1]);
@@ -278,9 +279,11 @@ test('hub keeps an unavailable file expansion notice until that file expands', {
 test('hub keeps description drafts across navigation and stale saves', { timeout: 30000 }, async t => {
   const commit = { changeId: 'a'.repeat(32), commitId: 'b'.repeat(40), description: 'Original\n', immutable: false, divergent: false };
   let taskText = '- [ ] Task\n\n> - [ ] Quoted\n';
+  const patch = 'diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -5 +5 @@\n-old\n+new\ndiff --git a/unavailable.txt b/unavailable.txt\n--- a/unavailable.txt\n+++ b/unavailable.txt\n@@ -5 +5 @@\n-old\n+new\n';
   const transport = await createHubTransport({
     status: () => ({ available: true }), documents: () => ({ documents: [] }), navigate: ({ id }) => ({ selected: id }),
-    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch: 'diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -5 +5 @@\n-old\n+new\ndiff --git a/unavailable.txt b/unavailable.txt\n--- a/unavailable.txt\n+++ b/unavailable.txt\n@@ -5 +5 @@\n-old\n+new\n', commits: [commit] }),
+    snapshot: () => ({ operationId: 'd'.repeat(128), base: 'c'.repeat(40), head: 'b'.repeat(40), stat: '1 file changed', patch, commits: [commit] }),
+    diffRange: () => ({ patch, version: 'range', rangeKey: 'range' }),
     diffFiles: body => { assert.equal(body.operationId, 'd'.repeat(128)); if (body.fileIndex === 1) throw new Error('unavailable'); assert.equal(body.fileIndex, 0); return { oldFile: { name: 'example.txt', contents: 'one\ntwo\nthree\nfour\nold\n' }, newFile: { name: 'example.txt', contents: 'one\ntwo\nthree\nfour\nnew\n' } }; },
     describe: () => ({ status: 'conflict', reason: 'stale', current: [{ description: 'External\n' }] }),
     readDocument: () => ({ text: taskText, hash: taskText, version: 'version' }),
@@ -299,8 +302,8 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await description.waitFor();
   assert.equal(await description.evaluate(node => document.activeElement === node), true);
   await description.fill('My draft');
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
-  await page.locator('.file-link[data-path="example.txt"]').waitFor();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
+  await page.getByRole('button', { name: 'Expand example.txt' }).click();
   const zed = page.locator('.file-header a').first();
   assert.equal(await zed.textContent(), 'Open in Zed');
   assert.match(await zed.getAttribute('href'), /example\.txt:5/);
@@ -314,19 +317,18 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   await page.getByPlaceholder('Write a comment').fill('Keep this draft');
   await page.locator('[data-expand-button]').first().click();
   await page.getByText('four', { exact: true }).first().waitFor();
-  await page.locator('.file-link[data-path="unavailable.txt"]').click();
-  await page.locator('[data-expand-button]:visible').last().click();
+  await page.getByRole('button', { name: 'Expand unavailable.txt' }).click();
+  await page.locator('diffs-container').filter({ has: page.locator('.file-header[data-file="unavailable.txt"]') }).locator('[data-expand-button]:visible').last().click();
   await page.getByText('Unchanged lines are unavailable for this file or snapshot. The original diff is still shown.').waitFor();
   assert.equal(await page.getByPlaceholder('Write a comment').inputValue(), 'Keep this draft');
-  await page.getByRole('button', { name: 'Commits', exact: true }).click();
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   assert.equal(await page.getByPlaceholder('Write a comment').inputValue(), 'Keep this draft');
   await page.getByRole('button', { name: 'Queue comment' }).click();
   const queued = await page.evaluate(() => globalThis.queued);
   assert.match(queued[0][0], /Hub view: Diff \(diff\)/);
   assert.ok(queued[0][0].includes('b'.repeat(40)));
   assert.match(queued[0][0], /5: new/);
-  await page.locator('.file-link[data-path="example.txt"]').click();
   await page.getByText('four', { exact: true }).first().hover();
   await page.getByRole('button', { name: 'Add comment' }).click();
   await page.getByPlaceholder('Write a comment').fill('Comment on expanded context');
@@ -335,7 +337,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   assert.match(expanded[0], /4: four/);
   assert.equal(expanded[1].target.start, 4);
   assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).count(), 0);
-  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   assert.equal(await description.inputValue(), 'My draft');
   await page.getByRole('button', { name: 'Save description' }).click();
   await page.getByRole('alert').filter({ hasText: 'Conflict: stale' }).waitFor();
@@ -350,7 +352,7 @@ test('hub keeps description drafts across navigation and stale saves', { timeout
   assert.equal(await tasks.evaluate(node => document.activeElement === node), true);
   assert.equal(await tasks.inputValue(), '- [x] Task\n\n> - [x] Quoted\n');
   await tasks.fill('- [x] Local draft\n');
-  await page.getByRole('button', { name: 'Commits', exact: true }).click();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   assert.equal(await tasks.inputValue(), '- [x] Local draft\n');
   await tasks.press('Escape');

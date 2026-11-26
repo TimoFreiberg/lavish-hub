@@ -302,7 +302,7 @@ async function main() {
     hub('publish', path.join(docs, 'notes.md'), '--id', 'notes', '--title', 'Review notes', '--metadata-file', path.join(docs, 'scope.json'));
     hub('publish', path.join(docs, 'short.md'), '--id', 'short', '--title', 'A much longer document title that should wrap or truncate in the navigation');
     hub('publish', path.join(docs, 'review.html'), '--id', 'review', '--title', 'Review HTML');
-    hub('--view', 'commits', ...(options.open ? ['--open'] : []));
+    hub('--view', 'diff', ...(options.open ? ['--open'] : []));
   } catch (error) {
     child.kill('SIGTERM');
     await exited;

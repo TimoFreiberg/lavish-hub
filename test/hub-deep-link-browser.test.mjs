@@ -11,7 +11,7 @@ const bundle = async entry => (await build({ entryPoints: [entry], bundle: true,
 test('Markdown links reveal Changes and Commits, report unknown views, and retain drafts', { timeout: 45000 }, async t => {
   const changeId = 'abcdefgh12345678';
   const patch = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -5 +5 @@\n-old\n+new\n' + 'diff --git a/long.txt b/long.txt\nnew file mode 100644\n--- /dev/null\n+++ b/long.txt\n@@ -0,0 +1,80 @@\n' + Array.from({ length: 80 }, (_, i) => `+line ${i}\n`).join('');
-  const text = '[line](?view=changes&file=a.txt&line=2-3&side=old)\n\n[file](?view=changes&file=a.txt)\n\n[commit](?view=commits&change=abcdefgh)\n\n[ambiguous](?view=commits&change=abc)\n\n[missing commit](?view=commits&change=notfound)\n\n[missing file](?view=changes&file=%3Cimg%3E)\n\n[bounds](?view=changes&file=a.txt&line=99)\n\n[unknown](?view=missing)\n\n[external](https://example.com/)';
+  const text = '[line](?view=diff&file=a.txt&line=2-3&side=old)\n\n[file](?view=diff&file=a.txt)\n\n[commit](?view=diff&change=abcdefgh)\n\n[ambiguous](?view=diff&change=abc)\n\n[missing commit](?view=diff&change=notfound)\n\n[missing file](?view=diff&file=%3Cimg%3E)\n\n[bounds](?view=diff&file=a.txt&line=99)\n\n[unknown](?view=missing)\n\n[external](https://example.com/)';
   let reads = 0;
   const transport = await createHubTransport({
     status: () => ({ available: true, selected: 'tasks' }), documents: () => ({ documents: [{ id: 'notes', title: 'Notes', source: 'notes.md' }] }),
@@ -49,7 +49,7 @@ test('Markdown links reveal Changes and Commits, report unknown views, and retai
   await page.getByRole('textbox', { name: 'Tasks Markdown' }).fill(text + '\n\nDraft');
   await page.getByRole('button', { name: 'Notes', exact: true }).click();
   await page.getByRole('link', { name: 'commit', exact: true }).click();
-  await page.locator(`.card[data-change-id="${changeId}"].deep-link-highlight`).waitFor();
+  await page.locator(`.rail-row[data-change-id="${changeId}"].deep-link-highlight`).waitFor();
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   assert.match(await page.getByRole('textbox', { name: 'Tasks Markdown' }).inputValue(), /Draft/);
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -64,6 +64,7 @@ test('Markdown links reveal Changes and Commits, report unknown views, and retai
   await page.locator('[data-deletions] [data-line="2"][data-selected-line]').first().waitFor();
   await page.locator('[data-deletions] [data-line="3"][data-selected-line]').first().waitFor();
   assert.equal(await page.evaluate(() => reveals), 1);
+  await page.getByRole('button', { name: 'Expand long.txt' }).click();
   const viewport = page.locator('.hub-diff .viewport');
   await viewport.hover();
   await page.mouse.wheel(0, 1000);
@@ -83,7 +84,7 @@ test('Markdown links reveal Changes and Commits, report unknown views, and retai
   await page.locator('.file-header.deep-link-highlight:not(.is-collapsed)').waitFor();
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   await page.getByRole('link', { name: 'commit', exact: true }).click();
-  const highlighted = page.locator(`.card[data-change-id="${changeId}"].deep-link-highlight`);
+  const highlighted = page.locator(`.rail-row[data-change-id="${changeId}"].deep-link-highlight`);
   await highlighted.waitFor({ timeout: 15000 });
   assert.equal(await highlighted.evaluate(node => getComputedStyle(node).animationName), 'none');
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();

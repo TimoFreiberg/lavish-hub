@@ -759,7 +759,9 @@ function updateRows() {
     let row = rows.get(commit.changeId);
     if (!row) { row = createRailRow(commit.changeId); rows.set(commit.changeId, row); }
     const at = railScroll.children[index]; if (at !== row) railScroll.insertBefore(row, at || null);
-    const description = commit.description || '', [subject, ...bodyLines] = description.split('\n'), body = bodyLines.join('\n').trim();
+    const state = drafts.get(`commit:${commit.changeId}`);
+    const pendingSave = state?.awaitingSnapshot && commit.commitId !== state.awaitingSnapshot.commitId && snapshotApplied <= state.awaitingSnapshot.after;
+    const description = (pendingSave ? state.original : commit.description) || '', [subject, ...bodyLines] = description.split('\n'), body = bodyLines.join('\n').trim();
     const subjectNode = row.querySelector('.rail-subj'); subjectNode.textContent = subject || '(no description set)';
     if (body || subject.length > 50) subjectNode.title = description; else subjectNode.removeAttribute('title');
     row.querySelector('.rail-sub').textContent = `${commit.changeId.slice(0, 12)}${commit.isWorkingCopy ? ' · @' : ''}`;

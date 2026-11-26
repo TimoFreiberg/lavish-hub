@@ -89,8 +89,8 @@ Under `vendor/lavish/src/`, the port touches `artifact-page.js`,
   sibling HTML pages (`web/hub-app.mjs`, `web/diff-app.mjs`,
   `web/hub-lifecycle.js`, and `src/hub-html.mjs`). The SDK dispatches
   `lavish:ready` when initialized. `setAnnotationMode` toggles the chrome switch
-  for interactive views (`Commits` and `Changes`) and resolves on acknowledgment
-  or returns `false` after one second. `syncUrl` (`lavish:syncUrl` and
+  for the interactive `Diff` view and resolves on acknowledgment or returns
+  `false` after one second. `syncUrl` (`lavish:syncUrl` and
   `lavish:urlChange`), `setDocumentMeta`, and `navigateFrame` keep the outer
   URL, tab title, and history draft guard aligned across frame navigations, and
   `requestDiffAnchors`, `reportDiffPlacements`, and `lavish:queuedDiffAnchors`

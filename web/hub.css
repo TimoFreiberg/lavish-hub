@@ -42,8 +42,8 @@
   .pane-resizer,.rail-resizer{display:none}
   main.diff-view{padding:0}
   .review-workspace{flex-direction:column}
-  .commit-rail,.commit-rail.is-collapsed{flex:none;width:100%;max-height:35vh}
-  .commit-rail-scroll{overflow:auto}
+  .commit-rail,.commit-rail.is-collapsed{flex:none;width:100%;max-height:none}
+  .commit-rail-scroll{overflow:visible;flex:none}
   .hub-diff{height:75vh;min-height:30rem}
 }
 

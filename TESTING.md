@@ -202,11 +202,10 @@ data directories, its own port, no workers). It replaces the gitignored
 - `report.json` (schema version 2) with static and integration check records, timings, and cleanup result; unlike version 1, records distinguish their source and diagnostic-only cases need not have a PNG,
 - `index.html`, a gallery linking the preview and distinguishing check-only records from captures.
 
-Fixtures use a scratch jj diff with additions, deletions, renames and long lines.
-The simulated hub fixtures are
-`hub-empty`, `hub-stack`, `hub-dirty`, `hub-conflict`, `hub-disconnected`,
-`hub-changes`, `hub-tasks`, `hub-markdown`, and `hub-html`. They use
-the hub UI and deterministic action responses, not a live workspace owner.
+Fixtures use a scratch jj diff with additions, deletions, renames, and long lines.
+The simulated hub fixtures are `hub-empty`, `hub-stack`, `hub-dirty`,
+`hub-conflict`, `hub-disconnected`, `hub-tasks`, `hub-markdown`, and `hub-html`.
+They use the hub UI and deterministic action responses, not a live workspace owner.
 
 Every fixture is checked at both viewport sizes and themes, separately for the
 static artifact and real Lavish. Only selected cases produce primary PNGs.

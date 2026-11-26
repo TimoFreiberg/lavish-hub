@@ -24,7 +24,7 @@ async function request(operation, body = {}) {
   return (await response.json()).result;
 }
 const frame = page => page.frameLocator('#artifact');
-async function open(page, suffix = '?view=commits') {
+async function open(page, suffix = '?view=diff') {
   await page.goto(url + suffix);
   await frame(page).locator('#lavish-hub-sidebar, #app').first().waitFor({ timeout: 20000 });
 }
@@ -95,14 +95,14 @@ test('browser navigation stays local while remote selection notifies other tabs'
     const observer = await browser.newPage(), actor = await browser.newPage();
     t.after(async () => { await observer.close(); await actor.close(); });
     await open(observer, `?view=${id}`); await ready(observer, id);
-    await open(actor, '?view=commits'); await ready(actor, 'commits');
+    await open(actor, '?view=diff'); await ready(actor, 'diff');
     const before = await request('status');
-    await select(actor, 'Changes', 'changes');
+    await select(actor, 'Diff', 'diff');
     const after = await request('status');
     assert.equal(after.selectionRevision, before.selectionRevision);
-    assert.equal(after.selected, 'changes');
+    assert.equal(after.selected, 'diff');
     const inherited = await browser.newPage(); t.after(() => inherited.close());
-    await open(inherited, ''); await current(inherited, 'changes');
+    await open(inherited, ''); await current(inherited, 'diff');
     await observer.bringToFront();
     const statusPoll = response => response.request().postDataJSON()?.operation === 'status';
     await observer.waitForResponse(statusPoll, { timeout: 10000 });
@@ -116,15 +116,15 @@ test('browser navigation stays local while remote selection notifies other tabs'
       await route.continue().catch(() => {});
     });
     await run(process.execPath, [cli, '--workspace', repo, '--view', 'note']);
-    await request('navigate', { id: 'changes' });
+    await request('navigate', { id: 'diff' });
     const remote = await request('status');
     assert.equal(remote.selectionRevision, before.selectionRevision + 1);
-    assert.equal(remote.selected, 'changes');
+    assert.equal(remote.selected, 'diff');
     assert.equal(remote.selectionTarget, 'note');
     const poll = observer.waitForResponse(async response => {
       if (!statusPoll(response)) return false;
       const { result } = await response.json();
-      return result?.selectionTarget === 'note' && result?.selected === 'changes';
+      return result?.selectionTarget === 'note' && result?.selected === 'diff';
     }, { timeout: 10000 });
     releaseStatus();
     await poll;
@@ -134,7 +134,7 @@ test('browser navigation stays local while remote selection notifies other tabs'
 
 test('sidebar navigation syncs top-level ?view=ID across built-ins, Markdown, and HTML siblings', { timeout: 60000 }, async t => {
   const page = await browser.newPage(); t.after(() => page.close()); await open(page);
-  for (const [label, id] of [['Changes', 'changes'], ['Tasks', 'tasks'], ['Note', 'note'], ['Review', 'review'], ['Commits', 'commits']]) await select(page, label, id);
+  for (const [label, id] of [['Tasks', 'tasks'], ['Note', 'note'], ['Review', 'review'], ['Diff', 'diff']]) await select(page, label, id);
 });
 
 test('browser Back and Forward step once per view across hub.html, Markdown, HTML siblings, and fragments while syncing owner selection', { timeout: 90000 }, async t => {
@@ -143,7 +143,7 @@ test('browser Back and Forward step once per view across hub.html, Markdown, HTM
   await explore(page); await frame(page).getByRole('link', { name: 'Go to section' }).click(); await current(page, 'note', '#section');
   await select(page, 'Review', 'review');
   await go(page, 'back', 'note', '#section'); await targetVisible(page);
-  await go(page, 'back', 'note'); await go(page, 'back', 'tasks'); await go(page, 'back', 'commits');
+  await go(page, 'back', 'note'); await go(page, 'back', 'tasks'); await go(page, 'back', 'diff');
   await go(page, 'forward', 'tasks'); await go(page, 'forward', 'note'); await go(page, 'forward', 'note', '#section'); await go(page, 'forward', 'review');
   await page.evaluate(() => { history.back(); history.back(); }); await current(page, 'note');
 });

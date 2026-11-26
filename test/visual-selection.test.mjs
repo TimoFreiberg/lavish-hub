@@ -11,10 +11,10 @@ test('preview capture selection has exactly the requested wide dark cases', () =
     }
   }
   assert.deepEqual(cases.sort(), [
-    ...['stack', 'changes', 'tasks', 'markdown', 'html', 'conflict'].map(name => `static:hub-${name}:1440x900:dark`),
+    ...['stack', 'tasks', 'markdown', 'html', 'conflict'].map(name => `static:hub-${name}:1440x900:dark`),
     'integration:hub-empty:1440x900:dark', 'integration:hub-stack:1440x900:dark',
     'integration:hub-dirty:1440x900:dark', 'integration:hub-conflict:1440x900:dark',
-    'integration:hub-disconnected:1440x900:dark', 'integration:hub-changes:1440x900:dark',
+    'integration:hub-disconnected:1440x900:dark',
     'integration:hub-tasks:1440x900:dark',
     'integration:hub-markdown:1440x900:dark', 'integration:hub-html:1440x900:dark',
   ].sort());

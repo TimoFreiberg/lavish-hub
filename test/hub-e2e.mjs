@@ -38,7 +38,7 @@ try {
   ownerExit = new Promise(resolve => owner.once('exit', (code, signal) => resolve({ code, signal })));
   const record = await until(async () => { try { return JSON.parse(await readFile(runtime, 'utf8')); } catch { return null; } });
   const source = path.join(dir, 'review.html');
-  await writeFile(source, '<!doctype html><title>Review</title><h1>Published hub review</h1><a href="?view=changes&amp;file=worker-check.js&amp;line=1">Open changed line</a>');
+  await writeFile(source, '<!doctype html><title>Review</title><h1>Published hub review</h1><a href="?view=diff&amp;file=worker-check.js&amp;line=1">Open changed line</a>');
   const publishOut = await run(process.execPath, [cli, 'publish', source, '--id', 'review', '--title', 'Review', '--workspace', repo]);
   const screen = await until(() => ownerStderr.match(/ready: (https?:\/\/\S+)/) ? ownerStderr : null);
   const url = screen.match(/ready: (https?:\/\/\S+)/)[1];
@@ -88,7 +88,7 @@ try {
   await page.getByText('Hub e2e reply', { exact: false }).first().waitFor({ timeout: 20000 });
   await page.frameLocator('#artifact').getByRole('link', { name: 'Open changed line' }).click();
   const hub = page.frameLocator('#artifact');
-  await hub.locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
+  await hub.locator('.hub-diff .file-header').first().waitFor({ timeout: 30000 });
   await hub.locator('.hub-diff [data-file="worker-check.js"]').waitFor({ timeout: 30000 });
   await hub.locator('.hub-diff [data-content] [data-line]').filter({ hasText: 'rendered change' }).waitFor({ timeout: 30000 });
   const hubFrame = page.frameLocator('#artifact').owner();
@@ -98,8 +98,8 @@ try {
   await hub.getByRole('button', { name: 'Review', exact: true }).click();
   await page.frameLocator('#artifact').getByRole('heading', { name: 'Published hub review' }).waitFor({ timeout: 20000 });
   const warmStart = assets.length;
-  await page.frameLocator('#artifact').getByRole('link', { name: 'Changes', exact: true }).click();
-  await page.frameLocator('#artifact').locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
+  await page.frameLocator('#artifact').getByRole('link', { name: 'Diff', exact: true }).click();
+  await page.frameLocator('#artifact').locator('.hub-diff .file-header').first().waitFor({ timeout: 30000 });
   await until(() => assets.slice(warmStart).filter(item => item.url.endsWith('.js')).length >= 2);
   const warm = assets.slice(warmStart).filter(item => item.url.endsWith('.js'));
   const evidence = list => list.map(({ url, status, sizes, headers }) => ({ name: new URL(url).pathname.split('/').pop(), status, sizes, cacheControl: headers['cache-control'] }));
@@ -121,13 +121,14 @@ try {
   cdp.on('Network.requestServedFromCache', event => { const item = network.get(event.requestId); if (item) item.cache = true; });
   cdp.on('Network.loadingFinished', event => { const item = network.get(event.requestId); if (item) item.transferred = event.encodedDataLength; });
   await frame.evaluate(() => location.reload());
-  await hub.locator('.hub-diff .sidebar').getByRole('heading', { name: 'Files (1)' }).waitFor({ timeout: 30000 });
+  await hub.locator('.hub-diff .file-header').first().waitFor({ timeout: 30000 });
   await until(() => [...network.values()].filter(item => item.transferred !== undefined).length >= 2);
   const transfers = [...network.values()];
   assert.equal(transfers.length, 2);
   assert.ok(transfers.every(item => cold.some(previous => previous.url === item.url)));
   assert.equal(warm.length, 2);
   console.log('Chromium frame network:', JSON.stringify(transfers.map(({ url, ...item }) => ({ name: new URL(url).pathname.split('/').pop(), ...item }))));
+  await hub.locator('.hub-diff .file-header').first().click();
   await frame.waitForFunction(() => window.workerResponses.some(response => response.type === 'success' && response.requestType === 'diff'), null, { timeout: 30000 });
   const hubHtml = await readFile(record.page, 'utf8');
   assert.ok(hubHtml.includes('globalThis.hubConfig='));
@@ -212,7 +213,7 @@ try {
   const mocked = await browser.newContext();
   const exportPage = await mocked.newPage();
   const exportErrors = []; exportPage.on('pageerror', error => exportErrors.push(error.message));
-  const operations = []; let selected = 'commits';
+  const operations = []; let selected = 'diff';
   await exportPage.route('**/action', async route => {
     const request = route.request();
     if (request.method() !== 'POST') { await route.abort(); return; }
@@ -220,7 +221,7 @@ try {
     let result;
     if (operation === 'status') result = { available: true, selected };
     else if (operation === 'documents') result = { documents: [] };
-    else if (operation === 'snapshot') result = { base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [] };
+    else if (operation === 'snapshot') result = { base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [], patch: '' };
     else if (operation === 'navigate') { selected = id; result = { selected }; }
     else if (operation === 'readDocument' && id === 'tasks') result = { text: '# Exported tasks\n\nA **lazy** renderer.', hash: 'one', version: 'one' };
     else { await route.abort(); return; }
@@ -237,7 +238,7 @@ try {
   assert.deepEqual(exportErrors, []);
   await mocked.close();
   const markdown = path.join(dir, 'notes.md');
-  await writeFile(markdown, '# Original\n\n[Open file](?view=changes&file=worker-check.js&line=1)\n');
+  await writeFile(markdown, '# Original\n\n[Open file](?view=diff&file=worker-check.js&line=1)\n');
   await run(process.execPath, [cli, 'publish', markdown, '--id', 'notes', '--workspace', repo]);
   await page.frameLocator('#artifact').getByRole('button', { name: 'notes.md', exact: true }).click({ timeout: 20000 });
   await page.frameLocator('#artifact').locator('.hub-markdown h1').filter({ hasText: 'Original' }).waitFor({ timeout: 20000 });
@@ -251,14 +252,14 @@ try {
   await editor.fill('# Edited in e2e\n');
   await page.frameLocator('#artifact').getByRole('button', { name: 'Save', exact: true }).click();
   await until(async () => (await readFile(markdown, 'utf8')) === '# Edited in e2e\n');
-  await page.goto(`${url}?view=changes&file=worker-check.js&line=1`);
+  await page.goto(`${url}?view=diff&file=worker-check.js&line=1`);
   await page.frameLocator('#artifact').locator('.hub-diff [data-file="worker-check.js"]').waitFor({ timeout: 20000 });
   await page.frameLocator('#artifact').locator('.hub-diff [data-line="1"][data-selected-line]').first().waitFor({ timeout: 20000 });
   assert.equal(new URL(page.url()).searchParams.has('file'), false);
   assert.equal(new URL(page.url()).searchParams.has('line'), false);
   const changeId = (await run('jj', ['log', '-r', '@', '--no-graph', '-T', 'change_id'], { cwd: repo })).trim();
-  await page.goto(`${url}?view=commits&change=${changeId.slice(0, 12)}`);
-  await page.frameLocator('#artifact').locator(`.card[data-change-id="${changeId}"].deep-link-highlight`).waitFor({ timeout: 20000 });
+  await page.goto(`${url}?view=diff&change=${changeId.slice(0, 12)}`);
+  await page.frameLocator('#artifact').locator(`.rail-row[data-change-id="${changeId}"].deep-link-highlight`).waitFor({ timeout: 20000 });
   await run(process.execPath, [cli, 'stop', '--workspace', repo]);
   await until(async () => { try { await readFile(runtime); return false; } catch (error) { if (error.code === 'ENOENT') return true; throw error; } });
   await ownerExit;

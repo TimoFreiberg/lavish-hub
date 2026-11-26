@@ -25,12 +25,12 @@ test('embedded diff preserves explicit expansion across ranges and updates its s
   assert.equal(await page.locator('.layout .sidebar').count(), 0);
   await page.getByText('0/2 viewed').waitFor();
   await page.getByRole('button', { name: 'Expand a.txt' }).waitFor();
+  assert.equal((await page.locator('.file-header[data-file="a.txt"]').boundingBox()).height, 44);
   await page.locator('.file-header[data-file="a.txt"] .path').click();
   await page.getByRole('button', { name: 'Collapse a.txt' }).waitFor();
   await page.locator('.file-header[data-file="a.txt"] input').check();
   await page.getByText('1/2 viewed').waitFor();
   assert.equal(await page.getByRole('button', { name: 'Collapse a.txt' }).count(), 1);
-  assert.equal((await page.locator('.file-header[data-file="a.txt"]').boundingBox()).height, 44);
   await page.evaluate(({ a, c }) => show(a + c, 'second'), { a: patch('a.txt'), c: patch('c.txt') });
   await page.getByRole('button', { name: 'Collapse a.txt' }).waitFor();
   await page.getByRole('button', { name: 'Expand c.txt' }).waitFor();

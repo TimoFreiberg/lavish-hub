@@ -17,9 +17,10 @@ test('hub views do not add a feedback form', { timeout: 30000 }, async t => {
   const markdown = (await build({ entryPoints: ['web/hub-markdown.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser' })).outputFiles[0].text;
   const page = await browser.newPage();
   await page.setContent(`<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}; globalThis.mountLavishDiff=()=>({update(){},hide(){}})</script><script>${markdown.replaceAll('</script', '<\\/script')}</script><script type="module">${script}</script>`);
-  for (const name of ['Commits', 'Changes', 'Tasks', 'Review']) {
+  for (const name of ['Diff', 'Tasks', 'Review']) {
     await page.getByRole('button', { name, exact: true }).click();
-    await page.getByRole('heading', { name, exact: true }).first().waitFor();
+    if (name === 'Diff') await page.locator('.review-workspace').waitFor();
+    else await page.getByRole('heading', { name, exact: true }).first().waitFor();
     assert.equal(await page.getByRole('region', { name: 'Feedback' }).count(), 0);
     assert.equal(await page.getByRole('button', { name: /^(Queue|Send) feedback$/ }).count(), 0);
   }

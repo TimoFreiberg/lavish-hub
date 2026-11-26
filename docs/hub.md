@@ -141,16 +141,24 @@ badge and its unread link on `/hubs` until you open it. If **Older** is closed,
 navigating to a document inside it or moving the active document there opens it.
 Republishing clears any Hide or Restore choice and marks the new version unread.
 
-Entering Commits or Changes turns Lavish annotations off so you can interact
+Entering Diff turns Lavish annotations off so you can interact
 with the view. Turn the annotation switch back on whenever you want to comment
 there. Entering another view turns annotations on. Refreshing the current view
 does not change your choice. A browser reload prompts before discarding
-unsaved hub drafts; cancel it to keep editing.
+unsaved hub drafts, so you can cancel it to keep editing.
 
-Commits shows each description and its own diff statistics. Use the pencil button
-to edit a description; Cancel or Escape discards the edit. Descriptions and
-statistics that exceed their initial height scroll and can be resized vertically.
-A failed save keeps the draft and shows the error beside the Save button.
+Diff shows the commit stack beside its combined diff. Click a commit to view its
+changes (clicking that commit again or **All** restores the full stack), or
+Shift-click another commit to select a contiguous range. Commits with a body have
+a toggle in the rail to preview the rest of the description. Files start
+collapsed. Click a file header or **Expand all** to open them, and files you
+expand stay open across range changes while present. Click the pencil beside a
+mutable, non-divergent commit to edit its description above the diff. Opening the
+editor narrows the diff to that commit and restores your previous range when
+closed, unless you select another range while editing. Cancel or Escape discards
+the edit, and a failed save keeps the draft and shows the error. Both the hub
+sidebar (on the hub and on published HTML pages) and the commit rail can be
+collapsed or resized.
 
 Tasks display rendered Markdown with interactive checkboxes. Toggling a checkbox
 saves it immediately; while saving, the other checkboxes are disabled. If saving
@@ -179,16 +187,17 @@ Back and Forward move between views and sections. Fragment links in Markdown and
 published HTML stay on the page, even when the HTML uses a `<base href>`.
 
 Published documents and Tasks can link to any hub view with `?view=<id>`
-(`commits`, `changes`, `tasks`, or a published document ID). To jump to a
-changed file, use `?view=changes&file=<path>`, optionally adding `&line=42` or
-`&line=10-20` and `&side=old` or `&side=new` (defaulting to the new side, except
-for deleted files). When a requested line falls outside the patch hunks, the
-diff view loads the full file and expands unchanged context when available. To
-jump to a commit in Commits, use `?view=commits&change=<changeId>` with a full
-change ID or unique prefix. The same links work with `hub.html?view=...` and as
-query parameters on the direct Lavish session URL. Missing, invalid, or
-ambiguous targets show a notice, and target parameters are consumed once so
-refreshing or polling does not jump again.
+(`diff`, `tasks`, or a published document ID). Diff links reset any narrowed
+range to the full stack. To jump to a changed file, use `?view=diff&file=<path>`,
+optionally adding `&line=42` or `&line=10-20` and `&side=old` or `&side=new`
+(defaulting to the new side, except for deleted files). The diff view expands a
+collapsed target file and, when a requested line falls outside the patch hunks,
+loads the full file to reveal unchanged context when available. To jump to a
+commit in Diff, use `?view=diff&change=<changeId>` with a full change ID or
+unique prefix (expanding the commit rail if collapsed). The same links work with
+`hub.html?view=...` and as query parameters on the direct Lavish session URL.
+Missing, invalid, or ambiguous targets show a notice, and target parameters are
+consumed once so refreshing or polling does not jump again.
 
 The hub asks before leaving for a published HTML page when a hub draft or an
 unqueued diff comment is unsaved. Published pages similarly ask after user input
@@ -241,7 +250,7 @@ it under Artifacts when available); on `publish`, `--open` also selects the
 published document. Plain `publish` leaves the active view unchanged and
 prints JSON containing the direct `?view=ID` link. The browser tab title stays
 `<title> · Lavish` (or `<repo> · Lavish` when untitled) across view switches. The running owner
-remembers the default selection for new tabs (starting on Commits), while an open
+remembers the default selection for new tabs (starting on Diff), while an open
 tab keeps its own `?view=ID` URL across refreshes. An open hub checks for selection,
 repository, and source changes about every two seconds after each completed check;
 slow or unavailable actions can delay updates. A read-only check that has not
@@ -252,19 +261,20 @@ visible again, on the hub and on published pages, so updates and notifications f
 while the tab was hidden appear then. A page that loads in a background tab keeps its first poll so
 it has content when it is shown, then waits; that first poll is spent even when it
 fails, so a page that never rendered waits for visibility instead of retrying in
-the background. Only Commits and Changes request the repository snapshot; the other
-views poll selection and document lists alone, and entering either repository view
-asks for a snapshot at once. If the jj operation is unchanged, the owner reuses
-its snapshot and sends only an unchanged reply to a browser that already has it.
-Use **Refresh** to rebuild the snapshot even if the operation is unchanged. If
-a snapshot fails, the view shows an unavailable notice and retries on the next
-poll or when you enter the view again. A
-status or document check that fails before the snapshot is requested shows the same
-notice, and the next check asks for the snapshot. A tab that goes hidden while that
-check runs starts no snapshot; it asks when shown again.
-Re-entering a repository view keeps the previous snapshot on screen, marked as
-refreshing, until the new one arrives, and a snapshot that arrives after a
-page-leaving pause has begun is kept and shown when that page comes back. Clean
+the background. Only Diff requests the repository snapshot. The other views poll
+selection and document lists alone, and entering Diff asks for a snapshot at
+once. If the jj operation is unchanged, the owner reuses its snapshot and sends
+only an unchanged reply to a browser that already has it. Use **Refresh** to
+rebuild the snapshot and retry any failed range diff even if the operation is
+unchanged. If a snapshot fails, the view shows an unavailable notice and retries
+on the next poll or when you enter the view again. A status or document check
+that fails before the snapshot is requested shows the same notice, and the next
+check asks for the snapshot. A tab that goes hidden while that check runs starts
+no snapshot and asks when shown again. Re-entering Diff keeps the previous
+snapshot on screen (marked as refreshing on the full-stack range bar) until the
+new one arrives, and a snapshot that arrives after a page-leaving pause has begun
+is kept and shown when that page comes back. Polling preserves a narrowed commit
+range until either endpoint disappears from the stack. Clean
 Markdown documents update automatically, while unsaved drafts remain in the page.
 Published HTML is generated when the owner starts or that document is published;
 publishing another document does not rewrite it. Its navigation updates while the
@@ -295,11 +305,12 @@ When there are no prompts and the snapshot matches a published HTML document,
 snapshot so stdout stays compact.
 
 Each normalized prompt has a `message` and an `artifact`: a diff (`kind: "diff"`,
-`view: "changes"`), a published HTML document (`kind: "document"`, `id`,
+`view: "diff"`), a published HTML document (`kind: "document"`, `id`,
 `document`), or a hub or freeform message (`kind: "hub"` or `"freeform"`, `view`,
 with `id` and `document` when a published document is selected). Diff annotations
 include `diff` with `file`, `oldPath`, `side`, `startLine`, `endLine`, and `revision`,
-plus `range` and `quote` when the original prefix can be parsed. Otherwise the
+plus `range` and `quote` when the original prefix can be parsed (`revision` and
+`range` reflect the selected commit or range when narrowed). Otherwise the
 original prompt is retained as `message`. Text annotations include `selection.text`,
 and other semantic targets (such as table or Mermaid targets) appear in `target`.
 Non-diff element annotations include available `element` fields (`uid`, `tag`,
@@ -331,13 +342,16 @@ Registrations, metadata, and managed task files persist across owner restarts;
 source files are not copied. Keep published sources outside disposable checkouts if
 they must remain available. Remove unwanted hub data only after stopping its owner.
 
-The authenticated action endpoint supports `snapshot` and `describe` for the
-workspace views. A snapshot pins its commit metadata, endpoints, patch,
-and diff statistics to one jj operation. Viewers share an owner-side snapshot for
-up to two seconds; refreshes of the repository views then pick up external changes.
-Automatic catch-ups reuse that shared snapshot. The Refresh button forces a new
-one there, sharing a refresh already in progress and keeping that force until it
-issues a snapshot request, whether or not that request succeeds. Description
+The authenticated action endpoint supports `snapshot`, `diffRange`, `diffFiles`,
+and `describe` for Diff. A snapshot pins its commit metadata, endpoints, and
+full-stack patch to one jj operation (retaining up to 8 recent operations for
+unchanged-line reads), while `diffRange` caches up to 32 single-commit or
+sub-range patches and file lists pinned to that `operationId`. Viewers share an
+owner-side snapshot for up to two seconds, after which Diff polls pick up
+external changes. Automatic catch-ups reuse that shared snapshot. The Refresh
+button forces a new one there, sharing a refresh already in progress and keeping
+that force until it issues a snapshot request, whether or not that request
+succeeds. Description
 saves invalidate the cached snapshot and check the full change
 and commit IDs and expected description, reject missing, divergent, immutable,
 or stale changes, and recheck the result. Hub saves are serialized, but other

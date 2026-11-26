@@ -37,12 +37,12 @@ async function openPage(t, transport, bundles) {
   // while the code keeps its real timeout for production. The shortened value
   // stays well above a local round trip, so only a response that never arrives
   // trips it and a slow but healthy load is not read as a failure.
-  await page.setContent(`<div id="app"></div><script>const nativeTimeout = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => nativeTimeout(fn, ms === 10000 ? 750 : ms, ...rest); globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script>${audio}<script type="module">${app}</script>`);
+  await page.setContent(`<div id="app"></div><script>const nativeTimeout = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => nativeTimeout(fn, ms === 10000 ? 750 : ms, ...rest); globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}; ${bundles.diff ? '' : 'globalThis.mountLavishDiff = () => ({ hide() {}, update() {} });'}</script>${audio}<script type="module">${app}</script>`);
   return page;
 }
 
 const actionTransport = (overrides = {}) => createHubTransport({
-  status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+  status: () => ({ available: true, selected: 'diff' }), documents: () => ({ documents: [] }),
   snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [], patch: '' }),
   navigate: () => ({}), readDocument: () => ({ text: 'Tasks', hash: 'one', version: 'one' }),
   ...overrides,
@@ -109,7 +109,7 @@ test('bundles load on demand, reuse a successful load, and retry a failure', { t
     send(res, markdownBundle);
   });
   t.after(() => asset.close());
-  let selected = 'commits';
+  let selected = 'tasks';
   const transport = await createHubTransport({
     status: () => ({ available: true, selected }), documents: () => ({ documents: [] }),
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [], patch: '' }),
@@ -118,18 +118,16 @@ test('bundles load on demand, reuse a successful load, and retry a failure', { t
   });
   t.after(() => transport.close());
   const page = await openPage(t, transport, { diff: `${asset.origin}/diff.js`, markdown: `${asset.origin}/markdown.js` });
-  await page.getByText('No commits in this range.').waitFor({ timeout: 5000 });
-  assert.deepEqual([diff, markdown], [0, 0]);
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  await page.getByText('Could not load markdown renderer').waitFor({ timeout: 5000 });
+  assert.deepEqual([diff, markdown], [0, 1]);
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   await page.locator('.hub-diff').waitFor({ state: 'attached', timeout: 5000 });
   assert.equal(diff, 1);
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
-  await page.getByText('Could not load markdown renderer').waitFor({ timeout: 5000 });
-  await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await page.getByRole('button', { name: 'Edit Tasks Markdown' }).waitFor({ timeout: 5000 });
   assert.ok(markdown >= 2, `the failed renderer was requested again (${markdown})`);
   assert.equal(await page.locator('.hub-diff').count(), 0, 'the document view is not left holding the diff view');
-  await page.getByRole('button', { name: 'Changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Diff', exact: true }).click();
   await page.locator('.hub-diff').waitFor({ state: 'attached', timeout: 5000 });
   assert.equal(diff, 1, 'a loaded renderer is not fetched again');
 });
@@ -187,7 +185,7 @@ test('an exported page loads its inlined renderer without fetching it', { timeou
   const transport = await actionTransport();
   t.after(() => transport.close());
   const markdown = 'globalThis.hubMarkdownRenderer = () => () => {};';
-  const html = `<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}</script><audio preload="none" data-hub-bundle="markdown" src="markdown.js"></audio><script>${app}</script>`;
+  const html = `<div id="app"></div><script>globalThis.hubConfig=${JSON.stringify({ url: transport.url, capability: transport.capability, workspace: 'test' })}; globalThis.mountLavishDiff = () => ({ hide() {}, update() {} });</script><audio preload="none" data-hub-bundle="markdown" src="markdown.js"></audio><script>${app}</script>`;
   const exported = await buildSelfContainedHtml(html, { baseDir: '/art', readLocalFile: async () => Buffer.from(markdown) });
   assert.deepEqual(exported.warnings, []);
   assert.ok(exported.html.includes('src="data:text/javascript;base64,'));
@@ -214,7 +212,7 @@ test('a renderer request and its document read start independently', { timeout: 
   });
   t.after(() => asset.close());
   const transport = await createHubTransport({
-    status: () => ({ available: true, selected: 'commits' }), documents: () => ({ documents: [] }),
+    status: () => ({ available: true, selected: 'diff' }), documents: () => ({ documents: [] }),
     snapshot: () => ({ base: 'a'.repeat(40), head: 'b'.repeat(40), commits: [], patch: '' }),
     navigate: () => ({}), readDocument: async () => { reads++; return { text: 'Tasks', hash: 'one', version: 'one' }; },
   });

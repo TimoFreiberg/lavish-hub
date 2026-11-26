@@ -168,7 +168,7 @@ test('runtime defaults and explicit overrides agree', () => {
 test('hub url parses arguments and predicts workspace session URLs without side effects', async t => {
   assert.deepEqual(parseArgs(['url']), { hub: 'url' });
   assert.deepEqual(parseArgs(['url', '--workspace', 'sub']), { hub: 'url', workspace: 'sub' });
-  for (const args of [['url', '--open'], ['url', '--reopen'], ['url', '--view', 'commits']]) {
+  for (const args of [['url', '--open'], ['url', '--reopen'], ['url', '--view', 'diff']]) {
     assert.throws(() => parseArgs(args), /unknown argument/);
   }
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-url-')));
