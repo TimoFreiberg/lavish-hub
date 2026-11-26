@@ -24,7 +24,10 @@ test("reuses unchanged HTML without reusing per-load SDK parameters or a changed
     injectLavishSdk(changed, "third"),
     '<body>changed<script src="/sdk.js?key=third"></script></body><p>after</p>',
   );
-  assert.equal(injectLavishSdk("<p>no body</p>", "fourth"), '<p>no body</p>\n<script src="/sdk.js?key=fourth"></script>');
+  assert.equal(
+    injectLavishSdk("<p>no body</p>", "fourth"),
+    '<p>no body</p>\n<script src="/sdk.js?key=fourth"></script>',
+  );
 });
 
 test("does not inject Tailwind or DaisyUI design assets so the saved file stays portable", () => {

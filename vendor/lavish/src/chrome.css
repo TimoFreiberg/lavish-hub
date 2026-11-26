@@ -1173,8 +1173,13 @@ body.lavish {
   color: inherit;
   line-height: 0;
 }
-.diff-comment-card button svg { width: 16px; height: 16px; }
-body.layout-gate-active .diff-comment-overlay { display: none; }
+.diff-comment-card button svg {
+  width: 16px;
+  height: 16px;
+}
+body.layout-gate-active .diff-comment-overlay {
+  display: none;
+}
 .panel {
   width: var(--panel-w);
   border-left: var(--hairline-subtle);

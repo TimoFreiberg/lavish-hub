@@ -133,7 +133,7 @@ async function authenticatedRequest(target, pathname, method, headers, body, sig
   }
 }
 
-export function createHubProxy({ store, events, jsonParser, limits }) {
+export function createHubProxy({ store, events, jsonParser, limits = undefined }) {
   const bounds = { ...defaultLimits, ...(limits || {}) };
   const targets = new Map();
   const pending = new Set();
@@ -211,6 +211,7 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
     return res.json({ ok: true });
   };
   const handle = async (req, res) => {
+    /** @type {(event: string, status?: number) => void} */
     let log = () => {};
     if (process.env.LAVISH_HUB_DIAGNOSTICS === "1") {
       const id = ++diagnosticId,
@@ -232,7 +233,9 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
               ...(status === undefined ? {} : { status }),
             }),
           );
-        } catch {}
+        } catch {
+          // Diagnostics logging is best-effort.
+        }
       };
       log("arrive");
       res.once("finish", () => log("finish", res.statusCode));
@@ -259,7 +262,9 @@ export function createHubProxy({ store, events, jsonParser, limits }) {
     // Set only by a deadline that answers the request, and never cleared: the abort it is followed
     // by must not tear down a socket this handler already wrote to, so clearing it once the response
     // exists would turn the next abort into a reset. Any new setter has to call `stop()` too.
-    let close, timeout, answerableDeadline = false;
+    let close,
+      timeout,
+      answerableDeadline = false;
     const stop = () => controller.abort();
     // A deadline that fires while a response can still be written must not tear
     // the socket down, or the failure reaches the browser as a reset with no

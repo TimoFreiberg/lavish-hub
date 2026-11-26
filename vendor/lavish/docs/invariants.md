@@ -45,8 +45,10 @@ ones. Owner cleanup cannot revoke a replacement with a different identity.
 Registrations are in memory and the owner refreshes them before polling. An
 interrupted consuming poll is not retried to recover a registration. Registrations
 expire after 45 seconds without refresh. `/hubs` and `/api/hubs` use the existing
-Host guard and expose only workspace labels, parent descriptions, and relative
-session links, never callback credentials or owner addresses.
+Host guard and expose only validated display metadata (workspace/session labels,
+repository names, workspace badges, startup timestamps, parent descriptions,
+relative session links, and unread artifact IDs and titles), never callback
+credentials or owner addresses.
 
 Proxied resources carry the artifact sandbox CSP, nosniff and no-referrer even
 when opened outside an iframe. Browser addresses resolve from the actual loaded

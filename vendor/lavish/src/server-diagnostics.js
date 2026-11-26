@@ -38,7 +38,9 @@ export function createServerDiagnostics({ write = writeDiagnostic } = {}) {
             ...(status === undefined ? {} : { status }),
           }),
         );
-      } catch {}
+      } catch {
+        // Diagnostics logging is best-effort.
+      }
     };
     traces.set(res, emit);
     emit("arrive");

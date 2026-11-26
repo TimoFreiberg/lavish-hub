@@ -1675,7 +1675,11 @@ export function createArtifactSdk(
   let legacyQueueEpoch = "";
   const acceptedQueueRequests = new Set();
   const legacyChromeOrigin = (() => {
-    try { return new URL(/** @type {HTMLScriptElement | null} */ (document.currentScript)?.src).origin; } catch { return ""; }
+    try {
+      return new URL(/** @type {HTMLScriptElement | null} */ (document.currentScript)?.src).origin;
+    } catch {
+      return "";
+    }
   })();
   function queuePrompt(prompt, options = {}) {
     const originElement = options.element || document.activeElement || document.body;
@@ -1706,7 +1710,8 @@ export function createArtifactSdk(
       if (attachments.length) item.attachments = attachments;
     }
 
-    if (typeof options.commentPrefix === "string" && item.prompt.startsWith(options.commentPrefix)) item._lavishDiffPrefix = options.commentPrefix;
+    if (typeof options.commentPrefix === "string" && item.prompt.startsWith(options.commentPrefix))
+      item._lavishDiffPrefix = options.commentPrefix;
     if (options.element) rememberQueuedAnchor(item, options.element);
     if (!options.requestId) {
       postArtifactMessage("lavish:queuePrompt", { prompt: item });
@@ -1717,13 +1722,25 @@ export function createArtifactSdk(
     const sequence = transportPort ? binding?.documentSequence || 0 : legacyQueueEpoch;
     if (!sequence) return Promise.resolve({ status: "unknown", reason: "binding_changed" });
     if (queueRequests.has(requestId)) return Promise.resolve({ status: "busy", reason: "busy" });
-    if (queueRequestBindings.has(requestId) && queueRequestBindings.get(requestId) !== sequence) return Promise.resolve({ status: "unknown", reason: "binding_changed" });
-    if (!queueRequestBindings.has(requestId) && [...queueRequestBindings.values()].filter((value) => value === sequence).length >= 128) return Promise.resolve({ status: "rejected", reason: "capacity" });
+    if (queueRequestBindings.has(requestId) && queueRequestBindings.get(requestId) !== sequence)
+      return Promise.resolve({ status: "unknown", reason: "binding_changed" });
+    if (
+      !queueRequestBindings.has(requestId) &&
+      [...queueRequestBindings.values()].filter((value) => value === sequence).length >= 128
+    )
+      return Promise.resolve({ status: "rejected", reason: "capacity" });
     queueRequestBindings.set(requestId, sequence);
     return new Promise((resolve) => {
-      const timer = window.setTimeout(() => { queueRequests.delete(requestId); resolve({ status: "unknown" }); }, 3000);
+      const timer = window.setTimeout(() => {
+        queueRequests.delete(requestId);
+        resolve({ status: "unknown" });
+      }, 3000);
       queueRequests.set(requestId, { resolve, timer, sequence });
-      postArtifactMessage("lavish:queuePrompt", { prompt: item, request_id: requestId, ...(!transportPort ? { queue_epoch: sequence } : {}) });
+      postArtifactMessage("lavish:queuePrompt", {
+        prompt: item,
+        request_id: requestId,
+        ...(!transportPort ? { queue_epoch: sequence } : {}),
+      });
     });
   }
 
@@ -2991,13 +3008,17 @@ export function createArtifactSdk(
       const sequence = queueRequestBindings.get(requestId);
       queueRequestBindings.delete(requestId);
       if (sequence !== (transportPort ? binding?.documentSequence || 0 : legacyQueueEpoch)) return;
-      postArtifactMessage("lavish:releaseQueueRequest", { request_id: requestId, ...(!transportPort ? { queue_epoch: sequence } : {}) });
+      postArtifactMessage("lavish:releaseQueueRequest", {
+        request_id: requestId,
+        ...(!transportPort ? { queue_epoch: sequence } : {}),
+      });
     },
     sendQueuedPrompts,
     endSession,
     getQueuedPrompts: () => [],
     requestDiffAnchors: () => postArtifactMessage("lavish:requestDiffAnchors"),
-    reportDiffPlacements: (generation, placements) => postArtifactMessage("lavish:diffPlacements", { generation, placements }),
+    reportDiffPlacements: (generation, placements) =>
+      postArtifactMessage("lavish:diffPlacements", { generation, placements }),
     setStatus: (message) => postArtifactMessage("lavish:status", { message: String(message) }),
     setDocumentMeta,
     syncUrl,
@@ -3006,8 +3027,14 @@ export function createArtifactSdk(
       if (typeof enabled !== "boolean") return Promise.resolve(false);
       const requestId = ++annotationRequestId;
       return new Promise((resolve) => {
-        const timer = window.setTimeout(() => { annotationRequests.delete(requestId); resolve(false); }, 1000);
-        annotationRequests.set(requestId, () => { window.clearTimeout(timer); resolve(true); });
+        const timer = window.setTimeout(() => {
+          annotationRequests.delete(requestId);
+          resolve(false);
+        }, 1000);
+        annotationRequests.set(requestId, () => {
+          window.clearTimeout(timer);
+          resolve(true);
+        });
         postArtifactMessage("lavish:requestAnnotationMode", { enabled, request_id: requestId });
       });
     },
@@ -3031,15 +3058,24 @@ export function createArtifactSdk(
     )
       return;
     if (msg.type === "lavish:urlChange") {
-      window.dispatchEvent(new CustomEvent("lavish:urlChange", { detail: {
-        view: typeof msg.view === "string" ? msg.view : "",
-        hash: typeof msg.hash === "string" ? msg.hash : "",
-      } }));
+      window.dispatchEvent(
+        new CustomEvent("lavish:urlChange", {
+          detail: {
+            view: typeof msg.view === "string" ? msg.view : "",
+            hash: typeof msg.hash === "string" ? msg.hash : "",
+          },
+        }),
+      );
     }
     if (msg.type === "lavish:setAnnotationMode") setAnnotationMode(msg.enabled);
     if (msg.type === "lavish:setQueueEpoch" && !transportPort) {
       if (!event.isTrusted || !legacyChromeOrigin || event.origin !== legacyChromeOrigin) return;
-      if (typeof msg.epoch === "string" && msg.epoch.length > 0 && msg.epoch.length <= 200 && msg.epoch !== legacyQueueEpoch) {
+      if (
+        typeof msg.epoch === "string" &&
+        msg.epoch.length > 0 &&
+        msg.epoch.length <= 200 &&
+        msg.epoch !== legacyQueueEpoch
+      ) {
         legacyQueueEpoch = msg.epoch;
         for (const [id, request] of queueRequests) {
           window.clearTimeout(request.timer);
@@ -3053,19 +3089,35 @@ export function createArtifactSdk(
     if (msg.type === "lavish:queuePromptResult") {
       if (!transportPort && (!event.isTrusted || !legacyChromeOrigin || event.origin !== legacyChromeOrigin)) return;
       const request = queueRequests.get(msg.request_id);
-      if (request && (transportPort ? request.sequence === binding?.documentSequence : msg.queue_epoch === request.sequence) && typeof msg.ok === "boolean") {
+      if (
+        request &&
+        (transportPort ? request.sequence === binding?.documentSequence : msg.queue_epoch === request.sequence) &&
+        typeof msg.ok === "boolean"
+      ) {
         window.clearTimeout(request.timer);
         queueRequests.delete(msg.request_id);
         if (msg.ok) acceptedQueueRequests.add(msg.request_id);
         if (!msg.ok && !msg.uncertain) queueRequestBindings.delete(msg.request_id);
-        const reasons = ["reserved", "ended", "capacity", "too_large", "rate_limited", "storage", "binding_changed", "invalid"];
+        const reasons = [
+          "reserved",
+          "ended",
+          "capacity",
+          "too_large",
+          "rate_limited",
+          "storage",
+          "binding_changed",
+          "invalid",
+        ];
         const reason = reasons.includes(msg.reason) ? msg.reason : "";
         request.resolve({ status: msg.ok ? "accepted" : msg.uncertain ? "unknown" : "rejected", reason });
       }
     }
     if (msg.type === "lavish:annotationModeApplied") {
       const resolve = annotationRequests.get(msg.request_id);
-      if (resolve) { annotationRequests.delete(msg.request_id); resolve(); }
+      if (resolve) {
+        annotationRequests.delete(msg.request_id);
+        resolve();
+      }
     }
     if (msg.type === "lavish:attachmentResult") {
       if (
@@ -3092,13 +3144,17 @@ export function createArtifactSdk(
       queuedAnchorSelectors = new Set(Array.isArray(msg.selectors) ? msg.selectors.map(String) : []);
     }
     if (msg.type === "lavish:queuedDiffSizes") {
-      window.dispatchEvent(new CustomEvent("lavish:queuedDiffSizes", { detail: { generation: msg.generation, sizes: msg.sizes } }));
+      window.dispatchEvent(
+        new CustomEvent("lavish:queuedDiffSizes", { detail: { generation: msg.generation, sizes: msg.sizes } }),
+      );
     }
     if (msg.type === "lavish:scrollDiff") {
       window.dispatchEvent(new CustomEvent("lavish:scrollDiff", { detail: { x: msg.x, y: msg.y } }));
     }
     if (msg.type === "lavish:queuedDiffAnchors") {
-      window.dispatchEvent(new CustomEvent("lavish:queuedDiffAnchors", { detail: { generation: msg.generation, anchors: msg.anchors } }));
+      window.dispatchEvent(
+        new CustomEvent("lavish:queuedDiffAnchors", { detail: { generation: msg.generation, anchors: msg.anchors } }),
+      );
     }
     if (msg.type === "lavish:annotateElement" && annotationMode) {
       const queued = queuedAnchorElements.get(msg.selector)?.deref();

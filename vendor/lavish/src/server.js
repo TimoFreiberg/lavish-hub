@@ -1482,7 +1482,9 @@ export async function serve({
     events.emit("chat-sync", key, session);
     const pendingBatch = (session.delivered_batches || []).some(
       (entry) =>
-        entry.delivery_seq !== null && entry.delivery_seq > (Number(session.closed_delivery_seq) || 0) && !entry.replied_at,
+        entry.delivery_seq !== null &&
+        entry.delivery_seq > (Number(session.closed_delivery_seq) || 0) &&
+        !entry.replied_at,
     );
     if (batchId === null || !pendingBatch) clearFeedbackDelivery(key, activePolls, deliveredFeedback, events);
     return session;

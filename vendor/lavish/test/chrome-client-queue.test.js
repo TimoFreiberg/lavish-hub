@@ -20,7 +20,7 @@ const servedChromeIds = new Set(
 
 const SERVED_TAB_ICON = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>";
 
-/** @typedef {{ key: string, file: string, pageProtocol?: number, entryPage?: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
+/** @typedef {{ key: string, file: string, pageProtocol?: number, entryPage?: string, initialView?: string, layoutGateEnabled?: boolean, layoutGateMaxHoldMs?: number, modeToggleHotkeyKey?: string, initialChat?: any[], initialChatAckIds?: string[], initialChatRevision?: number, initialLayoutWarnings?: any[], chromeLoadToken?: string, initialArtifactRevision?: number, initialArtifactLoadToken?: string, initialArtifactLoadSequence?: number, attachmentMaxBytes?: number, attachmentMaxCount?: number, attachmentAcceptedMime?: string[], initialEnded?: boolean, initialEndedBy?: string | null, revisionPalette?: { hex: string, borderStyle: string, pattern: string }[] }} HarnessSessionData */
 /** @type {HarnessSessionData} */
 const defaultSessionData = {
   key: "abc",
@@ -229,7 +229,10 @@ async function createChromeHarness({
       },
       dispatch(type, event = {}) {
         const handler = listeners.get(type);
-        if (handler) { event.currentTarget = this; handler(event); }
+        if (handler) {
+          event.currentTarget = this;
+          handler(event);
+        }
       },
       querySelectorAll(selector) {
         if (id === "queuedLog" && selector === ".queued-remove") {
@@ -467,13 +470,21 @@ async function createChromeHarness({
   };
 
   let clockNow = Date.now();
+  /** @type {any} */
   const location = new URL(outerUrl);
-  location.reload = () => { reloadCount += 1; };
+  location.reload = () => {
+    reloadCount += 1;
+  };
   const historyCalls = [];
-  const history = Object.fromEntries(["pushState", "replaceState"].map((method) => [method, (_state, _title, url) => {
-    historyCalls.push({ method, url });
-    location.href = new URL(url, location.href).href;
-  }]));
+  const history = Object.fromEntries(
+    ["pushState", "replaceState"].map((method) => [
+      method,
+      (_state, _title, url) => {
+        historyCalls.push({ method, url });
+        location.href = new URL(url, location.href).href;
+      },
+    ]),
+  );
   const context = {
     AbortController,
     clearTimeout: fakeClearTimeout,
@@ -497,6 +508,7 @@ async function createChromeHarness({
       }
       static revokeObjectURL() {}
     },
+    URLSearchParams,
     WebSocket: class FakeWebSocket {
       static OPEN = 1;
 
@@ -587,6 +599,7 @@ async function createChromeHarness({
     },
     window: {
       clearTimeout: fakeClearTimeout,
+      history,
       setTimeout: fakeSetTimeout,
       addEventListener(type, handler) {
         if (!windowListeners.has(type)) windowListeners.set(type, []);
@@ -1910,7 +1923,10 @@ for (const phase of ["headers", "body"]) {
     chrome.runTimers(100);
     await flushPromises();
     assert.equal(chrome.artifactBeginRequests.length, 2);
-    assert.deepEqual(JSON.parse(chrome.artifactBeginRequests[0].init.body), JSON.parse(chrome.artifactBeginRequests[1].init.body));
+    assert.deepEqual(
+      JSON.parse(chrome.artifactBeginRequests[0].init.body),
+      JSON.parse(chrome.artifactBeginRequests[1].init.body),
+    );
     assert.match(chrome.frame.src, /artifact_load_token=/);
   });
 
@@ -1933,7 +1949,9 @@ for (const phase of ["headers", "body"]) {
 test("a late timed-out load cannot replace a newer load or discard drafts", async () => {
   /** @type {((value: any) => void) | undefined} */
   let resolveOld;
-  const old = new Promise((resolve) => { resolveOld = resolve; });
+  const old = new Promise((resolve) => {
+    resolveOld = resolve;
+  });
   const chrome = await createChromeHarness({ artifactSrc: "/artifact/abc/index.html", beginLoadResponses: [old] });
   chrome.element("chatInput").value = "Keep this draft";
   chrome.runTimers(5000);
@@ -1967,12 +1985,19 @@ test("a bound frame with a stalled successful reload body shows recovery without
   await flushPromises();
   const active = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
   assert.ok(active);
-  chrome.sendModernMessage({ ...active, type: "lavish:reviewState", state: { card: { selector: "#hero", text: "Keep draft" }, fields: [] } });
+  chrome.sendModernMessage({
+    ...active,
+    type: "lavish:reviewState",
+    state: { card: { selector: "#hero", text: "Keep draft" }, fields: [] },
+  });
   await flushPromises();
   assert.match(storage.get("lavish-axi:review-state:abc"), /Keep draft/);
   chrome.element("chatInput").value = "Keep composer";
   chrome.element("chatInput").dispatch("input");
-  responses.push({ ok: true, json: () => new Promise(() => {}) }, ...Array.from({ length: 14 }, () => ({ ok: false, status: 503 })));
+  responses.push(
+    { ok: true, json: () => new Promise(() => {}) },
+    ...Array.from({ length: 14 }, () => ({ ok: false, status: 503 })),
+  );
   chrome.eventSource().listeners.get("reload")();
   await flushPromises();
   chrome.runTimers(5000);
@@ -8108,9 +8133,20 @@ test("protocol 1 upload results stay on the accepting document across replacemen
 });
 
 test("chrome-client validates view, sanitizes hash on lavish:syncUrl, and queues pre-bind popstate", async () => {
+  /** @type {any} */
   let releaseValidation;
-  const validation = new Promise((resolve) => { releaseValidation = resolve; });
-  const binding = { page: "page-a.html", proof: "proof-a", route: "page-a.html", destination: "/artifact/abc/page-a.html", documentId: "document-a", token: "harness-load-1", revision: 1 };
+  const validation = new Promise((resolve) => {
+    releaseValidation = resolve;
+  });
+  const binding = {
+    page: "page-a.html",
+    proof: "proof-a",
+    route: "page-a.html",
+    destination: "/artifact/abc/page-a.html",
+    documentId: "document-a",
+    token: "harness-load-1",
+    revision: 1,
+  };
   const chrome = await createChromeHarness({
     artifactSrc: "/artifact/abc/page-a.html",
     outerUrl: "http://lavish.test/session/abc?view=tasks#section",
@@ -8119,33 +8155,60 @@ test("chrome-client validates view, sanitizes hash on lavish:syncUrl, and queues
     bindingValidationResponses: [validation],
   });
   await flushPromises();
-  assert.equal(chrome.location.search, "?view=tasks");
+  assert.equal(chrome.location.search, "");
+  assert.equal(chrome.historyCalls.length, 1);
+  assert.equal(chrome.historyCalls[0].method, "replaceState");
   const initialFrameUrl = new URL(chrome.replacedDestinations.at(-1), chrome.location.href);
   assert.equal(initialFrameUrl.searchParams.get("__lavish_hub_view"), "tasks");
   assert.equal(initialFrameUrl.hash, "#section");
   chrome.location.href = "http://lavish.test/session/abc?view=changes#back";
   chrome.dispatchWindowEvent("popstate");
-  chrome.sendFrameMessage({ type: "lavish:syncUrl", view: "tasks", mode: "replace", artifact_load_token: "harness-load-1" });
-  assert.equal(chrome.historyCalls.length, 0);
+  chrome.sendFrameMessage({
+    type: "lavish:syncUrl",
+    view: "tasks",
+    mode: "replace",
+    artifact_load_token: "harness-load-1",
+  });
+  assert.equal(chrome.historyCalls.length, 1);
   releaseValidation({ ok: true, status: 204, json: async () => ({}) });
-  await flushPromises(); await flushPromises();
+  await flushPromises();
+  await flushPromises();
   const activation = chrome.modernPostedToFrame.find((message) => message.type === "lavish:activate");
   assert.ok(activation);
   const change = chrome.modernPostedToFrame.find((message) => message.type === "lavish:urlChange");
-  assert.equal(change.view, "changes"); assert.equal(change.hash, "#back");
+  assert.equal(change.view, "changes");
+  assert.equal(change.hash, "#back");
   assert.ok(chrome.modernPostedToFrame.indexOf(activation) < chrome.modernPostedToFrame.indexOf(change));
-  assert.equal(chrome.modernPostedToFrame.some((message) => message.type === "lavish:restoreScroll"), false);
-  const send = async (data) => { chrome.sendModernMessage({ ...activation, ...data }); await flushPromises(); };
+  assert.equal(
+    chrome.modernPostedToFrame.some((message) => message.type === "lavish:restoreScroll"),
+    false,
+  );
+  const send = async (data) => {
+    chrome.sendModernMessage({ ...activation, ...data });
+    await flushPromises();
+  };
   chrome.sendFrameMessage({ ...activation, type: "lavish:syncUrl", view: "foreign", mode: "push" });
-  for (const handler of chrome.messageHandlers()) handler({ source: chrome.createForeignWindow().source, data: { ...activation, type: "lavish:syncUrl", view: "foreign", mode: "push" } });
+  for (const handler of chrome.messageHandlers())
+    handler({
+      source: chrome.createForeignWindow().source,
+      data: { ...activation, type: "lavish:syncUrl", view: "foreign", mode: "push" },
+    });
   await send({ type: "lavish:syncUrl", view: "foreign", document_id: "wrong", mode: "push" });
   const originalFrame = chrome.currentFrame();
   const originalSrc = originalFrame.src;
   const originalLoads = chrome.replacedDestinations.length;
   chrome.sendFrameMessage({ ...activation, type: "lavish:navigateFrame", target: "/artifact/abc/other.html" });
-  for (const handler of chrome.messageHandlers()) handler({ source: chrome.createForeignWindow().source, data: { ...activation, type: "lavish:navigateFrame", target: "/artifact/abc/other.html" } });
+  for (const handler of chrome.messageHandlers())
+    handler({
+      source: chrome.createForeignWindow().source,
+      data: { ...activation, type: "lavish:navigateFrame", target: "/artifact/abc/other.html" },
+    });
   await send({ type: "lavish:navigateFrame", target: "/artifact/abc/other.html", document_id: "wrong" });
-  for (const target of ["https://evil.test/artifact/abc/other.html", "/artifact/other/other.html", "javascript:alert(1)"]) {
+  for (const target of [
+    "https://evil.test/artifact/abc/other.html",
+    "/artifact/other/other.html",
+    "javascript:alert(1)",
+  ]) {
     await send({ type: "lavish:navigateFrame", target });
   }
   assert.equal(chrome.currentFrame(), originalFrame);
@@ -8153,9 +8216,10 @@ test("chrome-client validates view, sanitizes hash on lavish:syncUrl, and queues
   assert.equal(chrome.replacedDestinations.length, originalLoads);
   await send({ type: "lavish:syncUrl", view: "bad view", mode: "push" });
   await send({ type: "lavish:syncUrl", view: "x".repeat(65), mode: "push" });
-  assert.equal(chrome.historyCalls.length, 0);
+  assert.equal(chrome.historyCalls.length, 1);
   await send({ type: "lavish:syncUrl", view: "tasks", hash: "a\u0000b\u007f", mode: "push" });
-  assert.equal(chrome.location.search, "?view=tasks"); assert.equal(chrome.location.hash, "#ab");
+  assert.equal(chrome.location.search, "?view=tasks");
+  assert.equal(chrome.location.hash, "#ab");
   assert.equal(chrome.historyCalls.at(-1).method, "pushState");
   await send({ type: "lavish:syncUrl", hash: "#" + "x".repeat(600), mode: "replace" });
   assert.equal(chrome.location.hash, "#" + "x".repeat(511));
@@ -8189,8 +8253,14 @@ test("chrome-client validates view, sanitizes hash on lavish:syncUrl, and queues
   legacy.dispatchWindowEvent("popstate");
   const token = legacy.artifactLoadToken();
   assert.ok(token);
-  const legacyFrame = legacy.currentFrame(), legacySrc = legacyFrame.src, legacyLoads = legacy.replacedDestinations.length;
-  legacy.sendFrameMessage({ type: "lavish:navigateFrame", target: "/artifact/abc/other.html", artifact_load_token: token });
+  const legacyFrame = legacy.currentFrame(),
+    legacySrc = legacyFrame.src,
+    legacyLoads = legacy.replacedDestinations.length;
+  legacy.sendFrameMessage({
+    type: "lavish:navigateFrame",
+    target: "/artifact/abc/other.html",
+    artifact_load_token: token,
+  });
   assert.equal(legacy.currentFrame(), legacyFrame);
   assert.equal(legacyFrame.src, legacySrc);
   assert.equal(legacy.replacedDestinations.length, legacyLoads);
@@ -11491,48 +11561,95 @@ function queueHeadingNote(chrome, prompt = "Make this heading bigger", selector 
 }
 
 test("retired modern bindings discard receipts while stale ports cannot duplicate accepted work", async () => {
-  const a = protocolWhiteboardBinding("a.html", "a"), b = protocolWhiteboardBinding("b.html", "b");
-  const chrome = await createChromeHarness({ artifactSrc: a.destination, sessionData: { ...defaultSessionData, pageProtocol: 1 }, modernBinding: a });
-  await flushPromises(); await flushPromises();
+  const a = protocolWhiteboardBinding("a.html", "a"),
+    b = protocolWhiteboardBinding("b.html", "b");
+  const chrome = await createChromeHarness({
+    artifactSrc: a.destination,
+    sessionData: { ...defaultSessionData, pageProtocol: 1 },
+    modernBinding: a,
+  });
+  await flushPromises();
+  await flushPromises();
   const first = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
-  const request = { ...first, type: "lavish:queuePrompt", request_id: "q-binding", prompt: { prompt: "accepted once" } };
-  chrome.sendModernMessage(request); await flushPromises(); await flushPromises();
+  const request = {
+    ...first,
+    type: "lavish:queuePrompt",
+    request_id: "q-binding",
+    prompt: { prompt: "accepted once" },
+  };
+  chrome.sendModernMessage(request);
+  await flushPromises();
+  await flushPromises();
   assert.equal(chrome.queued().length, 1);
-  chrome.sendModernMessage(request); await flushPromises(); await flushPromises();
+  chrome.sendModernMessage(request);
+  await flushPromises();
+  await flushPromises();
   assert.equal(chrome.queued().length, 1);
   chrome.updateModernBinding(b);
   chrome.sendFrameMessage({ type: "lavish:ready", page_protocol: 1, document_id: b.documentId });
-  await flushPromises(); await flushPromises(); await flushPromises();
+  await flushPromises();
+  await flushPromises();
+  await flushPromises();
   const second = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
   assert.equal(second.page, b.page);
   const saved = JSON.parse(chrome.storage.get("lavish-axi:queued:abc"));
   assert.equal(Array.isArray(saved) ? 0 : Object.keys(saved.receipts).length, 0);
-  chrome.sendModernMessage(request, 0); await flushPromises();
+  chrome.sendModernMessage(request, 0);
+  await flushPromises();
   assert.equal(chrome.queued().length, 1);
-  chrome.sendModernMessage({ ...second, type: "lavish:queuePrompt", request_id: "q-new-binding", prompt: { prompt: "fresh" } });
-  await flushPromises(); await flushPromises();
+  chrome.sendModernMessage({
+    ...second,
+    type: "lavish:queuePrompt",
+    request_id: "q-new-binding",
+    prompt: { prompt: "fresh" },
+  });
+  await flushPromises();
+  await flushPromises();
   assert.equal(chrome.queued().length, 2);
 });
 
 test("persisted orphan receipts are retired when a new modern document binds", async () => {
   const a = protocolWhiteboardBinding("a.html", "a");
   const receipts = {};
-  for (let i = 0; i < 128; i++) receipts[`q-orphan-${i}`] = JSON.stringify(["old.html", "old-document", "old-token", 1, ""]);
-  const storage = new Map([["lavish-axi:queued:abc", JSON.stringify({ version: 1, prompts: [{ prompt: "preserved", prompt_id: "old-prompt" }], receipts })]]);
-  const chrome = await createChromeHarness({ storage, artifactSrc: a.destination, sessionData: { ...defaultSessionData, pageProtocol: 1 }, modernBinding: a });
-  await flushPromises(); await flushPromises();
+  for (let i = 0; i < 128; i++)
+    receipts[`q-orphan-${i}`] = JSON.stringify(["old.html", "old-document", "old-token", 1, ""]);
+  const storage = new Map([
+    [
+      "lavish-axi:queued:abc",
+      JSON.stringify({ version: 1, prompts: [{ prompt: "preserved", prompt_id: "old-prompt" }], receipts }),
+    ],
+  ]);
+  const chrome = await createChromeHarness({
+    storage,
+    artifactSrc: a.destination,
+    sessionData: { ...defaultSessionData, pageProtocol: 1 },
+    modernBinding: a,
+  });
+  await flushPromises();
+  await flushPromises();
   const active = chrome.modernPostedToFrame.filter((message) => message.type === "lavish:activate").at(-1);
   const saved = JSON.parse(storage.get("lavish-axi:queued:abc"));
   assert.equal(Array.isArray(saved) ? 0 : Object.keys(saved.receipts).length, 0);
   assert.equal(chrome.queued()[0].prompt, "preserved");
-  chrome.sendModernMessage({ ...active, type: "lavish:queuePrompt", request_id: "q-after-orphans", prompt: { prompt: "new" } });
-  await flushPromises(); await flushPromises();
+  chrome.sendModernMessage({
+    ...active,
+    type: "lavish:queuePrompt",
+    request_id: "q-after-orphans",
+    prompt: { prompt: "new" },
+  });
+  await flushPromises();
+  await flushPromises();
   assert.equal(chrome.queued().length, 2);
 });
 
 test("acknowledged queue requests reject reserved sends and deduplicate retries", async () => {
   const chrome = await createChromeHarness({ fetchImpl: async () => ({ ok: false }) });
-  const request = { type: "lavish:queuePrompt", queue_epoch: chrome.beginLegacyQueue(), request_id: "q-request-1", prompt: { prompt: "review comment", tag: "code-comment" } };
+  const request = {
+    type: "lavish:queuePrompt",
+    queue_epoch: chrome.beginLegacyQueue(),
+    request_id: "q-request-1",
+    prompt: { prompt: "review comment", tag: "code-comment" },
+  };
   chrome.sendFrameMessage(request);
   assert.equal(chrome.postedToFrame.at(-1).type, "lavish:queuePromptResult");
   assert.equal(chrome.postedToFrame.at(-1).ok, true);
@@ -11559,9 +11676,17 @@ test("failed queue storage keeps acknowledgement uncertain and retries the same 
   const previous = JSON.stringify([{ prompt: "earlier", prompt_id: "earlier-id" }]);
   store("lavish-axi:queued:abc", previous);
   let fail = true;
-  storage.set = (key, value) => { if (fail && key === "lavish-axi:queued:abc") throw new Error("quota"); return store(key, value); };
+  storage.set = (key, value) => {
+    if (fail && key === "lavish-axi:queued:abc") throw new Error("quota");
+    return store(key, value);
+  };
   const chrome = await createChromeHarness({ storage });
-  const request = { type: "lavish:queuePrompt", queue_epoch: chrome.beginLegacyQueue(), request_id: "q-storage", prompt: { prompt: "not lost" } };
+  const request = {
+    type: "lavish:queuePrompt",
+    queue_epoch: chrome.beginLegacyQueue(),
+    request_id: "q-storage",
+    prompt: { prompt: "not lost" },
+  };
   chrome.sendFrameMessage(request);
   assert.equal(chrome.postedToFrame.at(-1).ok, false);
   assert.equal(chrome.postedToFrame.at(-1).uncertain, true);
@@ -11583,7 +11708,12 @@ test("failed queue storage keeps acknowledgement uncertain and retries the same 
   assert.equal(restored.postedToFrame.at(-1).uncertain, true);
   assert.equal(restored.postedToFrame.at(-1).reason, "binding_changed");
   assert.equal(Array.isArray(JSON.parse(storage.get("lavish-axi:queued:abc"))), true);
-  restored.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: restoredEpoch, request_id: "q-new-scope", prompt: { prompt: "fresh" } });
+  restored.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    queue_epoch: restoredEpoch,
+    request_id: "q-new-scope",
+    prompt: { prompt: "fresh" },
+  });
   assert.equal(restored.postedToFrame.at(-1).ok, true);
   assert.equal(restored.queued().length, 3);
 });
@@ -11591,19 +11721,45 @@ test("failed queue storage keeps acknowledgement uncertain and retries the same 
 test("acknowledged receipt admission is bounded without evicting retry identities", async () => {
   const chrome = await createChromeHarness({ fakeClock: true });
   const epoch = chrome.beginLegacyQueue();
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-huge", prompt: { prompt: "small", target: { extra: "x".repeat(262145) } } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    queue_epoch: epoch,
+    request_id: "q-huge",
+    prompt: { prompt: "small", target: { extra: "x".repeat(262145) } },
+  });
   assert.equal(chrome.postedToFrame.at(-1).reason, "too_large");
   chrome.advanceClock(1000);
-  for (let i = 0; i < 128; i++) chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: `q-limit-${i}`, prompt: { prompt: `note ${i}` } });
+  for (let i = 0; i < 128; i++)
+    chrome.sendFrameMessage({
+      type: "lavish:queuePrompt",
+      queue_epoch: epoch,
+      request_id: `q-limit-${i}`,
+      prompt: { prompt: `note ${i}` },
+    });
   assert.equal(chrome.queued().length, 128);
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-over-limit", prompt: { prompt: "not admitted" } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    queue_epoch: epoch,
+    request_id: "q-over-limit",
+    prompt: { prompt: "not admitted" },
+  });
   assert.equal(chrome.postedToFrame.at(-1).reason, "capacity");
   chrome.advanceClock(1000);
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-limit-0", prompt: { prompt: "duplicate" } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    queue_epoch: epoch,
+    request_id: "q-limit-0",
+    prompt: { prompt: "duplicate" },
+  });
   assert.equal(chrome.postedToFrame.at(-1).ok, true);
   assert.equal(chrome.queued().length, 128);
   chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: "q-limit-0" });
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-new", prompt: { prompt: "new note" } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    queue_epoch: epoch,
+    request_id: "q-new",
+    prompt: { prompt: "new note" },
+  });
   assert.equal(chrome.postedToFrame.at(-1).ok, true);
   assert.equal(chrome.queued().length, 129);
 });
@@ -11611,15 +11767,31 @@ test("acknowledged receipt admission is bounded without evicting retry identitie
 test("legacy frame reload retires receipts without accepting stale retries", async () => {
   const chrome = await createChromeHarness({ fakeClock: true });
   const oldEpoch = chrome.beginLegacyQueue();
-  for (let i = 0; i < 128; i++) chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: oldEpoch, request_id: `q-old-${i}`, prompt: { prompt: `note ${i}` } });
+  for (let i = 0; i < 128; i++)
+    chrome.sendFrameMessage({
+      type: "lavish:queuePrompt",
+      queue_epoch: oldEpoch,
+      request_id: `q-old-${i}`,
+      prompt: { prompt: `note ${i}` },
+    });
   assert.equal(chrome.queued().length, 128);
   const newEpoch = chrome.beginLegacyQueue();
   assert.notEqual(newEpoch, oldEpoch);
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: oldEpoch, request_id: "q-old-0", prompt: { prompt: "duplicate" } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    queue_epoch: oldEpoch,
+    request_id: "q-old-0",
+    prompt: { prompt: "duplicate" },
+  });
   assert.equal(chrome.postedToFrame.at(-1).reason, "binding_changed");
   assert.equal(chrome.postedToFrame.at(-1).queue_epoch, oldEpoch);
   chrome.advanceClock(1000);
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: newEpoch, request_id: "q-fresh", prompt: { prompt: "fresh" } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    queue_epoch: newEpoch,
+    request_id: "q-fresh",
+    prompt: { prompt: "fresh" },
+  });
   assert.equal(chrome.postedToFrame.at(-1).ok, true);
   assert.equal(chrome.postedToFrame.at(-1).queue_epoch, newEpoch);
   assert.equal(chrome.queued().length, 129);
@@ -11630,7 +11802,12 @@ test("released acknowledged comments remain admissible beyond 256 requests", asy
   const epoch = chrome.beginLegacyQueue();
   for (let i = 0; i < 300; i++) {
     const id = `q-replenish-${i}`;
-    chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: id, prompt: { prompt: `comment ${i}` } });
+    chrome.sendFrameMessage({
+      type: "lavish:queuePrompt",
+      queue_epoch: epoch,
+      request_id: id,
+      prompt: { prompt: `comment ${i}` },
+    });
     assert.equal(chrome.postedToFrame.at(-1).ok, true, `request ${i}`);
     chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: id });
     chrome.advanceClock(1000);
@@ -11643,11 +11820,21 @@ test("request bursts throttle retries without losing their live identity", async
   const epoch = chrome.beginLegacyQueue();
   for (let i = 0; i < 128; i++) {
     const id = `q-burst-${i}`;
-    chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: id, prompt: { prompt: `note ${i}` } });
+    chrome.sendFrameMessage({
+      type: "lavish:queuePrompt",
+      queue_epoch: epoch,
+      request_id: id,
+      prompt: { prompt: `note ${i}` },
+    });
     assert.equal(chrome.postedToFrame.at(-1).ok, true);
     if (i) chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: id });
   }
-  const retry = { type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-burst-0", prompt: { prompt: "duplicate" } };
+  const retry = {
+    type: "lavish:queuePrompt",
+    queue_epoch: epoch,
+    request_id: "q-burst-0",
+    prompt: { prompt: "duplicate" },
+  };
   chrome.sendFrameMessage(retry);
   assert.equal(chrome.postedToFrame.at(-1).reason, "rate_limited");
   assert.equal(chrome.postedToFrame.at(-1).uncertain, true);
@@ -11665,11 +11852,21 @@ test("large comment rate replenishes while bounding bursts", async () => {
   const epoch = chrome.beginLegacyQueue();
   for (let i = 0; i < 2; i++) {
     const id = `q-size-${i}`;
-    chrome.sendFrameMessage({ type: "lavish:queuePrompt", queue_epoch: epoch, request_id: id, prompt: { prompt: "x".repeat(200000) } });
+    chrome.sendFrameMessage({
+      type: "lavish:queuePrompt",
+      queue_epoch: epoch,
+      request_id: id,
+      prompt: { prompt: "x".repeat(200000) },
+    });
     assert.equal(chrome.postedToFrame.at(-1).ok, true);
     chrome.sendFrameMessage({ type: "lavish:releaseQueueRequest", queue_epoch: epoch, request_id: id });
   }
-  const request = { type: "lavish:queuePrompt", queue_epoch: epoch, request_id: "q-size-2", prompt: { prompt: "x".repeat(200000) } };
+  const request = {
+    type: "lavish:queuePrompt",
+    queue_epoch: epoch,
+    request_id: "q-size-2",
+    prompt: { prompt: "x".repeat(200000) },
+  };
   chrome.sendFrameMessage(request);
   assert.equal(chrome.postedToFrame.at(-1).reason, "rate_limited");
   assert.equal(chrome.queued().length, 2);
@@ -11685,9 +11882,21 @@ test("large comment rate replenishes while bounding bursts", async () => {
 
 test("a render failure after queue insertion still makes an acknowledged retry idempotent", async () => {
   const chrome = await createChromeHarness();
-  const log = chrome.element("queuedLog"), descriptor = Object.getOwnPropertyDescriptor(log, "innerHTML");
-  Object.defineProperty(log, "innerHTML", { configurable: true, get: descriptor.get, set() { throw new Error("render failed"); } });
-  const request = { type: "lavish:queuePrompt", queue_epoch: chrome.beginLegacyQueue(), request_id: "q-render-failure", prompt: { prompt: "once" } };
+  const log = chrome.element("queuedLog"),
+    descriptor = Object.getOwnPropertyDescriptor(log, "innerHTML");
+  Object.defineProperty(log, "innerHTML", {
+    configurable: true,
+    get: descriptor.get,
+    set() {
+      throw new Error("render failed");
+    },
+  });
+  const request = {
+    type: "lavish:queuePrompt",
+    queue_epoch: chrome.beginLegacyQueue(),
+    request_id: "q-render-failure",
+    prompt: { prompt: "once" },
+  };
   assert.throws(() => chrome.sendFrameMessage(request), /render failed/);
   Object.defineProperty(log, "innerHTML", descriptor);
   chrome.sendFrameMessage(request);
@@ -11700,9 +11909,26 @@ test("diff overlays keep text in chrome, clip placements and preserve duplicate 
   const chrome = await createChromeHarness();
   chrome.frame.clientWidth = 200;
   chrome.frame.clientHeight = 100;
-  const target = { type: "diff-line", digest: "a".repeat(64), fileIndex: 0, oldPath: "old", newPath: "new", side: "additions", start: 4, end: 5, revision: "rev", extra: "do not echo" };
+  const target = {
+    type: "diff-line",
+    digest: "a".repeat(64),
+    fileIndex: 0,
+    oldPath: "old",
+    newPath: "new",
+    side: "additions",
+    start: 4,
+    end: 5,
+    revision: "rev",
+    extra: "do not echo",
+  };
   const prefix = "context\n\nquoted lines\n\n";
-  const prompt = { tag: "code-comment", prompt: prefix + "private instructions", target, _lavishDiffPrefix: prefix, _lavishQueueKey: "same" };
+  const prompt = {
+    tag: "code-comment",
+    prompt: prefix + "private instructions",
+    target,
+    _lavishDiffPrefix: prefix,
+    _lavishQueueKey: "same",
+  };
   chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: structuredClone(prompt) });
   chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: structuredClone(prompt) });
   assert.equal(chrome.queued().length, 2);
@@ -11712,11 +11938,23 @@ test("diff overlays keep text in chrome, clip placements and preserve duplicate 
   assert.doesNotMatch(JSON.stringify(message), /private instructions|do not echo/);
   const ids = message.anchors.map((item) => item.id);
   const overlay = chrome.element("diffCommentOverlay");
-  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation - 1, placements: [{ id: ids[0], x: 0, y: 0, width: 30, height: 30 }] });
+  chrome.sendFrameMessage({
+    type: "lavish:diffPlacements",
+    generation: message.generation - 1,
+    placements: [{ id: ids[0], x: 0, y: 0, width: 30, height: 30 }],
+  });
   assert.equal(overlay.children.length, 0);
-  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id: ids[0], x: -10, y: 70, width: 250, height: 80, clip: { x: 0, y: 80, width: 150, height: 20 } }, { id: ids[1], x: NaN, y: 0, width: 1, height: 1 }] });
+  chrome.sendFrameMessage({
+    type: "lavish:diffPlacements",
+    generation: message.generation,
+    placements: [
+      { id: ids[0], x: -10, y: 70, width: 250, height: 80, clip: { x: 0, y: 80, width: 150, height: 20 } },
+      { id: ids[1], x: NaN, y: 0, width: 1, height: 1 },
+    ],
+  });
   assert.equal(overlay.children.length, 1);
-  const wrapper = overlay.children[0], card = wrapper.children[0];
+  const wrapper = overlay.children[0],
+    card = wrapper.children[0];
   assert.equal(wrapper.style.left, "0px");
   assert.equal(wrapper.style.top, "80px");
   assert.equal(wrapper.style.width, "150px");
@@ -11727,15 +11965,28 @@ test("diff overlays keep text in chrome, clip placements and preserve duplicate 
   assert.equal(card.style.height, "80px");
   assert.equal(card.children[1].children[0].textContent, "private instructions");
   const text = card.children[1];
-  text.scrollTop = 10; text.scrollHeight = 110; text.clientHeight = 10;
+  text.scrollTop = 10;
+  text.scrollHeight = 110;
+  text.clientHeight = 10;
   card.children[0].focus();
-  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id: ids[0], x: -10, y: 65, width: 250, height: 80, clip: { x: 0, y: 80, width: 150, height: 20 } }] });
+  chrome.sendFrameMessage({
+    type: "lavish:diffPlacements",
+    generation: message.generation,
+    placements: [{ id: ids[0], x: -10, y: 65, width: 250, height: 80, clip: { x: 0, y: 80, width: 150, height: 20 } }],
+  });
   assert.equal(overlay.children[0], wrapper);
   assert.equal(overlay.children[0].children[0], card);
   assert.equal(chrome.focusLog.at(-1), card.children[0].id);
   assert.equal(text.scrollTop, 10);
   for (const pointerType of ["touch", "pen"]) {
-    card.dispatch("pointerdown", { pointerType, isPrimary: true, pointerId: 7, clientX: 20, clientY: 80, target: card });
+    card.dispatch("pointerdown", {
+      pointerType,
+      isPrimary: true,
+      pointerId: 7,
+      clientX: 20,
+      clientY: 80,
+      target: card,
+    });
     overlay.dispatch("pointermove", { pointerId: 7, clientX: 20, clientY: 40, preventDefault() {} });
     assert.equal(chrome.postedToFrame.at(-1).type, "lavish:scrollDiff");
     assert.equal(chrome.postedToFrame.at(-1).y, 40);
@@ -11752,7 +12003,10 @@ test("diff overlays keep text in chrome, clip placements and preserve duplicate 
   chrome.element("queuedLog").dispatch("click", { target: queuedLogNode(["queued-edit-save"]) });
   assert.equal(chrome.queued()[0].prompt, prefix + "edited in chrome");
   assert.equal(chrome.queued()[0].prompt_id, ids[0]);
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { prompt: "forged replacement", _lavishQueueKey: "same" } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    prompt: { prompt: "forged replacement", _lavishQueueKey: "same" },
+  });
   assert.equal(chrome.queued()[0].prompt, prefix + "edited in chrome");
   assert.equal(chrome.queued()[1].prompt, prefix + "private instructions");
   chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [] });
@@ -11761,19 +12015,42 @@ test("diff overlays keep text in chrome, clip placements and preserve duplicate 
 
 test("an invalid placement removes the card safely without removing the queued prompt", async () => {
   const chrome = await createChromeHarness();
-  chrome.frame.clientWidth = 200; chrome.frame.clientHeight = 100;
-  const target = { type: "diff-line", digest: "c".repeat(64), fileIndex: 0, oldPath: "old", newPath: "new", side: "additions", start: 1, end: 1, revision: "" };
+  chrome.frame.clientWidth = 200;
+  chrome.frame.clientHeight = 100;
+  const target = {
+    type: "diff-line",
+    digest: "c".repeat(64),
+    fileIndex: 0,
+    oldPath: "old",
+    newPath: "new",
+    side: "additions",
+    start: 1,
+    end: 1,
+    revision: "",
+  };
   chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { tag: "code-comment", prompt: "retained", target } });
   const message = chrome.postedToFrame.filter((item) => item.type === "lavish:queuedDiffAnchors").at(-1);
   const id = message.anchors[0].id;
-  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id, x: 0, y: 0, width: 100, height: 50 }] });
+  chrome.sendFrameMessage({
+    type: "lavish:diffPlacements",
+    generation: message.generation,
+    placements: [{ id, x: 0, y: 0, width: 100, height: 50 }],
+  });
   const overlay = chrome.element("diffCommentOverlay");
   overlay.children[0].children[0].children[0].focus();
-  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id, x: NaN, y: 0, width: 100, height: 50 }] });
+  chrome.sendFrameMessage({
+    type: "lavish:diffPlacements",
+    generation: message.generation,
+    placements: [{ id, x: NaN, y: 0, width: 100, height: 50 }],
+  });
   assert.equal(overlay.children.length, 0);
   assert.equal(chrome.focusLog.at(-1), "artifact");
   assert.equal(chrome.queued()[0].prompt, "retained");
-  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id, x: 0, y: 0, width: 100, height: 50 }] });
+  chrome.sendFrameMessage({
+    type: "lavish:diffPlacements",
+    generation: message.generation,
+    placements: [{ id, x: 0, y: 0, width: 100, height: 50 }],
+  });
   assert.equal(overlay.children.length, 1);
   chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: "invalid" });
   assert.equal(overlay.children.length, 0);
@@ -11782,13 +12059,28 @@ test("an invalid placement removes the card safely without removing the queued p
 
 test("editing a diff comment preserves delivery context and target without sending chrome metadata", async () => {
   const posts = [];
-  const chrome = await createChromeHarness({ fetchImpl: async (url, init = {}) => {
-    if (String(url).endsWith("/prompts")) posts.push(JSON.parse(init.body));
-    return { ok: true, json: async () => ({}) };
-  } });
-  const target = { type: "diff-line", digest: "b".repeat(64), fileIndex: 1, oldPath: "old", newPath: "new", side: "deletions", start: 3, end: 5, revision: "rev" };
+  const chrome = await createChromeHarness({
+    fetchImpl: async (url, init = {}) => {
+      if (String(url).endsWith("/prompts")) posts.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  const target = {
+    type: "diff-line",
+    digest: "b".repeat(64),
+    fileIndex: 1,
+    oldPath: "old",
+    newPath: "new",
+    side: "deletions",
+    start: 3,
+    end: 5,
+    revision: "rev",
+  };
   const prefix = "path and revision\n\nquoted code\n\n";
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { tag: "code-comment", prompt: prefix + "original", target, _lavishDiffPrefix: prefix } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    prompt: { tag: "code-comment", prompt: prefix + "original", target, _lavishDiffPrefix: prefix },
+  });
   const id = chrome.queued()[0].prompt_id;
   chrome.element("queuedLog").dispatch("click", { target: queuedLogNode(["bubble", "queued"], 0) });
   typeIntoQueuedEdit(chrome, "updated comment");
@@ -11807,9 +12099,30 @@ test("diff overlay editing is disabled while the note is sending", async () => {
   const chrome = await createChromeHarness({ fetchImpl: () => new Promise(() => {}) });
   chrome.frame.clientWidth = 200;
   chrome.frame.clientHeight = 100;
-  chrome.sendFrameMessage({ type: "lavish:queuePrompt", prompt: { tag: "code-comment", prompt: "original", target: { type: "diff-line", digest: "a".repeat(64), fileIndex: 0, oldPath: "old", newPath: "new", side: "additions", start: 1, end: 1, revision: "" } } });
+  chrome.sendFrameMessage({
+    type: "lavish:queuePrompt",
+    prompt: {
+      tag: "code-comment",
+      prompt: "original",
+      target: {
+        type: "diff-line",
+        digest: "a".repeat(64),
+        fileIndex: 0,
+        oldPath: "old",
+        newPath: "new",
+        side: "additions",
+        start: 1,
+        end: 1,
+        revision: "",
+      },
+    },
+  });
   const message = chrome.postedToFrame.filter((item) => item.type === "lavish:queuedDiffAnchors").at(-1);
-  chrome.sendFrameMessage({ type: "lavish:diffPlacements", generation: message.generation, placements: [{ id: message.anchors[0].id, x: 0, y: 0, width: 100, height: 50 }] });
+  chrome.sendFrameMessage({
+    type: "lavish:diffPlacements",
+    generation: message.generation,
+    placements: [{ id: message.anchors[0].id, x: 0, y: 0, width: 100, height: 50 }],
+  });
   chrome.element("send").click();
   const button = chrome.element("diffCommentOverlay").children[0].children[0].children[0];
   assert.equal(button.disabled, true);
@@ -13403,6 +13716,7 @@ test("a caller-supplied signal is composed with the request deadline", async () 
   // the footgun this pins.
   const timers = new Map();
   let nextTimerId = 1;
+  /** @type {any} */
   let seenSignal = null;
   const runtime = vm.runInNewContext(`${source.slice(start, end + 2)}\n({ navigationRequest });`, {
     navigationRequests: new Set(),
@@ -13538,5 +13852,8 @@ test("a binding validation the server already signed survives its retirement", a
   await flushPromises();
   await flushPromises();
   const history = JSON.parse(chrome.storage.get("lavish-axi:destination:abc:history") || "[]");
-  assert.equal(history.some((record) => record.document_id === "document-a"), true);
+  assert.equal(
+    history.some((record) => record.document_id === "document-a"),
+    true,
+  );
 });

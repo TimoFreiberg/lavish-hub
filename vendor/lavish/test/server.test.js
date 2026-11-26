@@ -2884,6 +2884,7 @@ test("artifact HTML negotiates compression and rejects expired compressed loads"
   let pause = false;
   let fail = false;
   let entered;
+  /** @type {any} */
   let release;
   const server = await serve({
     port: 0,
@@ -3140,16 +3141,43 @@ test("representative hub bundles remain verified across sequential requests", as
   await writeFile(artifact, "<!doctype html><title>Hub</title>");
   await Promise.all(names.map((name, i) => writeFile(path.join(dir, name), contents[i])));
   let reads = 0;
-  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json"), artifactAssetOpen: async (file, flags) => {
-    const handle = await open(file, flags);
-    const read = handle.readFile.bind(handle);
-    handle.readFile = (...args) => { reads++; return read(...args); };
-    return handle;
-  } });
+  const server = await serve({
+    port: 0,
+    stateFile: path.join(dir, "state.json"),
+    artifactAssetOpen: async (file, flags) => {
+      const handle = await open(file, flags);
+      const read = handle.readFile.bind(handle);
+      handle.readFile = (...args) => {
+        reads++;
+        return read(...args);
+      };
+      return handle;
+    },
+  });
   try {
     const base = `http://127.0.0.1:${server.port}`;
-    const { key } = await fetch(`${base}/api/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ file: artifact }) }).then((res) => res.json());
-    assert.equal((await fetch(`${base}/api/hub-proxy/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, port: 12345, capability: "a".repeat(64), resourceKey: "b".repeat(64), identityKey: "c".repeat(64), assets: names }) })).status, 200);
+    const { key } = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    }).then((res) => res.json());
+    assert.equal(
+      (
+        await fetch(`${base}/api/hub-proxy/register`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            key,
+            port: 12345,
+            capability: "a".repeat(64),
+            resourceKey: "b".repeat(64),
+            identityKey: "c".repeat(64),
+            assets: names,
+          }),
+        })
+      ).status,
+      200,
+    );
     for (const name of [...names, ...names]) {
       const response = await fetch(`${base}/artifact/${key}/${name}`, { headers: { "accept-encoding": "identity" } });
       assert.equal(response.status, 200);
@@ -7545,13 +7573,18 @@ test("a rejected feedback restore removes the provisional batch and Seen stamp",
   try {
     const store = new SessionStore(path.join(dir, "state.json"));
     const { key } = await store.upsertSession(artifact, "");
-    await store.queuePrompts(key, {
-      prompts: [{ prompt: "with image", tag: "message", attachments: [{ id: "image" }] }],
-    }, { resolveAttachment: async () => ({ id: "image", bytes: 1 }) });
+    await store.queuePrompts(
+      key,
+      {
+        prompts: [{ prompt: "with image", tag: "message", attachments: [{ id: "image" }] }],
+      },
+      { resolveAttachment: async () => ({ id: "image", bytes: 1 }) },
+    );
     const feedback = await store.takeFeedback(key);
     assert.ok((await store.findByKey(key)).chat[0].delivered_at);
     const rejected = await store.queuePrompts(key, feedback, {
-      restore: true, resolveAttachment: async () => null,
+      restore: true,
+      resolveAttachment: async () => null,
     });
     assert.equal(rejected.rejected[0].reason, "not-found");
     const saved = await store.findByKey(key);
@@ -7570,10 +7603,11 @@ test("batch replies retain their page and only finish that page's delivered note
   try {
     const store = new SessionStore(stateFile);
     const { key } = await store.upsertSession(artifact, "");
-    const send = (page) => store.queuePrompts(key, {
-      page_protocol: 1,
-      prompts: [{ prompt: page, tag: "message", selector: "body", text: "", page }],
-    });
+    const send = (page) =>
+      store.queuePrompts(key, {
+        page_protocol: 1,
+        prompts: [{ prompt: page, tag: "message", selector: "body", text: "", page }],
+      });
     await send("first.html");
     const first = await store.takeFeedback(key);
     await send("second.html");
@@ -7592,7 +7626,10 @@ test("batch replies retain their page and only finish that page's delivered note
     }
     const saved = await store.findByKey(key);
     assert.equal(saved.delivered_batches.length, 50);
-    assert.equal(saved.delivered_batches.some((batch) => batch.id === first.batch_id), false);
+    assert.equal(
+      saved.delivered_batches.some((batch) => batch.id === first.batch_id),
+      false,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -7608,20 +7645,32 @@ test("batch-bound replies isolate delivered notes and preserve current-round pre
     const base = `http://127.0.0.1:${server.port}`;
     const headers = { "content-type": "application/json" };
     const { key } = await fetch(`${base}/api/sessions`, {
-      method: "POST", headers, body: JSON.stringify({ file: artifact }),
+      method: "POST",
+      headers,
+      body: JSON.stringify({ file: artifact }),
     }).then((res) => res.json());
-    const poll = () => fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=0`).then((res) => res.json());
-    const send = (text) => fetch(`${base}/api/${key}/prompts`, {
-      method: "POST", headers: { ...headers, origin: base },
-      body: JSON.stringify({ prompts: [{ prompt: text, tag: "message", selector: "body", text: "" }] }),
-    });
-    const reply = (batch_id) => fetch(`${base}/api/${key}/agent-reply`, {
-      method: "POST", headers, body: JSON.stringify({ text: "Answered", batch_id }),
-    });
+    const poll = () =>
+      fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=0`).then((res) => res.json());
+    const send = (text) =>
+      fetch(`${base}/api/${key}/prompts`, {
+        method: "POST",
+        headers: { ...headers, origin: base },
+        body: JSON.stringify({ prompts: [{ prompt: text, tag: "message", selector: "body", text: "" }] }),
+      });
+    const reply = (batch_id) =>
+      fetch(`${base}/api/${key}/agent-reply`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ text: "Answered", batch_id }),
+      });
     const state = async () => JSON.parse(await readFile(stateFile, "utf8")).sessions[key];
     const presence = async () => {
       const stream = await startPresenceStream(base, key);
-      try { return await stream.next(); } finally { await stream.close(); }
+      try {
+        return await stream.next();
+      } finally {
+        await stream.close();
+      }
     };
     assert.equal((await fetch(`${base}/health`).then((res) => res.json())).lavish_hub_batch_replies, 1);
     assert.equal((await send("first")).status, 200);
@@ -7654,7 +7703,11 @@ test("batch-bound replies isolate delivered notes and preserve current-round pre
     for (const invalid of [null, "", "   ", 42, "x".repeat(129)]) {
       const response = await reply(invalid);
       assert.equal(response.status, 400);
-      assert.deepEqual(await response.json(), { status: "error", code: "VALIDATION_ERROR", error: "batch_id must be a non-empty string" });
+      assert.deepEqual(await response.json(), {
+        status: "error",
+        code: "VALIDATION_ERROR",
+        error: "batch_id must be a non-empty string",
+      });
     }
     assert.equal((await reply(second.batch_id)).status, 200);
     assert.equal(await presence(), "waiting");
@@ -7700,28 +7753,47 @@ test("a reply to an artifact-failure batch does not finish later prompts", async
     const base = `http://127.0.0.1:${server.port}`;
     const headers = { "content-type": "application/json" };
     const { key } = await fetch(`${base}/api/sessions`, {
-      method: "POST", headers, body: JSON.stringify({ file: artifact }),
+      method: "POST",
+      headers,
+      body: JSON.stringify({ file: artifact }),
     }).then((res) => res.json());
     const load = await beginArtifactLoad(base, key);
-    assert.equal((await fetch(`${base}/api/${key}/artifact-failures`, {
-      method: "POST", headers, body: JSON.stringify({
-        ...artifactMutation(load), failures: [{ kind: "artifact-asset-unavailable", detail: "asset unavailable" }],
-      }),
-    })).status, 200);
-    const poll = () => fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=0`).then((res) => res.json());
+    assert.equal(
+      (
+        await fetch(`${base}/api/${key}/artifact-failures`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            ...artifactMutation(load),
+            failures: [{ kind: "artifact-asset-unavailable", detail: "asset unavailable" }],
+          }),
+        })
+      ).status,
+      200,
+    );
+    const poll = () =>
+      fetch(`${base}/api/poll?file=${encodeURIComponent(artifact)}&timeoutMs=0`).then((res) => res.json());
     const failure = await poll();
     assert.ok(failure.batch_id);
     assert.equal(failure.prompts.length, 0);
     assert.equal(failure.artifact_failures.length, 1);
     await fetch(`${base}/api/${key}/prompts`, {
-      method: "POST", headers: { ...headers, origin: base },
+      method: "POST",
+      headers: { ...headers, origin: base },
       body: JSON.stringify({ prompts: [{ prompt: "later", tag: "message", selector: "body", text: "" }] }),
     });
     const later = await poll();
     assert.ok(later.batch_id);
-    assert.equal((await fetch(`${base}/api/${key}/agent-reply`, {
-      method: "POST", headers, body: JSON.stringify({ text: "Failure noted", batch_id: failure.batch_id }),
-    })).status, 200);
+    assert.equal(
+      (
+        await fetch(`${base}/api/${key}/agent-reply`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ text: "Failure noted", batch_id: failure.batch_id }),
+        })
+      ).status,
+      200,
+    );
     const session = JSON.parse(await readFile(stateFile, "utf8")).sessions[key];
     assert.equal(session.delivered_batches.find((batch) => batch.id === failure.batch_id).delivery_seq, null);
     assert.ok(session.chat[0].delivered_at);

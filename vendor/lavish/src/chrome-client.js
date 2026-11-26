@@ -672,9 +672,7 @@ function stripOneShotViewParameter(value) {
   if (!candidate || !candidate.includes("__lavish_hub_")) return candidate;
   try {
     const parsed = new URL(candidate, location.href);
-    const keys = ["view", "file", "line", "side", "change"].map(
-      (key) => `__lavish_hub_${key}`,
-    );
+    const keys = ["view", "file", "line", "side", "change"].map((key) => `__lavish_hub_${key}`);
     if (!keys.some((key) => parsed.searchParams.has(key))) return candidate;
     for (const key of keys) {
       parsed.searchParams.delete(key);
@@ -973,12 +971,15 @@ function loadQueuedPrompts() {
     if (saved && !Array.isArray(saved) && saved.version === 1 && Array.isArray(saved.prompts)) {
       parsed = saved.prompts;
       queueReceiptEnvelope = true;
-      if (saved.receipts && typeof saved.receipts === "object" && !Array.isArray(saved.receipts)) queueReceipts = saved.receipts;
+      if (saved.receipts && typeof saved.receipts === "object" && !Array.isArray(saved.receipts))
+        queueReceipts = saved.receipts;
     } else {
       try {
         const legacy = JSON.parse(sessionStorage.getItem(queueReceiptStorageKey) || "{}");
         if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) queueReceipts = legacy;
-      } catch {}
+      } catch {
+        // Ignore malformed legacy receipt storage.
+      }
     }
     queueReceiptCount = Object.keys(queueReceipts).length;
     if (queueReceiptCount) queueReceiptEnvelope = true;
@@ -2345,7 +2346,9 @@ function isPromptEditable(prompt) {
 
 function diffCommentPrefix(prompt) {
   const prefix = prompt?._lavishDiffPrefix;
-  return diffAnchorOf(prompt) && typeof prefix === "string" && String(prompt.prompt || "").startsWith(prefix) ? prefix : null;
+  return diffAnchorOf(prompt) && typeof prefix === "string" && String(prompt.prompt || "").startsWith(prefix)
+    ? prefix
+    : null;
 }
 
 function diffCommentText(prompt) {
@@ -2455,12 +2458,37 @@ function queuedAnchorSelectorsOf(prompt) {
 // listed where its newest note sits, oldest first, so the artifact can prefer an element's newest note.
 function diffAnchorOf(prompt) {
   const a = prompt?.tag === "code-comment" && prompt.target?.type === "diff-line" ? prompt.target : null;
-  if (!a || !/^[a-f0-9]{64}$/.test(a.digest) || !["additions", "deletions"].includes(a.side) ||
-      !Number.isSafeInteger(a.fileIndex) || a.fileIndex < 0 || a.fileIndex > 1000000 ||
-      !Number.isSafeInteger(a.start) || !Number.isSafeInteger(a.end) || a.start < 1 || a.end < a.start ||
-      typeof a.oldPath !== "string" || typeof a.newPath !== "string" || !a.oldPath || !a.newPath ||
-      a.oldPath.length > 4096 || a.newPath.length > 4096 || typeof a.revision !== "string" || a.revision.length > 512) return null;
-  return { digest: a.digest, fileIndex: a.fileIndex, oldPath: a.oldPath, newPath: a.newPath, side: a.side, start: a.start, end: a.end, revision: a.revision };
+  if (
+    !a ||
+    !/^[a-f0-9]{64}$/.test(a.digest) ||
+    !["additions", "deletions"].includes(a.side) ||
+    !Number.isSafeInteger(a.fileIndex) ||
+    a.fileIndex < 0 ||
+    a.fileIndex > 1000000 ||
+    !Number.isSafeInteger(a.start) ||
+    !Number.isSafeInteger(a.end) ||
+    a.start < 1 ||
+    a.end < a.start ||
+    typeof a.oldPath !== "string" ||
+    typeof a.newPath !== "string" ||
+    !a.oldPath ||
+    !a.newPath ||
+    a.oldPath.length > 4096 ||
+    a.newPath.length > 4096 ||
+    typeof a.revision !== "string" ||
+    a.revision.length > 512
+  )
+    return null;
+  return {
+    digest: a.digest,
+    fileIndex: a.fileIndex,
+    oldPath: a.oldPath,
+    newPath: a.newPath,
+    side: a.side,
+    start: a.start,
+    end: a.end,
+    revision: a.revision,
+  };
 }
 
 function clearDiffPlacements() {
@@ -2470,10 +2498,13 @@ function clearDiffPlacements() {
 }
 
 function postQueuedDiffAnchors(force = false) {
-  const anchors = queued.filter((prompt) => belongsToReviewPage(prompt)).map((prompt) => {
-    const anchor = diffAnchorOf(prompt);
-    return anchor ? { id: promptIdentity(prompt), ...anchor } : null;
-  }).filter(Boolean);
+  const anchors = queued
+    .filter((prompt) => belongsToReviewPage(prompt))
+    .map((prompt) => {
+      const anchor = diffAnchorOf(prompt);
+      return anchor ? { id: promptIdentity(prompt), ...anchor } : null;
+    })
+    .filter(Boolean);
   const signature = JSON.stringify(anchors);
   if (!force && signature === diffAnchorSignature) return;
   diffAnchorSignature = signature;
@@ -2513,15 +2544,31 @@ function createDiffCard(id) {
   text.appendChild(content);
   card.appendChild(edit);
   card.appendChild(text);
-  card.addEventListener("wheel", (event) => {
-    if (event.ctrlKey) return;
-    const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? frame.clientHeight : 1;
-    forwardDiffScroll(text, text.contains(/** @type {Node} */ (event.target)), event.deltaX * scale, event.deltaY * scale);
-    event.preventDefault();
-  }, { passive: false });
+  card.addEventListener(
+    "wheel",
+    (event) => {
+      if (event.ctrlKey) return;
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? frame.clientHeight : 1;
+      forwardDiffScroll(
+        text,
+        text.contains(/** @type {Node} */ (event.target)),
+        event.deltaX * scale,
+        event.deltaY * scale,
+      );
+      event.preventDefault();
+    },
+    { passive: false },
+  );
   card.addEventListener("pointerdown", (event) => {
     if (!["touch", "pen"].includes(event.pointerType) || event.isPrimary === false) return;
-    diffTouch = { id: event.pointerId, x: event.clientX, y: event.clientY, text, moved: false, overText: text.contains(/** @type {Node} */ (event.target)) };
+    diffTouch = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      text,
+      moved: false,
+      overText: text.contains(/** @type {Node} */ (event.target)),
+    };
   });
   wrapper.appendChild(card);
   diffCommentOverlay.appendChild(wrapper);
@@ -2530,19 +2577,26 @@ function createDiffCard(id) {
 
 diffCommentOverlay.addEventListener("pointermove", (event) => {
   if (!diffTouch || event.pointerId !== diffTouch.id) return;
-  const x = diffTouch.x - event.clientX, y = diffTouch.y - event.clientY;
+  const x = diffTouch.x - event.clientX,
+    y = diffTouch.y - event.clientY;
   if (!diffTouch.moved) {
     if (Math.abs(x) + Math.abs(y) < 5) return;
     diffTouch.moved = true;
-    try { diffCommentOverlay.setPointerCapture?.(event.pointerId); } catch {}
+    try {
+      diffCommentOverlay.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Pointer capture may fail if the pointer is no longer active.
+    }
   }
-  diffTouch.x = event.clientX; diffTouch.y = event.clientY;
+  diffTouch.x = event.clientX;
+  diffTouch.y = event.clientY;
   forwardDiffScroll(diffTouch.text, diffTouch.overText, x, y);
   event.preventDefault();
 });
-for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) diffCommentOverlay.addEventListener(type, (event) => {
-  if (diffTouch?.id === event.pointerId) diffTouch = null;
-});
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
+  diffCommentOverlay.addEventListener(type, (event) => {
+    if (diffTouch?.id === /** @type {PointerEvent} */ (event).pointerId) diffTouch = null;
+  });
 
 function scheduleDiffSizes() {
   if (diffSizeFrame || typeof window.requestAnimationFrame !== "function") return;
@@ -2562,44 +2616,88 @@ function scheduleDiffSizes() {
 }
 
 function renderDiffPlacements() {
-  const width = frame.clientWidth, height = frame.clientHeight, visible = new Set();
+  const width = frame.clientWidth,
+    height = frame.clientHeight,
+    visible = new Set();
   const prompts = new Map();
-  for (const item of queued) if (belongsToReviewPage(item) && diffAnchorOf(item)) prompts.set(promptIdentity(item), item);
+  for (const item of queued)
+    if (belongsToReviewPage(item) && diffAnchorOf(item)) prompts.set(promptIdentity(item), item);
   for (const placement of diffPlacements) {
     const prompt = prompts.get(placement.id);
     if (!prompt) continue;
     const clip = placement.clip || { x: 0, y: 0, width, height };
-    const left = Math.max(0, clip.x, placement.x), top = Math.max(0, clip.y, placement.y);
+    const left = Math.max(0, clip.x, placement.x),
+      top = Math.max(0, clip.y, placement.y);
     const right = Math.min(width, clip.x + clip.width, placement.x + placement.width);
     const bottom = Math.min(height, clip.y + clip.height, placement.y + placement.height);
     if (right <= left || bottom <= top) continue;
     visible.add(placement.id);
     let nodes = diffCards.get(placement.id);
-    if (!nodes) { nodes = createDiffCard(placement.id); diffCards.set(placement.id, nodes); }
-    Object.assign(nodes.wrapper.style, { left: left + "px", top: top + "px", width: right - left + "px", height: bottom - top + "px" });
-    Object.assign(nodes.card.style, { left: placement.x - left + "px", top: placement.y - top + "px", width: placement.width + "px", height: placement.height + "px" });
+    if (!nodes) {
+      nodes = createDiffCard(placement.id);
+      diffCards.set(placement.id, nodes);
+    }
+    Object.assign(nodes.wrapper.style, {
+      left: left + "px",
+      top: top + "px",
+      width: right - left + "px",
+      height: bottom - top + "px",
+    });
+    Object.assign(nodes.card.style, {
+      left: placement.x - left + "px",
+      top: placement.y - top + "px",
+      width: placement.width + "px",
+      height: placement.height + "px",
+    });
     nodes.edit.disabled = ended || !isPromptEditable(prompt);
     const text = diffCommentText(prompt);
     if (nodes.content.textContent !== text) nodes.content.textContent = text;
   }
-  for (const [id, nodes] of diffCards) if (!visible.has(id)) {
-    if (nodes.wrapper.contains(document.activeElement)) frame.focus();
-    nodes.wrapper.remove();
-    diffCards.delete(id);
-  }
+  for (const [id, nodes] of diffCards)
+    if (!visible.has(id)) {
+      if (nodes.wrapper.contains(document.activeElement)) frame.focus();
+      nodes.wrapper.remove();
+      diffCards.delete(id);
+    }
   scheduleDiffSizes();
 }
 
 function acceptDiffPlacements(msg) {
   if (msg.generation !== diffAnchorGeneration) return;
-  if (!Array.isArray(msg.placements) || msg.placements.length > 1000) { clearDiffPlacements(); return; }
+  if (!Array.isArray(msg.placements) || msg.placements.length > 1000) {
+    clearDiffPlacements();
+    return;
+  }
   const ids = new Set();
-  diffPlacements = msg.placements.filter((p) => {
-    if (!p || typeof p.id !== "string" || ids.has(p.id) || ![p.x, p.y, p.width, p.height].every(Number.isFinite) || p.width <= 0 || p.height <= 0) return false;
-    if (p.clip && (![p.clip.x, p.clip.y, p.clip.width, p.clip.height].every(Number.isFinite) || p.clip.width <= 0 || p.clip.height <= 0)) return false;
-    ids.add(p.id);
-    return true;
-  }).map((p) => ({ id: p.id, x: p.x, y: p.y, width: p.width, height: p.height, clip: p.clip ? { x: p.clip.x, y: p.clip.y, width: p.clip.width, height: p.clip.height } : null }));
+  diffPlacements = msg.placements
+    .filter((p) => {
+      if (
+        !p ||
+        typeof p.id !== "string" ||
+        ids.has(p.id) ||
+        ![p.x, p.y, p.width, p.height].every(Number.isFinite) ||
+        p.width <= 0 ||
+        p.height <= 0
+      )
+        return false;
+      if (
+        p.clip &&
+        (![p.clip.x, p.clip.y, p.clip.width, p.clip.height].every(Number.isFinite) ||
+          p.clip.width <= 0 ||
+          p.clip.height <= 0)
+      )
+        return false;
+      ids.add(p.id);
+      return true;
+    })
+    .map((p) => ({
+      id: p.id,
+      x: p.x,
+      y: p.y,
+      width: p.width,
+      height: p.height,
+      clip: p.clip ? { x: p.clip.x, y: p.clip.y, width: p.clip.width, height: p.clip.height } : null,
+    }));
   renderDiffPlacements();
 }
 
@@ -2701,7 +2799,13 @@ function beginFeedbackPreparation() {
 }
 
 function queueReceiptScope(binding = currentArtifactBinding) {
-  return JSON.stringify([binding?.page ?? null, binding?.documentId || "", binding?.token || artifactLoadToken, binding?.documentSequence || 0, binding ? "" : legacyQueueEpoch]);
+  return JSON.stringify([
+    binding?.page ?? null,
+    binding?.documentId || "",
+    binding?.token || artifactLoadToken,
+    binding?.documentSequence || 0,
+    binding ? "" : legacyQueueEpoch,
+  ]);
 }
 
 function retireQueueReceipts(keepScope = null, retiredScope = null) {
@@ -2726,8 +2830,10 @@ function refillQueueAdmission() {
 }
 
 function acknowledgedPayloadSize(value) {
-  const pending = [value], seen = new Set();
-  let size = 0, nodes = 0;
+  const pending = [value],
+    seen = new Set();
+  let size = 0,
+    nodes = 0;
   while (pending.length) {
     const item = pending.pop();
     if (typeof item === "string") size += item.length;
@@ -2735,11 +2841,12 @@ function acknowledgedPayloadSize(value) {
       if (seen.has(item) || ++nodes > 2048) return -1;
       seen.add(item);
       if (Array.isArray(item) && item.length > 2048) return -1;
-      for (const key in item) if (Object.hasOwn(item, key)) {
-        size += key.length;
-        if (++nodes > 2048 || size > 262144) return -1;
-        pending.push(item[key]);
-      }
+      for (const key in item)
+        if (Object.hasOwn(item, key)) {
+          size += key.length;
+          if (++nodes > 2048 || size > 262144) return -1;
+          pending.push(item[key]);
+        }
     }
     if (size > 262144) return -1;
   }
@@ -4915,25 +5022,29 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
   while (true) {
     if (requestSequence !== artifactLoadRequestSequence || ended) return false;
     try {
-      const { response, data: candidate } = await fetchLoadJson("/api/" + key + "/artifact-loads/begin", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          request_id: requestId,
-          request_sequence: requestSequence,
-          chrome_load_token: chromeLoadToken,
-          ...(modernArtifactProtocol && requestedDestination
-            ? { destination: requestedDestination, reload_reason: recoveryRetry ? "recovery" : "reload" }
-            : {}),
-          ...(modernArtifactProtocol && historicalPage
-            ? {
-                historical_page: historicalPage,
-              }
-            : {}),
-        }),
-      }, (response) => {
-        if (response.ok && requestSequence === artifactLoadRequestSequence && !ended) retireArtifactBinding();
-      });
+      const { response, data: candidate } = await fetchLoadJson(
+        "/api/" + key + "/artifact-loads/begin",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            request_id: requestId,
+            request_sequence: requestSequence,
+            chrome_load_token: chromeLoadToken,
+            ...(modernArtifactProtocol && requestedDestination
+              ? { destination: requestedDestination, reload_reason: recoveryRetry ? "recovery" : "reload" }
+              : {}),
+            ...(modernArtifactProtocol && historicalPage
+              ? {
+                  historical_page: historicalPage,
+                }
+              : {}),
+          }),
+        },
+        (response) => {
+          if (response.ok && requestSequence === artifactLoadRequestSequence && !ended) retireArtifactBinding();
+        },
+      );
       if (requestSequence !== artifactLoadRequestSequence || ended) return false;
       if (!response.ok) {
         const status = String(candidate?.status || "");
@@ -6111,12 +6222,15 @@ function syncOuterUrl(msg) {
   const url = new URL(location.href);
   if (msg.view !== undefined) url.searchParams.set("view", msg.view);
   if (msg.hash !== undefined) {
-    const hash = msg.hash.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 512);
+    const hash = Array.from(msg.hash)
+      .filter((ch) => ch.charCodeAt(0) >= 32 && ch.charCodeAt(0) !== 127)
+      .join("")
+      .slice(0, 512);
     url.hash = hash && !hash.startsWith("#") ? `#${hash}` : hash;
   }
   const next = url.pathname + url.search + url.hash;
   if (next === location.pathname + location.search + location.hash) return;
-  history[mode === "push" ? "pushState" : "replaceState"]({ lavishHubUrl: true }, "", next);
+  window.history[mode === "push" ? "pushState" : "replaceState"]({ lavishHubUrl: true }, "", next);
 }
 
 window.addEventListener("popstate", () => {
@@ -6217,17 +6331,27 @@ function handleArtifactMessage(event, binding = null) {
   if (msg.type === "lavish:requestDiffAnchors") postQueuedDiffAnchors(true);
   if (msg.type === "lavish:diffPlacements") acceptDiffPlacements(msg);
   if (msg.type === "lavish:queuePrompt") {
-    const requestId = typeof msg.request_id === "string" && /^q-[A-Za-z0-9_-]{1,120}$/.test(msg.request_id) ? msg.request_id : "";
+    const requestId =
+      typeof msg.request_id === "string" && /^q-[A-Za-z0-9_-]{1,120}$/.test(msg.request_id) ? msg.request_id : "";
     if (!requestId) {
       enqueuePrompt(msg.prompt, null, binding || currentArtifactBinding);
       pulseSheetDock();
     } else if (!modernArtifactProtocol && (!legacyQueueEpoch || msg.queue_epoch !== legacyQueueEpoch)) {
-      postToBindingFrame(binding, { type: "lavish:queuePromptResult", request_id: requestId, queue_epoch: msg.queue_epoch, ok: false, uncertain: true, reason: "binding_changed" });
+      postToBindingFrame(binding, {
+        type: "lavish:queuePromptResult",
+        request_id: requestId,
+        queue_epoch: msg.queue_epoch,
+        ok: false,
+        uncertain: true,
+        reason: "binding_changed",
+      });
     } else {
       const source = binding || currentArtifactBinding;
       const scope = queueReceiptScope(source);
       const previous = Object.hasOwn(queueReceipts, requestId) ? queueReceipts[requestId] : null;
-      let known = previous === scope, inserted = false, reason = "";
+      let known = previous === scope,
+        inserted = false,
+        reason = "";
       if (previous && !known) reason = "binding_changed";
       else if (!known && ended) reason = "ended";
       else if (!known && terminalSubmission) reason = "reserved";
@@ -6257,19 +6381,33 @@ function handleArtifactMessage(event, binding = null) {
       const durable = known && !reason && persistQueuedPrompts();
       if (known && !reason && !durable) reason = "storage";
       if (inserted) pulseSheetDock();
-      postToBindingFrame(binding, { type: "lavish:queuePromptResult", request_id: requestId, ...(!modernArtifactProtocol ? { queue_epoch: msg.queue_epoch } : {}), ok: Boolean(durable), uncertain: Boolean((known && !durable) || reason === "binding_changed"), reason });
+      postToBindingFrame(binding, {
+        type: "lavish:queuePromptResult",
+        request_id: requestId,
+        ...(!modernArtifactProtocol ? { queue_epoch: msg.queue_epoch } : {}),
+        ok: Boolean(durable),
+        uncertain: Boolean((known && !durable) || reason === "binding_changed"),
+        reason,
+      });
     }
   }
   if (msg.type === "lavish:requestQueueEpoch" && !modernArtifactProtocol && legacyQueueEpoch) {
     postToFrame({ type: "lavish:setQueueEpoch", epoch: legacyQueueEpoch });
   }
-  if (msg.type === "lavish:releaseQueueRequest" && typeof msg.request_id === "string" && (modernArtifactProtocol || msg.queue_epoch === legacyQueueEpoch)) {
+  if (
+    msg.type === "lavish:releaseQueueRequest" &&
+    typeof msg.request_id === "string" &&
+    (modernArtifactProtocol || msg.queue_epoch === legacyQueueEpoch)
+  ) {
     const source = binding || currentArtifactBinding;
     const scope = queueReceiptScope(source);
     if (Object.hasOwn(queueReceipts, msg.request_id) && queueReceipts[msg.request_id] === scope) {
       delete queueReceipts[msg.request_id];
       queueReceiptCount--;
-      if (!persistQueuedPrompts()) { queueReceipts[msg.request_id] = scope; queueReceiptCount++; }
+      if (!persistQueuedPrompts()) {
+        queueReceipts[msg.request_id] = scope;
+        queueReceiptCount++;
+      }
     }
   }
   if (msg.type === "lavish:snapshot") {
@@ -6348,7 +6486,12 @@ function handleArtifactMessage(event, binding = null) {
   if (msg.type === "lavish:endSession") endSession();
   if (msg.type === "lavish:revisions") applyRevisionMessage(msg);
   if (msg.type === "lavish:toggleAnnotationMode") toggleAnnotationMode();
-  if (msg.type === "lavish:requestAnnotationMode" && typeof msg.enabled === "boolean" && !ended && !terminalSubmission) {
+  if (
+    msg.type === "lavish:requestAnnotationMode" &&
+    typeof msg.enabled === "boolean" &&
+    !ended &&
+    !terminalSubmission
+  ) {
     annotationOverridden = true;
     annotation = msg.enabled;
     annotationSwitch.setAttribute("aria-pressed", String(annotation));
