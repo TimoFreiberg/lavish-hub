@@ -7,7 +7,7 @@ import { HubError } from './hub-errors.mjs';
 const invalid = (message, cause) => new HubError('VALIDATION_ERROR', 'fix_args', message, cause);
 
 const maxMetadata = 16 * 1024;
-const builtins = new Set(['commits', 'changes', 'tasks']);
+const builtins = new Set(['diff', 'tasks']);
 
 export const OLD_ARTIFACT_MS = 3 * 24 * 60 * 60 * 1000;
 

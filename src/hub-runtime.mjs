@@ -51,7 +51,7 @@ export function formatNotificationBatch(batch, { identity, instance, page, selec
   const prompts = batch.prompts.map(prompt => {
     const target = prompt.target;
     const sibling = siblingSources.get(prompt.page);
-    const artifact = target?.type === 'diff-line' ? { kind: 'diff', view: 'changes' }
+    const artifact = target?.type === 'diff-line' ? { kind: 'diff', view: 'diff' }
       : sibling ? { kind: 'document', id: sibling.id, document: sibling.source }
         : { kind: prompt.tag === 'message' ? 'freeform' : 'hub', view: selected, ...docFields };
     let message = prompt.prompt;
@@ -246,7 +246,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview, creat
           continue;
         }
         const base = `${browserUrl}/resources/${transport.resourceKey}/${encodeURIComponent(doc.id)}/${encodeURIComponent(path.basename(doc.source))}`;
-        const destinations = [...Object.entries({ commits: 'Commits', changes: 'Changes', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, href: `hub.html?__lavish_hub_view=${encodeURIComponent(id)}`, unseen: false })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : `hub.html?__lavish_hub_view=${encodeURIComponent(item.id)}`, unseen: item.id !== doc.id && item.viewedVersion !== item.version, collapsed: item.collapsed, version: item.version }))];
+        const destinations = [...Object.entries({ diff: 'Diff', tasks: 'Tasks' }).map(([id, title]) => ({ id, title, href: `hub.html?__lavish_hub_view=${encodeURIComponent(id)}`, unseen: false })), ...docs.map(item => ({ id: item.id, title: item.title, href: item.source.toLowerCase().endsWith('.html') ? siblingName(item) : `hub.html?__lavish_hub_view=${encodeURIComponent(item.id)}`, unseen: item.id !== doc.id && item.viewedVersion !== item.version, collapsed: item.collapsed, version: item.version }))];
         const scope = Object.entries(doc.metadata || {}).map(([key, value]) => `<div><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</div>`).join('');
         const reviewedScope = scope ? `<aside aria-label="Reviewed scope">${scope}</aside>` : '';
         const navConfig = JSON.stringify({ url: browserUrl, capability: transport.capability, id: doc.id, version: doc.version, workspaceName, repoName, session: Boolean(identity.session), sessionTitle: effectiveTitle() || '' }).replaceAll('<', '\\u003c');
@@ -290,8 +290,8 @@ export async function runHubOwner(options = {}, { prepare = prepareReview, creat
         await Promise.all(staged.map(item => rm(item.temp, { force: true })));
       }
     }
-    let selected = 'commits', selectionRevision = 0, selectionTarget = null;
-    const hasView = id => ['commits', 'changes', 'tasks'].includes(id) || documents.list().documents.some(doc => doc.id === id);
+    let selected = 'diff', selectionRevision = 0, selectionTarget = null;
+    const hasView = id => ['diff', 'tasks'].includes(id) || documents.list().documents.some(doc => doc.id === id);
     const select = (id, notify = false) => {
       if (!hasView(id)) throw new Error('Unknown view');
       selected = id;
@@ -364,6 +364,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview, creat
       },
       status: async () => ({ workspace: identity.root, repoName, ...(identity.session ? { session: identity.session } : {}), ...(effectiveTitle() ? { title: effectiveTitle() } : {}), ...(currentTarget.rev ? { target: currentTarget.rev.input } : {}), ...(currentTarget.base ? { base: currentTarget.base.input } : {}), instance, selected, selectionRevision, selectionTarget, ...(reviewUrl ? { url: reviewUrl } : {}), available: await isAvailable() }),
       snapshot: ({ force, knownVersion }) => jj.snapshot({ force: force === true, knownVersion }),
+      diffRange: body => jj.diffRange(body),
       diffFiles: body => jj.diffFiles(body),
       describe: body => jj.describe(body),
       stop: async () => { setImmediate(stop); return { stopping: true }; },

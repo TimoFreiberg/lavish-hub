@@ -63,7 +63,8 @@ test('derived document IDs avoid collisions and fit document ID rules', async t 
   assert.equal(deriveDocumentId(first, { review: { source: first } }), 'review');
   assert.equal(deriveDocumentId(second, { review: { source: first } }), `review-${hash}`);
   assert.throws(() => deriveDocumentId(second, { review: { source: first }, [`review-${hash}`]: { source: first } }), /already used/);
-  for (const id of ['commits', 'changes', 'tasks']) assert.equal(deriveDocumentId(path.join(dir, `${id}.html`), {}), `${id}-doc`);
+  for (const id of ['diff', 'tasks']) assert.equal(deriveDocumentId(path.join(dir, `${id}.html`), {}), `${id}-doc`);
+  for (const id of ['commits', 'changes']) assert.equal(deriveDocumentId(path.join(dir, `${id}.html`), {}), id);
   assert.equal(deriveDocumentId(path.join(dir, ' --_ !!.html'), {}), 'doc-');
   assert.equal(deriveDocumentId(path.join(dir, '  Hello, World!.html'), {}), 'hello-world');
   const long = path.join(dir, `${'a'.repeat(80)}.html`);

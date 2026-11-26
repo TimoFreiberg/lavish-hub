@@ -18,7 +18,7 @@ async function readFileAt(cwd, op, revision, file) {
   } catch { throw new Error('File content is not supported text'); }
 }
 
-const fields = ['change_id', 'commit_id', 'description', 'immutable', 'divergent'];
+const fields = ['change_id', 'commit_id', 'description', 'immutable', 'divergent', 'current_working_copy'];
 const template = `"[" ++ ${fields.map(field => `json(${field})`).join(' ++ "," ++ ')} ++ "]\\n"`;
 
 function run(cwd, args, input) {
@@ -36,8 +36,8 @@ function run(cwd, args, input) {
 
 function parseRows(text) {
   return text.split('\n').filter(Boolean).map(line => {
-    const [changeId, commitId, description, immutable, divergent] = JSON.parse(line);
-    return { changeId, commitId, description, immutable, divergent };
+    const [changeId, commitId, description, immutable, divergent, currentWorkingCopy] = JSON.parse(line);
+    return { changeId, commitId, description, immutable, divergent, isWorkingCopy: Boolean(currentWorkingCopy) };
   });
 }
 
@@ -115,13 +115,10 @@ async function readSnapshotAt(cwd, op, { target, afterMetadata } = {}) {
   const { base, head } = await readScopeAt(cwd, op, target);
   const commits = await rows(cwd, op, `${base}..${head}`);
   if (afterMetadata) await afterMetadata();
-  const args = ['--at-operation', op, '--config', 'diff.git.show-path-prefix=true', 'diff', '--from', base, '--to', head];
-  const [patch, commitStats] = await Promise.all([
-    run(cwd, [...args, '--git']),
-    Promise.all(commits.map(commit => run(cwd, ['--at-operation', op, 'diff', '-r', commit.commitId, '--stat']))),
-  ]);
-  commits.forEach((commit, index) => { commit.stat = commitStats[index]; });
-  return { operationId: op, base, head, commits, patch, generated: new Date().toISOString() };
+  const patch = await run(cwd, ['--at-operation', op, '--config', 'diff.git.show-path-prefix=true', 'diff', '--from', base, '--to', head, '--git']);
+  const headDisplay = target?.rev?.input || '@';
+  const baseDisplay = target?.base?.input ? `fork_point((${target.base.input}) | (${headDisplay}))` : `fork_point(trunk() | ${headDisplay})`;
+  return { operationId: op, base, head, baseDisplay, headDisplay, commits, patch, generated: new Date().toISOString() };
 }
 
 export function createHubJj(cwd, { validate = async () => true, beforeDescribe, target } = {}) {
@@ -129,7 +126,7 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
   let currentTarget = target;
   let pending = Promise.resolve(), cached, expires = 0, flight, generation = 0;
   let stackCached, stackExpires = 0, stackFlight;
-  const snapshots = new Map();
+  const snapshots = new Map(), rangeSnapshots = new Map();
   async function checkWorkspace() {
     if (!await validate()) throw new Error('Workspace no longer matches its recorded repository');
   }
@@ -158,7 +155,7 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
   return {
     setTarget(nextTarget) {
       currentTarget = nextTarget;
-      generation++; cached = undefined; stackCached = undefined; snapshots.clear();
+      generation++; cached = undefined; stackCached = undefined; snapshots.clear(); rangeSnapshots.clear();
     },
     async scope() {
       await checkWorkspace();
@@ -229,10 +226,26 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
         force = false;
       }
     },
-    async diffFiles({ operationId, fileIndex, version }) {
+    async diffRange({ operationId, from, to, rev }) {
+      const commitId = value => typeof value === 'string' && /^[0-9a-f]{40,128}$/.test(value);
+      const single = commitId(rev) && from === undefined && to === undefined;
+      const range = rev === undefined && commitId(from) && commitId(to);
+      if (typeof operationId !== 'string' || !/^[0-9a-f]{128}$/.test(operationId) || (!single && !range)) throw new Error('Invalid diff range request');
       await checkWorkspace();
       const activeCwd = resolveCwd(), started = generation;
-      const snapshot = snapshots.get(operationId);
+      const patch = await run(activeCwd, ['--at-operation', operationId, '--config', 'diff.git.show-path-prefix=true', 'diff', ...(single ? ['-r', rev] : ['--from', from, '--to', to]), '--git']);
+      if (generation !== started) throw new Error('Diff range is unavailable for this target');
+      const version = randomUUID(), rangeKey = single ? `rev:${rev}` : `range:${from}:${to}`;
+      const key = `${operationId}\0${rangeKey}`;
+      rangeSnapshots.delete(key);
+      rangeSnapshots.set(key, { version, base: single ? `${rev}-` : from, head: single ? rev : to, files: modelPatch(patch).map(({ oldPath, newPath, parseError, status, oldMode, newMode }) => ({ oldPath, newPath, parseError, status, oldMode, newMode })) });
+      while (rangeSnapshots.size > 32) rangeSnapshots.delete(rangeSnapshots.keys().next().value);
+      return { patch, version, rangeKey };
+    },
+    async diffFiles({ operationId, fileIndex, version, rangeKey }) {
+      await checkWorkspace();
+      const activeCwd = resolveCwd(), started = generation;
+      const snapshot = rangeKey ? rangeSnapshots.get(`${operationId}\0${rangeKey}`) : snapshots.get(operationId);
       if (version !== undefined && snapshot?.version !== version) throw new Error('Expansion is unavailable for this file or snapshot');
       const file = Number.isSafeInteger(fileIndex) && snapshot?.files[fileIndex];
       if (!file || file.parseError || !['modified', 'renamed', 'copied'].includes(file.status) || [file.oldMode, file.newMode].some(mode => mode && !['100644', '100755'].includes(mode))) throw new Error('Expansion is unavailable for this file or snapshot');

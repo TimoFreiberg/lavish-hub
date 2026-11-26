@@ -85,6 +85,8 @@ async function sessionFixture(t, repoName = 'repo') {
 
 test('publish derives IDs and scope, and accepts explicit PR metadata', async t => {
   const f = await sessionFixture(t), hub = await f.start(f.repo);
+  assert.equal((await hub.request('status')).selected, 'diff');
+  for (const id of ['commits', 'changes']) assert.match(await hub.request('select', { id }, false), /Unknown view/);
   const source = path.join(f.dir, 'Review.html');
   await writeFile(source, '<p>Review</p>');
   const output = await f.run(['publish', source, '--workspace', f.repo]);
@@ -338,6 +340,9 @@ test('detaching a workspace-bound hub survives deleting the temporary workspace 
   assert.equal(modelPatch(snap.patch)[fileIndex].parseError, null, snap.patch);
   const expanded = await a.request('diffFiles', { operationId: snap.operationId, fileIndex });
   assert.equal(expanded.newFile.contents, 'changed\n');
+  const range = await a.request('diffRange', { operationId: snap.operationId, rev: snap.head });
+  assert.match(range.patch, /changed/);
+  assert.equal((await a.request('diffFiles', { operationId: snap.operationId, rangeKey: range.rangeKey, version: range.version, fileIndex })).newFile.contents, 'changed\n');
   const head = snap.commits.find(commit => commit.commitId === snap.head);
   assert.ok(head);
   const described = await a.request('describe', { changeId: head.changeId, commitId: head.commitId, expectedDescription: head.description, description: 'Detached description' });
@@ -462,7 +467,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     assert.equal(response.status, 200);
     return (await response.json()).result;
   };
-  assert.equal((await request('status')).selected, 'commits');
+  assert.equal((await request('status')).selected, 'diff');
   await run(process.execPath, [cli, '--workspace', repo, '--view', 'tasks'], { env });
   assert.equal((await request('status')).selected, 'tasks');
   await run(process.execPath, [cli, '--workspace', repo, '--open'], { env });
@@ -490,8 +495,8 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   assert.equal(await insideButton.getAttribute('data-unseen'), 'true');
   assert.equal(await insideButton.getAttribute('aria-describedby'), 'hub-nav-desc-new');
   // Reconciling the sidebar on a background publication keeps keyboard focus intact.
-  const commitsButton = browserPage.getByRole('button', { name: 'Commits', exact: true });
-  await commitsButton.focus();
+  const diffButton = browserPage.getByRole('button', { name: 'Diff', exact: true });
+  await diffButton.focus();
   await browserPage.evaluate(() => { window.focusedHubButton = document.activeElement; window.mountedTaskDraft = document.querySelector('#view textarea'); });
   const focusCheckDoc = path.join(dir, 'focus-check.md');
   await writeFile(focusCheckDoc, '# Focus check\n');
@@ -511,7 +516,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   await taskBeforeUnload.dismiss();
   assert.equal(await taskDraft.inputValue(), 'Unsaved task');
   await writeFile(path.join(repo, 'change.txt'), 'A changed line\n');
-  await run(process.execPath, [cli, '--workspace', repo, '--view', 'changes'], { env });
+  await run(process.execPath, [cli, '--workspace', repo, '--view', 'diff'], { env });
   const diffPage = await browser.newPage();
   await diffPage.goto(`${browserBase}/hub.html`);
   await diffPage.locator('.file-link[data-path="change.txt"]').waitFor();
@@ -582,7 +587,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await page.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Tasks', exact: true }).click({ noWaitAfter: true });
     for (let i = 0; i < 200 && attempts === 0; i++) await delay(30);
     assert.equal(attempts, 1);
-    await request('select', { id: 'changes' });
+    await request('select', { id: 'diff' });
     for (let i = 0; i < 200 && polls < 2; i++) await delay(30);
     assert.ok(polls >= 2, 'polling resumes while the destination is slow');
     await delay(2300);
@@ -597,7 +602,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
   }
   {
     // A repository view, so a snapshot failure is polled and shown on the page.
-    await request('navigate', { id: 'commits' });
+    await request('navigate', { id: 'diff' });
     const page = await browser.newPage();
     await page.addInitScript(() => { Object.defineProperty(window, 'navigation', { value: undefined }); });
     await page.goto(`${browserBase}/hub.html`);
@@ -642,13 +647,13 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     assert.equal(competing, 0, 'failed selection must not permit a competing navigation without a draft');
     assert.match(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
     failSelection = false;
-    await page.getByRole('button', { name: 'Changes', exact: true }).click();
-    await page.getByRole('button', { name: 'Changes', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Diff', exact: true }).click();
+    await page.getByRole('button', { name: 'Diff', exact: true }).waitFor();
     for (let i = 0; i < 200 && (await page.locator('#connection').textContent()).includes(notice); i++) await delay(30);
     assert.doesNotMatch(await page.locator('#connection').textContent(), /Navigation may still be in progress/);
     await request('select', { id: 'other-html' });
     await page.locator('#hub-toast').getByText('Selected: other.html').waitFor();
-    assert.equal(await page.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-current'), 'page');
+    assert.equal(await page.getByRole('button', { name: 'Diff', exact: true }).getAttribute('aria-current'), 'page');
     await page.close();
   }
   for (const fromHub of [true, false]) for (const disableNavigationApi of [true, false]) {
@@ -679,10 +684,10 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
       await notice.waitFor();
       let competing = 0;
       cancelled.on('request', req => { if (req.isNavigationRequest() && req.frame() === cancelled.mainFrame()) competing++; });
-      await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Changes', exact: true }).click({ noWaitAfter: true });
+      await cancelled.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'inside.html' : 'Diff', exact: true }).click({ noWaitAfter: true });
       await cancelled.getByRole('button', { name: 'Keep editing' }).click();
       await notice.waitFor();
-      await request('select', { id: fromHub ? 'other-html' : 'changes' });
+      await request('select', { id: fromHub ? 'other-html' : 'diff' });
       await delay(2300);
       assert.equal(competing, 0, 'cancelled selection must not permit a competing navigation');
       assert.equal(await (fromHub ? cancelled.getByRole('textbox', { name: 'Tasks Markdown' }) : cancelled.getByLabel('Frame draft')).inputValue(), 'Still here');
@@ -708,19 +713,19 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     await (await dialog).dismiss();
     await page.getByText('Navigation cancelled. Select a destination to try again.').waitFor();
     await page.evaluate(() => window.removeEventListener('beforeunload', window.blockLeave));
-    await request('select', { id: 'changes' });
-    await page.locator(fromHub ? '#hub-toast' : '#lavish-hub-toast').getByText('Selected: Changes').waitFor();
+    await request('select', { id: 'diff' });
+    await page.locator(fromHub ? '#hub-toast' : '#lavish-hub-toast').getByText('Selected: Diff').waitFor();
     assert.equal(new URL(page.url()).pathname.endsWith(fromHub ? '/hub.html' : `/${sibling}`), true);
     assert.equal(await page.getByRole(fromHub ? 'button' : 'link', { name: fromHub ? 'Tasks' : 'inside.html', exact: true }).getAttribute('aria-current'), 'page');
     await page.close();
   }
   await request('navigate', { id: 'inside' });
-  const changesHref = new URL(await siblingPage.getByRole('link', { name: 'Changes', exact: true }).getAttribute('href'), siblingPage.url());
+  const changesHref = new URL(await siblingPage.getByRole('link', { name: 'Diff', exact: true }).getAttribute('href'), siblingPage.url());
   assert.equal(changesHref.pathname, '/hub.html');
-  assert.equal(changesHref.searchParams.get('__lavish_hub_view'), 'changes');
-  await siblingPage.getByRole('link', { name: 'Changes', exact: true }).click();
-  await siblingPage.getByRole('button', { name: 'Changes', exact: true }).waitFor();
-  assert.equal((await request('status')).selected, 'changes');
+  assert.equal(changesHref.searchParams.get('__lavish_hub_view'), 'diff');
+  await siblingPage.getByRole('link', { name: 'Diff', exact: true }).click();
+  await siblingPage.getByRole('button', { name: 'Diff', exact: true }).waitFor();
+  assert.equal((await request('status')).selected, 'diff');
   await run(process.execPath, [cli, '--workspace', repo, '--view', 'inside'], { env });
   await siblingPage.locator('#hub-toast').getByText('Selected: inside.html').waitFor();
   await openInsideIfOlder(siblingPage);
@@ -920,7 +925,7 @@ test('hub foreground owner rejects duplicates and stops without a relay', async 
     const response = await fetch(`${second.url}/action`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': second.capability }, body: JSON.stringify({ operation, ...body }) });
     return { status: response.status, ...(await response.json()) };
   };
-  assert.equal((await secondRequest('status')).result.selected, 'commits');
+  assert.equal((await secondRequest('status')).result.selected, 'diff');
   assert.equal((await secondRequest('status')).result.available, false);
   assert.equal((await secondRequest('readDocument', { id: 'review' })).result.text, '# Review\n');
   const restartedDocuments = (await secondRequest('documents')).result.documents;

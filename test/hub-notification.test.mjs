@@ -17,7 +17,7 @@ test('notifications normalize diff, selection and sibling messages without snaps
   const result = formatNotificationBatch(batch, options);
   assert.equal(result.batchId, 'one'); assert.equal(result.hasDomContext, true);
   assert.equal('context' in result, false); assert.equal('reply' in result, false);
-  assert.deepEqual(result.prompts[0], { message: 'Fix this', artifact: { kind: 'diff', view: 'changes' }, diff: { file: 'new.js', oldPath: 'old.js', side: 'additions', startLine: 2, endLine: 3, revision: 'abc', range: 'base..head', quote: '```js\nline\n```' } });
+  assert.deepEqual(result.prompts[0], { message: 'Fix this', artifact: { kind: 'diff', view: 'diff' }, diff: { file: 'new.js', oldPath: 'old.js', side: 'additions', startLine: 2, endLine: 3, revision: 'abc', range: 'base..head', quote: '```js\nline\n```' } });
   assert.equal(result.prompts[1].message, 'unrecognized prefix');
   assert.deepEqual(result.prompts[2].artifact, { kind: 'document', id: 'review', document: '/review.html' });
   assert.deepEqual(result.prompts[2].selection, { text: 'some' });

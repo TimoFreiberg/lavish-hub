@@ -61,10 +61,40 @@ test('hub_jj_snapshot pins metadata, endpoints and patch through an external rew
   assert.match(snapshot.patch, /\+initial change/);
   assert.doesNotMatch(snapshot.patch, /later rewrite/);
   assert.equal('stat' in snapshot, false);
-  assert.match(snapshot.commits.find(commit => commit.commitId === snapshot.head).stat, /file/);
+  assert.equal('stat' in snapshot.commits.find(commit => commit.commitId === snapshot.head), false);
   const next = await readHubSnapshot(cwd);
   assert.match(next.patch, /\+later rewrite/);
   assert.notEqual(next.head, snapshot.head);
+});
+
+test('snapshot_includes_is_working_copy_without_per_commit_stat', async t => {
+  const cwd = await repo(t);
+  run(cwd, 'jj', 'config', 'set', '--repo', 'revset-aliases."trunk()"', 'main');
+  run(cwd, 'jj', 'new', '-m', 'second');
+  await writeFile(path.join(cwd, 'file'), 'second\n');
+  const binary = execFileSync('which', ['jj'], { encoding: 'utf8' }).trim();
+  const stub = await mkdtemp(path.join(os.tmpdir(), 'hub-jj-bin-'));
+  t.after(() => rm(stub, { recursive: true, force: true }));
+  const marker = path.join(stub, 'calls');
+  await writeFile(path.join(stub, 'jj'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${marker}'\nexec '${binary}' "$@"\n`);
+  await chmod(path.join(stub, 'jj'), 0o700);
+  const search = process.env.PATH;
+  process.env.PATH = `${stub}${path.delimiter}${search}`;
+  t.after(() => { process.env.PATH = search; });
+  const snapshot = await readHubSnapshot(cwd);
+  assert.equal(snapshot.headDisplay, '@');
+  assert.equal(snapshot.baseDisplay, 'fork_point(trunk() | @)');
+  assert.equal(snapshot.commits.length, 2);
+  assert.equal(snapshot.commits.find(commit => commit.commitId === snapshot.head).isWorkingCopy, true);
+  assert.equal(snapshot.commits.find(commit => commit.commitId !== snapshot.head).isWorkingCopy, false);
+  assert.ok(snapshot.commits.every(commit => !('stat' in commit)));
+  const calls = await readFile(marker, 'utf8');
+  assert.doesNotMatch(calls, /--stat/);
+  assert.equal(calls.split('\n').filter(line => /\bdiff\b/.test(line)).length, 1);
+  const target = { rev: { input: 'feature', revset: '@' }, base: { input: 'main', revset: 'main' } };
+  const named = await readHubSnapshot(cwd, { target });
+  assert.equal(named.headDisplay, 'feature');
+  assert.equal(named.baseDisplay, 'fork_point((main) | (feature))');
 });
 
 test('snapshot requests share cached work and refresh after an external rewrite', async t => {
@@ -109,6 +139,54 @@ test('diff expansion reads only bounded files from the requested pinned snapshot
   await writeFile(path.join(cwd, 'file'), 'x'.repeat(1024 * 1024 + 1));
   const large = await jj.snapshot({ force: true });
   await assert.rejects(jj.diffFiles({ operationId: large.operationId, fileIndex: 0 }), /too large/);
+});
+
+test('diff_range_single_and_subrange_and_expansion', async t => {
+  const cwd = await repo(t);
+  run(cwd, 'jj', 'config', 'set', '--repo', 'revset-aliases."trunk()"', 'main');
+  for (let i = 1; i <= 5; i++) {
+    run(cwd, 'jj', 'new', '-m', `change ${i}`);
+    await writeFile(path.join(cwd, 'file'), `change ${i}\n`);
+  }
+  const binary = execFileSync('which', ['jj'], { encoding: 'utf8' }).trim();
+  const stub = await mkdtemp(path.join(os.tmpdir(), 'hub-jj-bin-'));
+  t.after(() => rm(stub, { recursive: true, force: true }));
+  const marker = path.join(stub, 'calls');
+  await writeFile(path.join(stub, 'jj'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${marker}'\nexec '${binary}' "$@"\n`);
+  await chmod(path.join(stub, 'jj'), 0o700);
+  const search = process.env.PATH;
+  process.env.PATH = `${stub}${path.delimiter}${search}`;
+  t.after(() => { process.env.PATH = search; });
+  const jj = createHubJj(cwd), snapshot = await jj.snapshot();
+  const { operationId, base, head } = snapshot;
+  const single = await jj.diffRange({ operationId, rev: head });
+  assert.match(single.patch, /\+change 5/);
+  assert.match(single.patch, /-change 4/);
+  const expanded = await jj.diffFiles({ operationId, rangeKey: single.rangeKey, version: single.version, fileIndex: 0 });
+  assert.equal(expanded.oldFile.contents, 'change 4\n');
+  assert.equal(expanded.newFile.contents, 'change 5\n');
+  await assert.rejects(jj.diffFiles({ operationId, rangeKey: single.rangeKey, version: snapshot.version, fileIndex: 0 }), /unavailable/);
+  const subrange = await jj.diffRange({ operationId, from: base, to: head });
+  assert.match(subrange.patch, /-base/);
+  assert.match(subrange.patch, /\+change 5/);
+  assert.equal((await jj.diffFiles({ operationId, rangeKey: subrange.rangeKey, version: subrange.version, fileIndex: 0 })).oldFile.contents, 'base\n');
+  const calls = await readFile(marker, 'utf8');
+  assert.ok(calls.includes(`--at-operation ${operationId} --config diff.git.show-path-prefix=true diff -r ${head} --git`));
+  assert.ok(calls.includes(`--at-operation ${operationId} --config diff.git.show-path-prefix=true diff --from ${base} --to ${head} --git`));
+  for (const invalid of [
+    { operationId: 'bad', rev: head }, { operationId, rev: 'bad' }, { operationId, from: base },
+    { operationId, to: head }, { operationId, from: base, to: head, rev: head },
+    { operationId, from: base, to: head, rev: null }, { operationId, rev: [head] },
+  ]) await assert.rejects(jj.diffRange(invalid), /Invalid diff range/);
+  const ids = [base, ...snapshot.commits.map(commit => commit.commitId)];
+  for (const from of ids) for (const to of ids) {
+    if (from !== base || to !== head) await jj.diffRange({ operationId, from, to });
+  }
+  await assert.rejects(jj.diffFiles({ operationId, rangeKey: subrange.rangeKey, version: subrange.version, fileIndex: 0 }), /unavailable/);
+  assert.equal((await jj.diffFiles({ operationId, version: snapshot.version, fileIndex: 0 })).newFile.contents, 'change 5\n');
+  const last = await jj.diffRange({ operationId, rev: head });
+  jj.setTarget(undefined);
+  await assert.rejects(jj.diffFiles({ operationId, rangeKey: last.rangeKey, version: last.version, fileIndex: 0 }), /unavailable/);
 });
 
 test('retargeting rejects expansion from a stale snapshot at the same operation', async t => {
