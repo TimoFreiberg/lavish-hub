@@ -160,6 +160,11 @@ test('hub description actions serialize and do not report a stale competing save
   assert.equal(first.status, 'saved'); assert.equal(second.reason, 'stale');
 });
 
+test('leading-hyphen revisions reach the jj revset parser', async t => {
+  const cwd = await repo(t);
+  await assert.rejects(resolveTargetRev(cwd, '--help'), /Failed to parse revset/);
+});
+
 test('target revset tracks bookmark moves live and change IDs across amends and rebases', async t => {
   const cwd = await repo(t);
   for (const rev of ['@', '@-', 'parents(@)', 'default@', 'foo(@)']) assert.equal(isWorkingCopyRev(rev), true, rev);
@@ -250,7 +255,7 @@ test('describe works on mutable target commits with ignore-working-copy and reje
   assert.doesNotMatch(calls, /\bstatus\b/);
   assert.match(calls, /--ignore-working-copy op log/);
   assert.match(calls, /--ignore-working-copy describe -r/);
-  assert.match(calls, /--ignore-working-copy log -r/);
+  assert.match(calls, /--ignore-working-copy log -r=/);
   const root = run(cwd, 'jj', 'log', '-r', 'root()', '--no-graph', '-T', 'change_id ++ " " ++ commit_id');
   const [changeId, commitId] = root.split(' ');
   assert.equal((await jj.describe({ changeId, commitId, expectedDescription: '', description: 'no' })).reason, 'immutable');

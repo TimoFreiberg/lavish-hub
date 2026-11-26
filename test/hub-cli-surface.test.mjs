@@ -63,6 +63,47 @@ test('target command argument parsing', () => {
   assert.deepEqual(parseArgs(['target', '@-', '--base', 'main', '--title', ' Review ', '--session', 's']), { hub: 'target', rev: '@-', base: 'main', title: 'Review', session: 's' });
   assert.deepEqual(parseArgs(['target', '--no-base']), { hub: 'target', noBase: true });
   for (const args of [['target'], ['target', '--base', 'a', '--no-base'], ['target', '--rev', 'x'], ['target', '--title', '\n']]) assert.throws(() => parseArgs(args));
+  assert.throws(() => parseArgs(['target', '--', '-rev']), /unknown argument/);
+});
+
+test('value-taking CLI flags accept leading hyphens and inline = values', () => {
+  assert.deepEqual(
+    parseArgs(['listen', '--title', '-draft', '--rev', '-rev', '--base', '-base', '--workspace', '-dir']),
+    { hub: 'listen', title: '-draft', rev: '-rev', base: '-base', workspace: '-dir' },
+  );
+  assert.deepEqual(
+    parseArgs(['listen', '--title=--draft=v1', '--rev=-rev', '--base=--base', '--workspace=-dir']),
+    { hub: 'listen', title: '--draft=v1', rev: '-rev', base: '--base', workspace: '-dir' },
+  );
+  assert.deepEqual(
+    parseArgs(['publish', 'review.html', '--metadata-file', '-meta.json', '--base-commit', '-abc']),
+    { hub: 'publish', file: 'review.html', metadataFile: '-meta.json', baseCommit: '-abc' },
+  );
+  assert.deepEqual(
+    parseArgs(['publish', 'review.html', '--head-commit=-def', '--source-url=-url']),
+    { hub: 'publish', file: 'review.html', headCommit: '-def', sourceUrl: '-url' },
+  );
+  assert.deepEqual(parseArgs(['--view=-view']), { hub: 'status', view: '-view' });
+  assert.deepEqual(parseArgs(['context', '--batch', '-batch', '--workspace=-dir']), { hub: 'context', batchId: '-batch', workspace: '-dir' });
+  assert.deepEqual(parseArgs(['reply', '--batch=-batch', '--workspace', '-dir', '--agent-reply=--hello']), { hub: 'reply', batchId: '-batch', workspace: '-dir', text: '--hello' });
+  assert.deepEqual(parseArgs(['reply', 'page-id', '--agent-reply=-draft']), { reply: true, page: 'page-id', text: '-draft' });
+
+  for (const args of [
+    ['listen', '--title='],
+    ['listen', '--title'],
+    ['listen', '--rev='],
+    ['context', '--batch='],
+    ['reply', '--batch', 'id', '--text='],
+  ]) assert.throws(() => parseArgs(args), /requires one/);
+  for (const args of [
+    ['listen', '--open=true'],
+    ['listen', '--reopen=1'],
+    ['listen', '--no-base=1'],
+    ['publish', 'review.html', '--no-scope=1'],
+    ['reply', '--batch', 'id', '--=text'],
+  ]) assert.throws(() => parseArgs(args), /unknown argument/);
+  assert.throws(() => parseArgs(['status', '--session', '-bad']), /Invalid session ID/);
+  assert.throws(() => parseArgs(['status', '--session=-bad']), /Invalid session ID/);
 });
 
 test('hub-only CLI rejects removed commands', () => {

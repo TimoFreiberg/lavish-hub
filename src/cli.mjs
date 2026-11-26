@@ -48,6 +48,19 @@ function assertSessionListenOptions(options) {
   if (options.rev === undefined) throw new UsageError('listen with --session requires --rev');
 }
 
+function splitFlag(arg) {
+  if (!arg.startsWith('--')) return { flag: arg, inlineValue: undefined };
+  const eq = arg.indexOf('=');
+  if (eq === -1) return { flag: arg, inlineValue: undefined };
+  return { flag: arg.slice(0, eq), inlineValue: arg.slice(eq + 1) };
+}
+
+function readFlagValue(args, index, flag, inlineValue, errorMessage = `${flag} requires one value`) {
+  const value = inlineValue ?? args[index + 1];
+  if (!value) throw new UsageError(errorMessage);
+  return { value, nextIndex: inlineValue !== undefined ? index : index + 1 };
+}
+
 export function parseArgs(args) {
   if (args.length === 1 && args[0] === '--help') return { help: true };
   const target = args[0] && !args[0].startsWith('--') ? args.shift() : 'status';
@@ -57,17 +70,27 @@ export function parseArgs(args) {
   }
   if (target === 'reply' || target === 'context') {
     if (args.length === 1 && args[0] === '--help') return { commandHelp: target };
-    if (target === 'reply' && args.length === 3 && !args[0].startsWith('-') && args[1] === '--agent-reply' && args[2]) return { reply: true, page: args[0], text: args[2] };
+    if (target === 'reply' && args[0] && !args[0].startsWith('-')) {
+      if (args.length === 3 && args[1] === '--agent-reply' && args[2]) return { reply: true, page: args[0], text: args[2] };
+      if (args.length === 2 && args[1].startsWith('--agent-reply=') && args[1].length > '--agent-reply='.length) {
+        return { reply: true, page: args[0], text: args[1].slice('--agent-reply='.length) };
+      }
+    }
     const result = { hub: target };
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (['--batch', '--workspace', '--session'].includes(arg)) {
-        const key = arg === '--batch' ? 'batchId' : arg.slice(2);
-        if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
-        result[key] = args[++i];
-      } else if (target === 'reply' && ['--text', '--agent-reply', '--'].includes(arg)) {
-        if (result.text !== undefined || !args[i + 1]) throw new UsageError(`${arg} requires one text value`);
-        result.text = args[++i];
+      const { flag, inlineValue } = splitFlag(arg);
+      if (['--batch', '--workspace', '--session'].includes(flag)) {
+        const key = flag === '--batch' ? 'batchId' : flag.slice(2);
+        if (result[key] !== undefined) throw new UsageError(`${flag} requires one value`);
+        const read = readFlagValue(args, i, flag, inlineValue);
+        result[key] = read.value;
+        i = read.nextIndex;
+      } else if (target === 'reply' && (['--text', '--agent-reply'].includes(flag) || arg === '--')) {
+        if (result.text !== undefined) throw new UsageError(`${flag} requires one text value`);
+        const read = readFlagValue(args, i, flag, inlineValue, `${flag} requires one text value`);
+        result.text = read.value;
+        i = read.nextIndex;
         if (arg === '--' && i !== args.length - 1) throw new UsageError('-- accepts one text value');
       } else if (target === 'reply' && result.text === undefined && !arg.startsWith('--')) result.text = arg;
       else throw new UsageError(`unknown argument ${arg}`);
@@ -85,21 +108,24 @@ export function parseArgs(args) {
     if (!result.file || result.file.startsWith('-')) throw new UsageError('publish requires a file');
   }
   if (command === 'target' && args[0] && !args[0].startsWith('-')) result.rev = args.shift();
+  const valueFlags = new Set(['--workspace', '--session']);
+  if (command === 'publish') for (const f of ['--id', '--title', '--metadata-file', '--repo', '--base-commit', '--head-commit', '--source-url']) valueFlags.add(f);
+  if (command === 'tasks') valueFlags.add('--file');
+  if (command === 'listen' || command === 'target') for (const f of ['--base', '--title']) valueFlags.add(f);
+  if (command === 'listen') valueFlags.add('--rev');
+  if (command === 'status') valueFlags.add('--view');
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--workspace') {
-      if (result.workspace || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--workspace requires one value');
-      result.workspace = args[++i];
-    } else if (arg === '--session' || (command === 'publish' && ['--id', '--title', '--metadata-file', '--repo', '--base-commit', '--head-commit', '--source-url'].includes(arg)) || (command === 'tasks' && arg === '--file') || (['listen', 'target'].includes(command) && ['--base', '--title'].includes(arg)) || (command === 'listen' && arg === '--rev')) {
-      const key = arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
-      if (result[key] !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError(`${arg} requires one value`);
-      result[key] = args[++i];
+    const { flag, inlineValue } = splitFlag(arg);
+    if (valueFlags.has(flag)) {
+      const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      if (result[key] !== undefined) throw new UsageError(`${flag} requires one value`);
+      const read = readFlagValue(args, i, flag, inlineValue);
+      result[key] = read.value;
+      i = read.nextIndex;
     } else if (['listen', 'target'].includes(command) && arg === '--no-base') {
       if (result.noBase) throw new UsageError('--no-base given twice');
       result.noBase = true;
-    } else if (command === 'status' && arg === '--view') {
-      if (result.view !== undefined || !args[i + 1] || args[i + 1].startsWith('-')) throw new UsageError('--view requires one value');
-      result.view = args[++i];
     } else if ((arg === '--open' && ['listen', 'status', 'publish'].includes(command)) || (arg === '--reopen' && command === 'listen') || (arg === '--no-scope' && command === 'publish')) {
       const key = arg === '--no-scope' ? 'noScope' : arg.slice(2);
       if (result[key]) throw new UsageError(`${arg} given twice`);
@@ -122,7 +148,7 @@ async function reply(page, text) {
   const env = { ...runtimeEnv(), LAVISH_AXI_PORT: String(await resolveLavishPort()) };
   await createLavishClient({ env }).verifyIfRunning();
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [lavishCli, 'reply', page, '--agent-reply', text], { env, stdio: 'inherit' });
+    const child = spawn(process.execPath, [lavishCli, 'reply', page, `--agent-reply=${text}`], { env, stdio: 'inherit' });
     child.once('error', reject);
     child.once('exit', (code, signal) => {
       if (signal) { process.kill(process.pid, signal); return; }

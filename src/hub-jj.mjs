@@ -50,7 +50,7 @@ async function operation(cwd, { ignoreWorkingCopy = false } = {}) {
 }
 
 async function rows(cwd, op, revset) {
-  return parseRows(await run(cwd, ['--at-operation', op, 'log', '-r', revset, '--no-graph', '-T', template]));
+  return parseRows(await run(cwd, ['--at-operation', op, 'log', `-r=${revset}`, '--no-graph', '-T', template]));
 }
 
 export function escapeJjString(value) {
@@ -71,7 +71,7 @@ export function isWorkingCopyRev(input) {
 
 export async function resolveTargetRev(cwd, input, { ignoreWorkingCopy = false } = {}) {
   if (typeof input !== 'string' || !input.trim() || /[\x00-\x1f\x7f]/.test(input)) throw new Error('Invalid revision');
-  const log = async revset => parseRows(await run(cwd, [...(ignoreWorkingCopy ? ['--ignore-working-copy'] : []), 'log', '-r', revset, '--no-graph', '-T', template]));
+  const log = async revset => parseRows(await run(cwd, [...(ignoreWorkingCopy ? ['--ignore-working-copy'] : []), 'log', `-r=${revset}`, '--no-graph', '-T', template]));
   const single = items => {
     if (!items.length) throw new Error('Revision not found');
     if (items.length !== 1) throw new Error('Revision must resolve to a single commit');
@@ -170,7 +170,7 @@ export function createHubJj(cwd, { validate = async () => true, beforeDescribe, 
     async summary() {
       await checkWorkspace();
       const activeCwd = resolveCwd(), rev = currentTarget?.rev;
-      const log = async revset => parseRows(await run(activeCwd, [...(rev ? ['--ignore-working-copy'] : []), 'log', '-r', revset, '--no-graph', '-T', template]));
+      const log = async revset => parseRows(await run(activeCwd, [...(rev ? ['--ignore-working-copy'] : []), 'log', `-r=${revset}`, '--no-graph', '-T', template]));
       let result = await log(rev?.revset || '@-');
       if (result.length !== 1) throw new Error('Working-copy parent unavailable');
       let description = result[0].description.split('\n')[0].slice(0, 240);
