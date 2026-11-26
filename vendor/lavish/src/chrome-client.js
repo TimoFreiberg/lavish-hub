@@ -219,6 +219,7 @@ const whiteboardCloseButton = /** @type {HTMLButtonElement} */ (document.getElem
 const whiteboardError = /** @type {HTMLDivElement} */ (document.getElementById("whiteboardError"));
 const artifactSrc = frame.dataset.artifactSrc || frame.getAttribute?.("data-artifact-src") || frame.src || "";
 let pendingInitialView = typeof sessionData.initialView === "string" ? sessionData.initialView : "";
+let pendingInitialViewParams = sessionData.initialViewParams || null;
 let pendingUrlChange = null;
 // Protocol 1 keeps the generation in the injected SDK context rather than in
 // the document URL.  In particular, a real user-authored `index.html` must not
@@ -668,11 +669,16 @@ function destinationRecord(bindingOrDestination) {
 
 function stripOneShotViewParameter(value) {
   const candidate = String(value || "");
-  if (!candidate || !candidate.includes("__lavish_hub_view=")) return candidate;
+  if (!candidate || !candidate.includes("__lavish_hub_")) return candidate;
   try {
     const parsed = new URL(candidate, location.href);
-    if (!parsed.searchParams.has("__lavish_hub_view")) return candidate;
-    parsed.searchParams.delete("__lavish_hub_view");
+    const keys = ["view", "file", "line", "side", "change"].map(
+      (key) => `__lavish_hub_${key}`,
+    );
+    if (!keys.some((key) => parsed.searchParams.has(key))) return candidate;
+    for (const key of keys) {
+      parsed.searchParams.delete(key);
+    }
     return parsed.pathname + parsed.search + parsed.hash;
   } catch {
     return candidate;
@@ -5036,8 +5042,16 @@ async function replaceArtifactFrame({ recoveryRetry = false, historicalPage = nu
     const path = hashIndex < 0 ? selectedDestination : selectedDestination.slice(0, hashIndex);
     const fragment = hashIndex < 0 ? "" : selectedDestination.slice(hashIndex);
     const sep = path.includes("?") ? "&" : "?";
-    frameDestination = `${path}${sep}__lavish_hub_view=${encodeURIComponent(pendingInitialView)}${location.hash || fragment}`;
+    const params = new URLSearchParams({ __lavish_hub_view: pendingInitialView });
+    for (const key of ["file", "line", "side", "change"]) {
+      if (pendingInitialViewParams?.[key]) params.set(`__lavish_hub_${key}`, pendingInitialViewParams[key]);
+    }
+    frameDestination = `${path}${sep}${params}${location.hash || fragment}`;
     pendingInitialView = "";
+    pendingInitialViewParams = null;
+    const cleaned = new URL(location.href);
+    for (const key of ["view", "file", "line", "side", "change"]) cleaned.searchParams.delete(key);
+    window.history.replaceState(window.history.state, "", cleaned.pathname + cleaned.search + cleaned.hash);
   } else if (location.hash && !frameDestination.includes("#")) {
     frameDestination += location.hash;
   }

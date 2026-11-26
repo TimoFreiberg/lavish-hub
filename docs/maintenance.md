@@ -38,7 +38,11 @@ without the grant, including one still running from an earlier build of the same
 release, and refuse it. Closing the connection after every HTTP response, and the
 heartbeat message on live-event WebSockets with the chrome's silence check, are
 further local differences: upstream reuses connections, which stalls the hub behind
-a port forward that does not relay the server's close.
+a port forward that does not relay the server's close. Direct session links also
+rely on local `initialViewParams` validation in `server.js` (`file`, `line`,
+`side`, and `change`, paired with `view`) and one-shot `__lavish_hub_*`
+forwarding in `chrome-client.js`. The chrome strips those parameters from stored
+destinations and the outer URL after forwarding them to the artifact frame.
 
 The batch-reply patch returns `batch_id` on consuming polls and accepts it on
 `POST /api/:key/agent-reply`, binding `Done` receipts to that batch (while unbound

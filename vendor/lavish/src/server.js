@@ -2153,12 +2153,32 @@ export async function serve({
       res.setHeader("content-security-policy", "frame-ancestors 'none'");
       const rawView = typeof req.query?.view === "string" ? req.query.view : "";
       const initialView = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(rawView) ? rawView : "";
+      const initialViewParams = {};
+      if (initialView) {
+        const file = typeof req.query?.file === "string" ? req.query.file.trim() : "";
+        if (
+          file &&
+          file.length <= 512 &&
+          !Array.from(file).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+        ) {
+          initialViewParams.file = file;
+        }
+        const line = req.query?.line;
+        if (typeof line === "string" && /^[1-9]\d{0,7}(?:-[1-9]\d{0,7})?$/.test(line)) {
+          initialViewParams.line = line;
+        }
+        const side = req.query?.side;
+        if (side === "old" || side === "new") initialViewParams.side = side;
+        const change = req.query?.change;
+        if (typeof change === "string" && /^[a-zA-Z0-9]{1,64}$/.test(change)) initialViewParams.change = change;
+      }
       res.type("html").send(
         createChromeHtml(session, {
           layoutGateEnabled: shouldEnableLayoutGate(req.query || {}),
           faviconTag,
           title: title ? `${title} · Lavish` : "Lavish Editor",
           initialView,
+          initialViewParams,
           artifactRevision: chromeLoad.artifact_revision,
           artifactLoadToken: chromeLoad.artifact_load_token,
           artifactLoadSequence: chromeLoad.artifact_load_sequence,
@@ -4473,6 +4493,7 @@ export function createChromeHtml(
     faviconTag = LAVISH_DEFAULT_FAVICON,
     title = "Lavish Editor",
     initialView = "",
+    initialViewParams = {},
     artifactRevision = 0,
     artifactLoadToken = "",
     artifactLoadSequence = 0,
@@ -4515,6 +4536,7 @@ export function createChromeHtml(
     pageProtocol: 1,
     entryPage: normalizeReviewPageIdentity(path.basename(session.file), session.file),
     ...(initialView ? { initialView } : {}),
+    ...(Object.keys(initialViewParams).length ? { initialViewParams } : {}),
   });
   const { head: pathHead, tail: pathTail } = displayPathParts(session.file);
   const entryArtifactPath = artifactEntryUrl(session);

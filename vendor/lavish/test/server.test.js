@@ -2053,6 +2053,33 @@ test("serving an artifact with a revision registry adds one script tag and chang
   }
 });
 
+test("session route validates initial view parameters", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "lavish-view-"));
+  const artifact = path.join(dir, "artifact.html");
+  await writeFile(artifact, "<!doctype html><html><body>test</body></html>");
+  const server = await serve({ port: 0, stateFile: path.join(dir, "state.json"), version: "9.9.9-test" });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const { key } = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: artifact }),
+    }).then((res) => res.json());
+    const read = async (query) =>
+      chromeSessionData(await fetch(`${base}/session/${key}?${query}`).then((res) => res.text()));
+    const valid = await read("view=changes&file=%20src%2Fmain.js%20&line=10-20&side=old&change=abc123");
+    assert.equal(valid.initialView, "changes");
+    assert.deepEqual(valid.initialViewParams, { file: "src/main.js", line: "10-20", side: "old", change: "abc123" });
+    const invalid = await read("view=changes&file=bad%00path&line=0-2&side=other&change=bad-id");
+    assert.equal(invalid.initialViewParams, undefined);
+    const noView = await read("view=bad%20view&file=ok&line=1");
+    assert.equal(noView.initialViewParams, undefined);
+  } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // Regression: with no framing headers an attacker page could frame the chrome
 // to obtain a window handle to it (and a clickjacking surface over Send).
 test("the session chrome page refuses to be framed", async () => {
