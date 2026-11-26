@@ -159,6 +159,18 @@ when navigating to a section. Copy that URL to open the same view and section.
 Back and Forward move between views and sections. Fragment links in Markdown and
 published HTML stay on the page, even when the HTML uses a `<base href>`.
 
+Published documents and Tasks can link to any hub view with `?view=<id>`
+(`commits`, `changes`, `tasks`, or a published document ID). To jump to a
+changed file, use `?view=changes&file=<path>`, optionally adding `&line=42` or
+`&line=10-20` and `&side=old` or `&side=new` (defaulting to the new side, except
+for deleted files). When a requested line falls outside the patch hunks, the
+diff view loads the full file and expands unchanged context when available. To
+jump to a commit in Commits, use `?view=commits&change=<changeId>` with a full
+change ID or unique prefix. The same links work with `hub.html?view=...` and as
+query parameters on the direct Lavish session URL. Missing, invalid, or
+ambiguous targets show a notice, and target parameters are consumed once so
+refreshing or polling does not jump again.
+
 The hub asks before leaving for a published HTML page when a hub draft or an
 unqueued diff comment is unsaved. Published pages similarly ask after user input
 or changes outside the navigation. In the in-page confirmation, choose

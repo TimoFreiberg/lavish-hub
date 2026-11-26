@@ -52,6 +52,28 @@ async function updatePage(browser, controls = '<label>Draft <input id="draft" va
 }
 const advance = (page, update = {}) => page.evaluate(update => { Object.assign(globalThis.__doc, { version: 'v2', ...update }); document.dispatchEvent(new Event('visibilitychange')); }, update);
 
+test('published HTML deep links validate views and guard authored edits', { timeout: 30000 }, async () => {
+  const page = await updatePage(browser, '<label>Draft <input id="draft" value="initial"></label><a id="unknown" href="?view=missing">unknown</a><a id="target" href="?view=changes&file=a.txt&line=3">target</a><a id="external" href="https://example.com/">external</a>');
+  assert.equal(await page.locator('#target').getAttribute('data-lavish-action'), '');
+  assert.equal(await page.locator('#external').getAttribute('data-lavish-action'), null);
+  await page.locator('#draft').fill('unsaved');
+  await page.evaluate(() => { globalThis.__confirmCount = 0; globalThis.confirmDraftNavigation = async () => { globalThis.__confirmCount++; return false; }; });
+  await page.locator('#unknown').click();
+  assert.equal(await page.locator('#lavish-hub-sidebar [role=status]').textContent(), 'Unknown view "missing".');
+  assert.equal(await page.evaluate(() => __confirmCount), 0);
+  await page.locator('#target').click();
+  await page.waitForFunction(() => __confirmCount === 1);
+  assert.equal(await page.locator('#draft').inputValue(), 'unsaved');
+  await page.evaluate(() => { globalThis.confirmDraftNavigation = async () => true; });
+  const navigation = page.waitForEvent('framenavigated');
+  await page.locator('#target').click(); await navigation;
+  const url = new URL(page.url());
+  assert.equal(url.pathname, '/hub.html');
+  assert.equal(url.searchParams.get('__lavish_hub_view'), 'changes');
+  assert.equal(url.searchParams.get('__lavish_hub_file'), 'a.txt');
+  assert.equal(url.searchParams.get('__lavish_hub_line'), '3');
+});
+
 test('published HTML sidebar auto-reloads when clean and version advances', { timeout: 30000 }, async t => {
   const page = await updatePage(browser);
   const navigation = page.waitForEvent('framenavigated'); await advance(page); await navigation;

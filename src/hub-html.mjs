@@ -176,7 +176,7 @@ function siblingSidebarClient(c) {
     const response = await fetch(c.url + '/action', { method: 'POST', headers: { 'content-type': 'application/json', 'x-lavish-capability': c.capability }, body: JSON.stringify({ ...body, operation }), ...(signal ? { signal } : {}) });
     const data = await response.json().catch(() => ({}));
     if (response.status === 403 && data.error === 'Unauthorized' && !dirty && !leaving && performance.now() > 1e4) { leaving = true; pause(); location.reload(); }
-    if (!response.ok) throw Error('Hub action failed');
+    if (!response.ok) throw Error(data.error || 'Hub action failed');
     return data.result;
   };
   for (const a of nav.querySelectorAll('a')) a.href = new URL(a.getAttribute('href'), location.href).href;
@@ -211,6 +211,36 @@ function siblingSidebarClient(c) {
       }
     }
   }
+  function parseDeepLink(href) {
+    if (typeof href !== 'string' || !/^(?:hub\.html)?\?/.test(href)) return null;
+    const url = new URL(href, 'https://hub.invalid/'), view = url.searchParams.get('view') || '';
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(view)) return null;
+    return { view, params: url.searchParams };
+  }
+  function markDeepLinks() {
+    for (const link of document.querySelectorAll('a[href]')) {
+      if (!link.closest('#lavish-hub-sidebar') && parseDeepLink(link.getAttribute('href'))) link.setAttribute('data-lavish-action', '');
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', markDeepLinks, { once: true });
+  else markDeepLinks();
+  document.addEventListener('click', e => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest?.('a[href]');
+    if (!a || a.closest('#lavish-hub-sidebar') || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
+    const target = parseDeepLink(a.getAttribute('href'));
+    if (!target) return;
+    e.preventDefault();
+    const link = [...nav.querySelectorAll('a[data-hub-id]')].find(item => item.dataset.hubId === target.view);
+    if (!link && !['commits', 'changes', 'tasks'].includes(target.view)) {
+      feedback.dataset.error = ''; feedback.textContent = `Unknown view "${target.view}".`; return;
+    }
+    const sibling = link && new URL(link.href).pathname.endsWith('.html') && !new URL(link.href).pathname.endsWith('/hub.html');
+    const params = new URLSearchParams();
+    for (const key of ['view', 'file', 'line', 'side', 'change']) if (target.params.has(key)) params.set(`__lavish_hub_${key}`, target.params.get(key));
+    const destination = sibling ? link.href : new URL('hub.html?' + params, location.href).href;
+    navigateTo(target.view, destination, link?.querySelector('.nav-label')?.textContent || target.view);
+  });
   nav.addEventListener('click', e => {
     const reload = e.target.closest('button.nav-reload');
     if (reload && nav.contains(reload)) { e.preventDefault(); if (!navigating && !leaving && pendingUpdate) applyUpdate(pendingUpdate); return; }

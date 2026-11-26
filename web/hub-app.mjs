@@ -80,6 +80,20 @@ async function requireBundle(name, globalName, view, generation) {
 let selected = 'commits', snapshot, documents = [], busy = false;
 const initialParams = new URLSearchParams(location.search);
 let initialView = initialParams.get('__lavish_hub_view') || initialParams.get('view') || '';
+const initialTarget = name => initialParams.get(`__lavish_hub_${name}`) || initialParams.get(name) || '';
+let pendingDeepLink = initialView ? { view: initialView, file: initialTarget('file'), line: initialTarget('line'), side: initialTarget('side'), change: initialTarget('change') } : null;
+let pendingDeepLinkNotice = '';
+if (initialView) {
+  for (const name of ['view', 'file', 'line', 'side', 'change']) { initialParams.delete(name); initialParams.delete(`__lavish_hub_${name}`); }
+  const search = initialParams.toString();
+  history.replaceState(history.state, '', location.pathname + (search ? `?${search}` : '') + location.hash);
+}
+function parseHubDeepLink(href) {
+  if (typeof href !== 'string' || !/^(?:hub\.html)?\?/.test(href)) return null;
+  const url = new URL(href, 'https://hub.invalid/'), view = url.searchParams.get('view') || '';
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(view)) return null;
+  return { view, file: url.searchParams.get('file') || '', line: url.searchParams.get('line') || '', side: url.searchParams.get('side') || '', change: url.searchParams.get('change') || '' };
+}
 const repoName = config.repoName || config.workspaceName || config.workspace?.split(/[\\/]/).filter(Boolean).pop() || '';
 let sessionTitle = config.sessionTitle || '';
 const identityName = () => config.session || sessionTitle ? repoName : (config.workspaceName || repoName);
@@ -335,7 +349,8 @@ function hasUnsavedDrafts() {
 window.addEventListener('beforeunload', event => {
   if (!leavingConfirmed && hasUnsavedDrafts()) { event.preventDefault(); event.returnValue = ''; }
 });
-async function select(id, { hash = '', fromPopstate = false } = {}) {
+async function select(id, { hash = '', fromPopstate = false, deepLink = false } = {}) {
+  if (!deepLink) { pendingDeepLink = null; pendingDeepLinkNotice = ''; }
   const currentHash = currentViewHash;
   const doc = documents.find(item => item.id === id);
   const leavesPage = doc?.sibling && doc.source?.toLowerCase().endsWith('.html');
@@ -466,11 +481,16 @@ async function refresh(force = false) {
       const candidate = initialView;
       initialView = '';
       if (Object.hasOwn(labels, candidate) || documents.some(doc => doc.id === candidate)) requestedInitialView = candidate;
+      else { pendingDeepLinkNotice = `Unknown view "${candidate}".`; pendingDeepLink = null; }
     }
     const targetSelection = requestedInitialView || state.selected;
     if (!rendered && targetSelection) selected = targetSelection;
     noteUpdates(state, documents);
-    const selectedDoc = documents.find(item => item.id === selected);
+    let selectedDoc = documents.find(item => item.id === selected);
+    if (!rendered && pendingDeepLinkNotice && selectedDoc?.sibling) {
+      selected = 'commits';
+      selectedDoc = null;
+    }
     if (!rendered && selectedDoc?.sibling && selectedDoc.source?.toLowerCase().endsWith('.html')) {
       pauseRevision = pauseRefresh();
       if (requestedInitialView && requestedInitialView !== state.selected) await action('navigate', { id: requestedInitialView }).catch(() => {});
@@ -589,6 +609,20 @@ async function refresh(force = false) {
 function draft(key, initial) { if (!drafts.has(key)) drafts.set(key, initial); return drafts.get(key); }
 function editor(label, value, onInput) { const area = el('textarea', null, { 'aria-label': label, rows: '5', spellcheck: 'false' }); area.value = value; area.addEventListener('input', () => onInput(area.value)); return area; }
 function notice(text) { return el('p', text, { role: 'status', class: 'notice' }); }
+function renderDeepLinkNotice() {
+  const view = document.querySelector('#view');
+  view.querySelector('.deep-link-notice')?.remove();
+  if (pendingDeepLinkNotice) { const node = notice(pendingDeepLinkNotice); node.classList.add('deep-link-notice'); view.prepend(node); }
+}
+async function navigateDeepLink(target) {
+  if (!Object.hasOwn(labels, target.view) && !documents.some(doc => doc.id === target.view)) {
+    pendingDeepLinkNotice = `Unknown view "${target.view}".`; renderDeepLinkNotice(); return;
+  }
+  pendingDeepLinkNotice = '';
+  pendingDeepLink = target.file || target.change ? target : null;
+  if (selected === target.view && !snapshotLoading()) await renderViewKeepingFocus();
+  else await select(target.view, { deepLink: true });
+}
 let renderGeneration = 0;
 async function renderView(focusChangeId) {
   const rendering = renderViewContent(focusChangeId); const generation = renderGeneration;
@@ -599,6 +633,7 @@ async function renderViewContent(focusChangeId) {
   const generation = ++renderGeneration;
   displayedDoc = null;
   const view = document.querySelector('#view'); diffView?.hide(); view.replaceChildren(); rendered = true;
+  renderDeepLinkNotice();
   const id = selected;
   updateTabTitle();
   if (modeView !== id) {
@@ -619,6 +654,9 @@ async function renderViewContent(focusChangeId) {
     view.append(diffContainer);
     if (!diffView) diffView = globalThis.mountLavishDiff(diffContainer, { embedded: true, loadDiffFiles: (operationId, fileIndex, version) => action('diffFiles', { operationId, fileIndex, version }) });
     diffView.update({ root: config.workspace, patch: snapshot.patch, range: `${snapshot.base} → ${snapshot.head}`, rangeSource: 'workspace snapshot', revision: snapshot.head, operationId: snapshot.operationId, snapshotVersion: snapshot.version, kind: 'jj', to: snapshot.head });
+    if (!snapshotLoading() && pendingDeepLink?.view === 'changes' && pendingDeepLink.file) {
+      const target = pendingDeepLink; pendingDeepLink = null; diffView.revealTarget(target);
+    }
     return;
   }
   view.append(el('h1', labelFor(id) || documents.find(doc => doc.id === id)?.title || id));
@@ -633,7 +671,7 @@ async function renderViewContent(focusChangeId) {
       const key = `commit:${commit.changeId}`, state = draft(key, { text: commit.description, original: commit.description, commitId: commit.commitId, message: '', editing: false });
       if (state.awaitingSnapshot && (commit.commitId === state.awaitingSnapshot.commitId || snapshotApplied > state.awaitingSnapshot.after)) state.awaitingSnapshot = null;
       if (state.text === state.original && !state.saving && !state.message && !state.awaitingSnapshot) { state.text = commit.description; state.original = commit.description; state.commitId = commit.commitId; }
-      const card = el('section', null, { class: 'card' }); card.append(el('h2', `${commit.changeId.slice(0, 12)} · ${commit.commitId.slice(0, 12)}`));
+      const card = el('section', null, { class: 'card', 'data-change-id': commit.changeId }); card.append(el('h2', `${commit.changeId.slice(0, 12)} · ${commit.commitId.slice(0, 12)}`));
       const label = `Description ${commit.changeId.slice(0, 12)}`;
       const display = el('div', state.text || '(no description set)', { class: `commit-description${state.text ? '' : ' empty'}`, tabindex: '0', role: 'region', 'aria-label': `Read ${label}` });
       const area = editor(label, state.text, value => { state.text = value; });
@@ -673,6 +711,21 @@ async function renderViewContent(focusChangeId) {
           node.style.height = `${Math.min(height, cap)}px`;
           if (node !== area) node.style.resize = height > cap + 1 ? 'vertical' : 'none';
         }
+      }
+    }
+    if (!snapshotLoading() && pendingDeepLink?.view === 'commits' && pendingDeepLink.change) {
+      const query = pendingDeepLink.change, key = query.toLowerCase(); pendingDeepLink = null;
+      const exact = snapshot.commits.filter(commit => commit.changeId.toLowerCase() === key);
+      const matches = exact.length ? exact : snapshot.commits.filter(commit => commit.changeId.toLowerCase().startsWith(key));
+      if (matches.length === 1) {
+        const card = [...view.querySelectorAll('.card[data-change-id]')].find(node => node.dataset.changeId === matches[0].changeId);
+        if (card) {
+          card.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+          card.classList.add('deep-link-highlight'); setTimeout(() => card.classList.remove('deep-link-highlight'), 2500);
+        }
+      } else {
+        pendingDeepLinkNotice = matches.length ? `Change prefix "${query}" is ambiguous (matches ${matches.map(commit => commit.changeId.slice(0, 12)).join(', ')}).` : `Commit "${query}" is not in the current snapshot.`;
+        renderDeepLinkNotice();
       }
     }
     return;
@@ -750,6 +803,7 @@ async function renderViewContent(focusChangeId) {
         if (state.saving) for (const checkbox of root.querySelectorAll('input[data-task-line]')) checkbox.disabled = true;
         for (const node of root.querySelectorAll('[src], [href]')) for (const attr of ['src', 'href']) {
           const value = node.getAttribute(attr);
+          if (attr === 'href' && node.tagName === 'A' && parseHubDeepLink(value)) { node.setAttribute('data-lavish-action', ''); continue; }
           if (value && !value.startsWith('#') && !value.startsWith('/') && !/^[a-z][a-z\d+.-]*:/i.test(value)) node.setAttribute(attr, new URL(value, base).href);
         }
         if (generation === renderGeneration && selected === id && pendingHash !== null) scrollToFragment(pendingHash);
@@ -775,6 +829,14 @@ async function renderViewContent(focusChangeId) {
   view.append(info);
 }
 app.innerHTML = '<header><div><strong>Workspace hub</strong><div id="workspace"></div></div><div><span id="connection" role="status">Connecting…</span> <button id="refresh" type="button">Refresh</button></div></header><div class="layout"><span id="hub-nav-desc-attention" hidden>Needs attention</span><span id="hub-nav-desc-new" hidden>New publication</span><div class="hub-sidebar"><div class="hub-identity"><div class="hub-session-title"></div><div class="hub-repo-name"></div></div><nav id="navigation" aria-label="Workspace views"></nav></div><div class="hub-content"><main id="view"></main><div id="frames"></div></div></div>';
+document.querySelector('#view').addEventListener('click', event => {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const link = event.target.closest?.('a[href]');
+  if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
+  const target = parseHubDeepLink(link.getAttribute('href'));
+  if (!target) return;
+  event.preventDefault(); navigateDeepLink(target);
+});
 document.querySelector('#workspace').textContent = config.workspace;
 const titleElement = document.querySelector('.hub-session-title');
 titleElement.textContent = sessionTitle;
