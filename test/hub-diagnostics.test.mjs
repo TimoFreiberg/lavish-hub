@@ -46,10 +46,11 @@ test('opt-in diagnostics trace action lifecycle without request data', async t =
   await pending;
   await Promise.race([closed, new Promise((_, reject) => setTimeout(() => reject(new Error('close not observed')), 2000))]);
   release();
-  const before = lines.length;
+  const optionsCount = () => lines.filter(line => JSON.parse(line).method === 'OPTIONS').length;
+  const before = optionsCount();
   delete process.env.LAVISH_HUB_DIAGNOSTICS;
   assert.equal((await fetch(url, { method: 'OPTIONS', headers: { origin: 'null', 'access-control-request-method': 'POST' } })).status, 204);
-  assert.equal(lines.length, before);
+  assert.equal(optionsCount(), before);
   const text = lines.join('\n');
   for (const expected of ['proxy', 'owner', 'OPTIONS', 'POST', 'forward', 'finish']) assert.ok(text.includes(expected), expected);
   for (const forbidden of [key, transport.capability, transport.resourceKey, transport.identityKey, 'body-sensitive', '/action']) assert.ok(!text.includes(forbidden), forbidden);

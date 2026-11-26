@@ -397,7 +397,7 @@ export async function runHubOwner(options = {}, { prepare = prepareReview } = {}
         const unread = documents.list().documents.filter(doc => doc.viewedVersion !== doc.version).slice(0, 50).map(doc => ({ id: doc.id, title: Array.from(String(doc.title ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim() || doc.id).slice(0, 255).join('') }));
         return client.registerHub(page, transport, {
           label: Array.from(title || workspaceName).slice(0, 255).join(''),
-          repo: repoName,
+          repo: Array.from(repoName).slice(0, 255).join(''),
           workspace: identity.session || title ? null : 'workspace',
           startedAt,
           summary: lastSummary,
