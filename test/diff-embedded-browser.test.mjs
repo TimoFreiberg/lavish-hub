@@ -28,6 +28,17 @@ test('embedded diff preserves explicit expansion across ranges and updates its s
   assert.equal((await page.locator('.file-header[data-file="a.txt"]').boundingBox()).height, 44);
   await page.locator('.file-header[data-file="a.txt"] .path').click();
   await page.getByRole('button', { name: 'Collapse a.txt' }).waitFor();
+  await page.evaluate(() => {
+    const path = document.querySelector('.file-header[data-file="a.txt"] .path');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(path);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    path.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    selection.removeAllRanges();
+  });
+  assert.equal(await page.getByRole('button', { name: 'Collapse a.txt' }).count(), 1);
   await page.locator('.file-header[data-file="a.txt"] input').check();
   await page.getByText('1/2 viewed').waitFor();
   assert.equal(await page.getByRole('button', { name: 'Collapse a.txt' }).count(), 1);
@@ -60,4 +71,8 @@ test('embedded diff preserves explicit expansion across ranges and updates its s
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.deepEqual(await page.evaluate(() => diff.revealTarget({ file: 'a.txt', line: '2' })), { ok: true });
   assert.deepEqual(await page.evaluate(() => calls.at(-1)), ['op', 0, 'v', 'fifth']);
+  await page.evaluate(a => show(a, 'third'), patch('a.txt'));
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.deepEqual(await page.evaluate(() => diff.revealTarget({ file: 'a.txt', line: '2' })), { ok: true });
+  assert.deepEqual(await page.evaluate(() => calls.at(-1)), ['op', 0, 'v', 'third']);
 });

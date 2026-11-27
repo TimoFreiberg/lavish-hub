@@ -207,7 +207,7 @@ function options() { return {
   lineHoverHighlight: 'both',
   enableLineSelection: true,
   loadDiffFiles: async parsed => {
-    const data = state.data, index = state.files.findIndex(item => item.parsed === parsed), file = state.files[index];
+    const data = state.data, index = state.files.findIndex(item => item.parsed === parsed || (parsed?.cacheKey != null && item.parsed?.cacheKey === parsed.cacheKey)), file = state.files[index];
     // A result that settles after the display moved on describes a file nobody is
     // looking at any more, so it must neither be shown nor clear a current notice.
     const current = () => state.data === data && index >= 0 && state.files[index] === file;
@@ -332,7 +332,7 @@ function fileHeader(index) {
   const file = state.files[index]; if (!file) return el('div');
   const collapsed = isCollapsed(file.newPath);
   const box = el('div', null, `file-header${collapsed ? ' is-collapsed' : ''}`);
-  box.addEventListener('click', event => { if (!event.target.closest('button, a, input, label')) toggleCollapsed(file, index); });
+  box.addEventListener('click', event => { if (!event.target.closest('button, a, input, label') && !window.getSelection()?.toString()) toggleCollapsed(file, index); });
   box.dataset.file = file.newPath;
   box.style.height = `${HEADER_HEIGHT}px`;
 
@@ -685,10 +685,11 @@ function render(data) {
   const top = view.getScrollTop(), current = currentAt(top), previous = state.files[current]?.newPath, itemTop = view.getTopForItem(String(current)), offset = itemTop == null ? 0 : itemTop - top;
   state.data = data; state.version = (state.version || 0) + 1;
   state.files = modelPatch(data.patch);
-  // CodeView keeps the old parsed object when its cache key matches, but the
-  // file loader must resolve the parsed object from the current snapshot.
-  state.renderVersion = (state.renderVersion || 0) + 1;
-  state.files.forEach((file, index) => { if (file.parsed) file.parsed.cacheKey = `${file.viewedKey}:${state.renderVersion}:${index}`; });
+  // Key CodeView's highlight and hydration cache by diff content plus pinned
+  // range so returning to a visited range reuses highlights without sharing
+  // hydrated unchanged-line context across different ranges.
+  const rangeIdentity = data.rangeKey ?? data.range ?? '';
+  state.files.forEach(file => { if (file.parsed) file.parsed.cacheKey = `${file.viewedKey}:${rangeIdentity}`; });
   state.counts = state.files.map(count);
   state.totals = state.counts.reduce((acc, c) => ({ add: acc.add + c.add, del: acc.del + c.del }), { add: 0, del: 0 });
   state.current = Math.max(0, state.files.findIndex(f => f.newPath === previous));
